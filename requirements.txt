@@ -1,0 +1,9 @@
+discord.py[voice]
+fastapi
+uvicorn
+supabase
+aiohttp
+Pillow
+yt-dlp
+imageio-ffmpeg
+openai
