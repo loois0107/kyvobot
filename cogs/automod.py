@@ -11,7 +11,8 @@ class AutoMod(commands.Cog):
         self.invite_regex = re.compile(r"(discord\.gg|discord\.com/invite)/[a-zA-Z0-9]+")
         self.DEFAULT_SPAM_MAX_MSGS = 4
         self.MAX_MENTIONS = 5
-        self.banned_words = [r"\bnigger\b", r"\bretard\b", r"scam\.link", r"free\-nitro"]
+        # 🛡️ 기본 내장 금지어 필터 (대시보드 설정과 별개로 무조건 작동하는 방어선)
+        self.default_banned_words = [r"\bnigger\b", r"\bretard\b", r"scam\.link", r"free\-nitro"]
 
     async def _log_to_supabase(self, guild_id: int, user_id: int, action: str, reason: str):
         try:
@@ -155,8 +156,13 @@ class AutoMod(commands.Cog):
             )
             return
 
-        # PATTERN 4: 금지어 필터링
-        for pattern in self.banned_words:
+        # PATTERN 4: 금지어 필터링 (대시보드/Supabase DB 실시간 연동형)
+        db_banned_words = guild_settings.get("banned_words", [])
+        
+        # 유저가 일반 단어를 넣었을 때 에러가 나지 않도록 안전하게 정규식 이스케이프(re.escape) 처리 후 결합
+        all_banned_patterns = self.default_banned_words + [re.escape(word) for word in db_banned_words if word]
+
+        for pattern in all_banned_patterns:
             if re.search(pattern, message.content, re.IGNORECASE):
                 await self._execute_punishment(message, "Toxicity Data Block or Restricted Phrase Matched")
                 return
