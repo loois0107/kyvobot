@@ -8,7 +8,33 @@ from discord.ext import commands, tasks
 import redis.asyncio as aioredis
 
 # ══════════════════════════════════════════════════════════
-#  ① Sliding Window Lua Script (Executed atomically on Redis)
+#  ① 다국어 언어 사전 (LOCALES) - 한국어 및 영어 지원
+# ══════════════════════════════════════════════════════════
+LOCALES = {
+    "en": {
+        "spam_warn": "⚠️ {mention}, spam detected. Your messages have been deleted and you have been **timed out for 10 minutes**.",
+        "spam_reason": "Spam detected ({count}/{limit} in {window}s)",
+        "spam_timeout_applied": " -> 10m Timeout applied",
+        "spam_failed_permission": " (Punishment failed due to missing permission)",
+        "bad_word_warn": "{mention}, forbidden word detected. Your message has been deleted.",
+        "bad_word_reason": "Forbidden word detected: {word}",
+        "clear_spam_success": "✅ Successfully cleared spam counter for {mention}.",
+        "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.",
+    },
+    "ko": {
+        "spam_warn": "⚠️ {mention}님, 도배가 감지되어 메시지가 삭제되고 **10분간 입막음(타임아웃)** 처리되었습니다.",
+        "spam_reason": "도배 감지 ({count}/{limit}명 중 {window}초 내)",
+        "spam_timeout_applied": " -> 10분 타임아웃 처분 완료",
+        "spam_failed_permission": " (권한 부족으로 처벌 실패)",
+        "bad_word_warn": "{mention}님, 금지어가 감지되어 메시지가 삭제되었습니다.",
+        "bad_word_reason": "금지어 감지: {word}",
+        "clear_spam_success": "✅ {mention}님의 도배 카운터를 즉시 초기화했습니다.",
+        "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.",
+    }
+}
+
+# ══════════════════════════════════════════════════════════
+#  ② 슬라이딩 윈도우 Lua 스크립트
 # ══════════════════════════════════════════════════════════
 SLIDING_WINDOW_LUA = """
 local key    = KEYS[1]
@@ -17,16 +43,9 @@ local window = tonumber(ARGV[2])
 local limit  = tonumber(ARGV[3])
 local member = ARGV[4]
 
--- 1) Remove old logs that fell out of the window
 redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
-
--- 2) Record the current message timestamp
 redis.call('ZADD', key, now, member)
-
--- 3) Count remaining active logs in the window
 local count = redis.call('ZCARD', key)
-
--- 4) Set auto-expiration on the key (window + 1s buffer) to prevent memory leak
 redis.call('PEXPIRE', key, window + 1000)
 
 if count > limit then
@@ -36,49 +55,25 @@ return {count, 0}
 """
 
 class AutoMod(commands.Cog):
-    """
-    AutoMod (Anti-Spam & Bad Word Filtering) Cog.
-    - Read: Cache-Aside Pattern (Upstash Redis) with isolated thread-pool DB query & negative caching.
-    - Write: In-memory Batch Queue for Supabase Bulk Insertion.
-    """
-
-    # ── Log Batch Queue Settings ───────────────────────
-    LOG_FLUSH_INTERVAL = 5.0    # Queue flush interval (seconds)
-    LOG_BATCH_MAX_SIZE = 200    # Max rows per bulk insert
-    LOG_QUEUE_MAX_SIZE = 5000   # Max queue capacity to prevent memory overflow
-    LOG_MAX_RETRY = 3           # Max retries on database insert failure
-    # ─────────────────────────────────────────────────
-
-    # ══════════════════════════════════════════════════════════
-    #  ② Constructor & Lua Script Registration
-    # ══════════════════════════════════════════════════════════
     def __init__(self, bot):
         self.bot = bot
         self.supabase = getattr(bot, "supabase", None)
         
-        # Initialize Redis connection (with robust environment variable fallback)
         if hasattr(bot, "redis"):
             self.redis = bot.redis
         else:
             redis_url = os.getenv("REDIS_URL")
             self.redis = aioredis.from_url(redis_url, decode_responses=True)
 
-        # Local fallback cache used only when Redis is unavailable
         self.spam_cache = {}
-
-        # Register Lua script to Redis for bandwidth optimization (reused via EVALSHA)
         self.spam_script = self.redis.register_script(SLIDING_WINDOW_LUA)
+        self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
+        self.log_dropped_count = 0
 
-        # Async queue to temporarily buffer infraction logs
-        self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=self.LOG_QUEUE_MAX_SIZE)
-        self.log_dropped_count = 0      # Cumulative counter for dropped logs
-
-        # Start the background batch flusher task
         self.flush_log_queue.start()
-        print("[⚡ AUTOMOD] Initialization complete. Redis connected & Batch Queue active.", flush=True)
+        print("[⚡ AUTOMOD] Initialization complete. Multi-language support active.", flush=True)
 
     async def cog_unload(self):
-        """Flush remaining logs to DB gracefully upon cog unload or bot shutdown."""
         self.flush_log_queue.cancel()
         try:
             await asyncio.wait_for(self._drain_and_insert(final=True), timeout=10.0)
@@ -86,24 +81,32 @@ class AutoMod(commands.Cog):
             print(f"[LOG-QUEUE][ERROR] Graceful flush failed: {type(e).__name__}: {e}", flush=True)
 
     # ══════════════════════════════════════════════════════════
-    #  Cache-Aside Guild Settings Layer (Read Optimizer)
+    #  ③ 다국어 텍스트 추출 헬퍼 함수 (i18n 핵심)
     # ══════════════════════════════════════════════════════════
+    async def get_msg(self, guild_id: int, key: string, **kwargs) -> str:
+        """서버 설정 언어(ko/en)에 맞는 메시지를 찾아 포맷팅해 반환합니다."""
+        settings = await self.get_guild_settings(guild_id)
+        # DB에 language 설정이 없으면 기본적으로 'ko'를 사용합니다 (국내 중심)
+        lang = settings.get("language", "ko")
+        
+        # 만약 없는 언어나 키를 요청할 경우 영어를 폴백으로 작동
+        lang_dict = LOCALES.get(lang, LOCALES["en"])
+        template = lang_dict.get(key, LOCALES["en"].get(key, f"Missing [{key}]"))
+        
+        return template.format(**kwargs)
 
+    # ══════════════════════════════════════════════════════════
+    #  Cache-Aside Guild Settings Layer
+    # ══════════════════════════════════════════════════════════
     async def get_guild_settings(self, guild_id: int) -> dict:
-        """
-        Cache-Aside Lookup.
-        """
         key = f"guild:{guild_id}:settings"
-
-        # 1) Attempt Cache Lookup
         try:
             cached = await self.redis.get(key)
             if cached:
                 return json.loads(cached)
         except Exception as e:
-            print(f"[CACHE][WARN] Lookup failed, bypassing to DB: {type(e).__name__}: {e}", flush=True)
+            print(f"[CACHE][WARN] Lookup failed: {type(e).__name__}: {e}", flush=True)
 
-        # 2) Cache Miss -> Query Supabase inside an isolated Thread Pool
         loop = asyncio.get_running_loop()
         try:
             res = await loop.run_in_executor(
@@ -114,11 +117,9 @@ class AutoMod(commands.Cog):
             )
             settings = res.data or {}
         except Exception as e:
-            print(f"[DB][ERROR] Failed to fetch guild settings (guild={guild_id}): "
-                  f"{type(e).__name__}: {e}", flush=True)
+            print(f"[DB][ERROR] Failed to fetch guild settings (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             return {}
 
-        # 3) Re-cache Data
         ttl = 300 if settings else 60
         try:
             await self.redis.setex(key, ttl, json.dumps(settings, ensure_ascii=False))
@@ -128,24 +129,19 @@ class AutoMod(commands.Cog):
         return settings
 
     async def invalidate_settings_cache(self, guild_id: int) -> bool:
-        """Forcefully purges the configuration cache for the given guild."""
         key = f"guild:{guild_id}:settings"
         try:
-            deleted = await self.redis.delete(key)
-            print(f"[CACHE] Invalidation success: {key} ({deleted} keys removed)", flush=True)
+            await self.redis.delete(key)
             return True
         except Exception as e:
-            print(f"[CACHE][ERROR] Invalidation failed ({key}): {type(e).__name__}: {e}", flush=True)
+            print(f"[CACHE][ERROR] Invalidation failed: {type(e).__name__}: {e}", flush=True)
             return False
 
     # ══════════════════════════════════════════════════════════
-    #  ③ Spam Detection Core (ZSET with Local Fallback)
+    #  Spam Detection Core
     # ══════════════════════════════════════════════════════════
     async def check_spam(self, guild_id: int, user_id: int, message_id: int,
                          limit: int, window_sec: int) -> tuple[int, bool]:
-        """
-        Evaluates spam state using Redis ZSET sliding window atomically.
-        """
         key = f"spam:{guild_id}:{user_id}"
         now_ms = int(time.time() * 1000)
         window_ms = window_sec * 1000
@@ -156,15 +152,12 @@ class AutoMod(commands.Cog):
                 args=[now_ms, window_ms, limit, str(message_id)],
             )
             return int(count), bool(exceeded)
-
         except Exception as e:
-            print(f"[SPAM][WARN] Redis evaluation failed, falling back to local: "
-                  f"{type(e).__name__}: {e}", flush=True)
+            print(f"[SPAM][WARN] Redis evaluation failed, falling back to local: {type(e).__name__}: {e}", flush=True)
             return self._check_spam_local(guild_id, user_id, limit, window_sec)
 
     def _check_spam_local(self, guild_id: int, user_id: int,
                           limit: int, window_sec: int) -> tuple[int, bool]:
-        """[Fallback] Memory-based sliding window running only when Redis is down."""
         key = (guild_id, user_id)
         now = time.time()
         cutoff = now - window_sec
@@ -177,39 +170,27 @@ class AutoMod(commands.Cog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
-    #  ④ Message Event Listener (Clean English Debug Logs)
+    #  ④ Message Event Listener (i18n 다국어 출력 적용)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # 🔍 Debug Gate 0: Filter out bots and DM channels to prevent log pollution
         if message.author.bot or not message.guild:
             return
 
-        print(f"[SPAM][DEBUG] on_message entered | Author: {message.author} | Content: '{message.content}'", flush=True)
-        
         perms = message.author.guild_permissions
         if perms.administrator or perms.manage_messages:
-            # 🔍 Debug Gate 1: Admin Bypass
-            print(f"[SPAM][DEBUG] Bypassed admin/moderator: {message.author}", flush=True)
             return
 
-        # ⚡ Skip evaluation only if message content is completely empty and lacks attachments
         if not message.content and not message.attachments:
-            print(f"[SPAM][DEBUG] Bypassed empty message with no attachments", flush=True)
             return
 
         settings = await self.get_guild_settings(message.guild.id)
-        # 🔍 Debug Gate 2: Configuration Lookup
-        print(f"[SPAM][DEBUG] Settings loaded: {settings}", flush=True)
-
         if not settings or not settings.get("automod_enabled", True):
-            print(f"[SPAM][DEBUG] Bypassed because automod is disabled", flush=True)
             return
 
-        limit = settings.get("spam_limit", 5)        # Max allowed messages per window
-        window = settings.get("spam_interval", 10)   # Sliding window size (seconds)
+        limit = settings.get("spam_limit", 5)
+        window = settings.get("spam_interval", 10)
 
-        # 1. Execute Spam Detection
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
             user_id=message.author.id,
@@ -217,57 +198,47 @@ class AutoMod(commands.Cog):
             limit=limit,
             window_sec=window,
         )
-        # 🔍 Debug Gate 3: Spam check evaluation output
-        print(f"[SPAM][DEBUG] ZSET Result -> count={count}, limit={limit}, exceeded={exceeded}", flush=True)
 
         if exceeded:
-            # 🔍 Debug Gate 4: Punishment entry
-            print(f"[SPAM][DEBUG] 🚨 Punishment triggered! (Target: {message.author})", flush=True)
-
-            # Delete spam message
             try:
                 await message.delete()
-                print(f"[SPAM][DEBUG] Message deleted successfully.", flush=True)
             except discord.NotFound:
                 pass  
             except discord.Forbidden:
                 print(f"[SPAM][WARN] Missing permission to delete message (guild={message.guild.id})", flush=True)
 
-            # Apply 10-minute timeout
+            # i18n 기반 처벌 사유 문자열 조립
+            base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
             punishment_log = "spam_delete"
-            punishment_reason = f"Spam detected ({count}/{limit} in {window}s)"
 
             try:
                 duration = timedelta(minutes=10)
-                await message.author.timeout(duration, reason=punishment_reason)
+                await message.author.timeout(duration, reason=base_reason)
                 punishment_log = "spam_timeout"
-                punishment_reason += " -> 10m Timeout applied"
-                print(f"[SPAM][DEBUG] Timeout (10m) applied to {message.author}", flush=True)
+                suffix = await self.get_msg(message.guild.id, "spam_timeout_applied")
+                base_reason += suffix
             except discord.Forbidden:
-                print(f"[SPAM][WARN] Missing permission to punish (guild={message.guild.id}, user={message.author.id})", flush=True)
-                punishment_reason += " (Punishment failed due to missing permission)"
+                suffix = await self.get_msg(message.guild.id, "spam_failed_permission")
+                base_reason += suffix
             except Exception as e:
                 print(f"[SPAM][ERROR] Failed to apply punishment: {type(e).__name__}: {e}", flush=True)
 
-            # Enqueue infraction log (with Channel Name)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
                 action=punishment_log,
-                reason=f"{punishment_reason} | Channel: #{message.channel.name}",
+                reason=f"{base_reason} | Channel: #{message.channel.name}",
             )
 
-            # Send ephemeral-style warning message
+            # 유저 대상 경고문 전송 (i18n 적용)
+            warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
             try:
-                await message.channel.send(
-                    f"⚠️ {message.author.mention}, spam detected. Your messages have been deleted and you have been **timed out for 10 minutes**.",
-                    delete_after=5.0
-                )
+                await message.channel.send(warn_msg, delete_after=5.0)
             except (discord.Forbidden, discord.HTTPException):
                 pass
             return
 
-        # 2. Execute Bad Word Filter (Evaluated only if user did not trigger spam)
+        # 2. 금지어 필터링
         forbidden_words = settings.get("forbidden_words", [])
         if isinstance(forbidden_words, str):
             forbidden_words = [w.strip() for w in forbidden_words.split(",") if w.strip()]
@@ -281,28 +252,25 @@ class AutoMod(commands.Cog):
                 except discord.Forbidden:
                     pass
 
+                log_reason = await self.get_msg(message.guild.id, "bad_word_reason", word=word)
                 self.enqueue_log(
                     guild_id=message.guild.id,
                     user_id=message.author.id,
                     action="bad_word_delete",
-                    reason=f"Forbidden word detected: {word} | Channel: #{message.channel.name}"
+                    reason=f"{log_reason} | Channel: #{message.channel.name}"
                 )
 
+                warn_msg = await self.get_msg(message.guild.id, "bad_word_warn", mention=message.author.mention)
                 try:
-                    await message.channel.send(
-                        f"{message.author.mention}, forbidden word detected. Your message has been deleted.",
-                        delete_after=3.0
-                    )
+                    await message.channel.send(warn_msg, delete_after=3.0)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
                 break
 
     # ══════════════════════════════════════════════════════════
-    #  Log Batch Queue Async Engine (Write Optimizer)
+    #  Log Batch Queue Async Engine
     # ══════════════════════════════════════════════════════════
-
     def enqueue_log(self, guild_id: int, user_id: int, action: str, reason: str) -> None:
-        """Pushes infraction logs into the in-memory queue instead of writing directly to the DB."""
         payload = {
             "guild_id": str(guild_id),
             "user_id": str(user_id),
@@ -315,13 +283,8 @@ class AutoMod(commands.Cog):
             self.log_queue.put_nowait(payload)
         except asyncio.QueueFull:
             self.log_dropped_count += 1
-            print(
-                f"[LOG-QUEUE][WARN] Queue saturated (maxsize={self.LOG_QUEUE_MAX_SIZE}) "
-                f"-> 1 log discarded (Cumulative dropped: {self.log_dropped_count})",
-                flush=True,
-            )
 
-    @tasks.loop(seconds=LOG_FLUSH_INTERVAL)
+    @tasks.loop(seconds=5.0)
     async def flush_log_queue(self):
         try:
             await self._drain_and_insert()
@@ -331,14 +294,13 @@ class AutoMod(commands.Cog):
     @flush_log_queue.before_loop
     async def before_flush_log_queue(self):
         await self.bot.wait_until_ready()
-        print("[LOG-QUEUE] Background batch flusher activated (Interval: 5s)", flush=True)
 
     async def _drain_and_insert(self, final: bool = False) -> None:
         if self.log_queue.empty():
             return
 
         batch = []
-        limit = self.log_queue.qsize() if final else self.LOG_BATCH_MAX_SIZE
+        limit = self.log_queue.qsize() if final else 200
         while len(batch) < limit:
             try:
                 batch.append(self.log_queue.get_nowait())
@@ -354,22 +316,17 @@ class AutoMod(commands.Cog):
 
     async def _bulk_insert_supabase(self, batch: list) -> bool:
         rows = [{k: v for k, v in row.items() if not k.startswith("_")} for row in batch]
-        
         if not self.supabase:
             self.supabase = getattr(self.bot, "supabase", None)
             if not self.supabase:
-                print("[LOG-QUEUE][ERROR] Supabase client instance not found.", flush=True)
                 return False
 
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, self._sync_bulk_insert, rows)
-            print(f"[LOG-QUEUE] Supabase bulk insert succeeded: {len(rows)} rows "
-                  f"(Remaining queue: {self.log_queue.qsize()})", flush=True)
             return True
         except Exception as e:
-            print(f"[LOG-QUEUE][ERROR] Bulk insert failed for {len(rows)} rows: "
-                  f"{type(e).__name__}: {e}", flush=True)
+            print(f"[LOG-QUEUE][ERROR] Bulk insert failed: {type(e).__name__}: {e}", flush=True)
             return False
 
     def _sync_bulk_insert(self, rows: list):
@@ -378,11 +335,9 @@ class AutoMod(commands.Cog):
     async def _requeue_failed(self, batch: list) -> None:
         for row in batch:
             row["_retry"] = row.get("_retry", 0) + 1
-
-            if row["_retry"] > self.LOG_MAX_RETRY:
+            if row["_retry"] > 3:
                 await self._push_to_dead_letter(row)
                 continue
-
             try:
                 self.log_queue.put_nowait(row)
             except asyncio.QueueFull:
@@ -392,28 +347,23 @@ class AutoMod(commands.Cog):
         try:
             await self.redis.rpush("kyvo:log:dlq", json.dumps(row, ensure_ascii=False))
             await self.redis.ltrim("kyvo:log:dlq", -10000, -1)
-            print(f"[LOG-QUEUE][DLQ] Retry limit exceeded -> Evacuated to Redis DLQ "
-                  f"(Guild: {row.get('guild_id')})", flush=True)
         except Exception as e:
             self.log_dropped_count += 1
-            print(f"[LOG-QUEUE][FATAL] DLQ backup fallback failed. Log lost: "
-                  f"{type(e).__name__}: {e} | payload={row}", flush=True)
 
     async def _log_to_supabase(self, *args, **kwargs) -> None:
         self.enqueue_log(*args, **kwargs)
 
     # ══════════════════════════════════════════════════════════
-    #  Management & Monitoring Commands (Admin Only)
+    #  ⑤ Admin Commands
     # ══════════════════════════════════════════════════════════
-
     @commands.command(name="reload_settings", aliases=["refresh_settings", "설정새로고침"])
     @commands.has_permissions(administrator=True)
     async def reload_settings(self, ctx):
         ok = await self.invalidate_settings_cache(ctx.guild.id)
         if ok:
-            await ctx.send("✅ **Settings cache purged.** The latest configuration will be loaded on the next message.")
+            await ctx.send("✅ **Settings cache purged.**")
         else:
-            await ctx.send("⚠️ **Failed to connect to Redis.** Changes will apply automatically within 5 minutes via natural TTL.")
+            await ctx.send("⚠️ **Failed to connect to Redis.**")
 
     @commands.command(name="logqueue")
     @commands.has_permissions(administrator=True)
@@ -421,30 +371,27 @@ class AutoMod(commands.Cog):
         try:
             dlq_size = await self.redis.llen("kyvo:log:dlq")
         except Exception:
-            dlq_size = "N/A (Redis Error)"
+            dlq_size = "N/A"
 
         embed = discord.Embed(title="📊 Log Batch Queue Metrics", color=0x5865F2)
         embed.add_field(name="Queued Logs", value=f"{self.log_queue.qsize()} items", inline=True)
         embed.add_field(name="Dropped Logs", value=f"{self.log_dropped_count} items", inline=True)
         embed.add_field(name="Redis DLQ Size", value=f"{dlq_size} items", inline=True)
-        embed.add_field(name="Flush Interval", value=f"{self.LOG_FLUSH_INTERVAL}s", inline=False)
         await ctx.send(embed=embed)
 
-    # ══════════════════════════════════════════════════════════
-    #  ⑤ Maintenance Commands (Admin Only)
-    # ══════════════════════════════════════════════════════════
     @commands.command(name="clearspam")
     @commands.has_permissions(manage_messages=True)
     async def clear_spam(self, ctx, member: discord.Member):
-        """[Admin] Manually clear a specific user's spam counter to resolve false-positives."""
         key = f"spam:{ctx.guild.id}:{member.id}"
         try:
             await self.redis.delete(key)
             self.spam_cache.pop((ctx.guild.id, member.id), None)
-            await ctx.send(f"✅ Successfully cleared spam counter for {member.mention}.")
+            success_msg = await self.get_msg(ctx.guild.id, "clear_spam_success", mention=member.mention)
+            await ctx.send(success_msg)
         except Exception as e:
-            print(f"[SPAM][ERROR] Failed to clear spam counter: {type(e).__name__}: {e}", flush=True)
-            await ctx.send("⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.")
+            print(f"[SPAM][ERROR] Failed to clear spam: {type(e).__name__}: {e}", flush=True)
+            fail_msg = await self.get_msg(ctx.guild.id, "clear_spam_fail")
+            await ctx.send(fail_msg)
 
 async def setup(bot):
     await bot.add_cog(AutoMod(bot))
