@@ -92,8 +92,6 @@ class AutoMod(commands.Cog):
     async def get_guild_settings(self, guild_id: int) -> dict:
         """
         Cache-Aside Lookup.
-        Fetches settings from Redis first. On cache miss, queries Supabase via an isolated 
-        thread pool and re-caches the data. Implements negative caching for empty settings.
         """
         key = f"guild:{guild_id}:settings"
 
@@ -118,9 +116,9 @@ class AutoMod(commands.Cog):
         except Exception as e:
             print(f"[DB][ERROR] Failed to fetch guild settings (guild={guild_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            return {}  # Return empty dict if DB is down to keep the bot running gracefully
+            return {}
 
-        # 3) Re-cache Data. Apply a shorter TTL (60s) for empty settings to mitigate cache stampede.
+        # 3) Re-cache Data
         ttl = 300 if settings else 60
         try:
             await self.redis.setex(key, ttl, json.dumps(settings, ensure_ascii=False))
@@ -147,10 +145,6 @@ class AutoMod(commands.Cog):
                          limit: int, window_sec: int) -> tuple[int, bool]:
         """
         Redis ZSET 슬라이딩 윈도우로 도배 여부를 판정한다.
-        Redis 장애 시 로컬 딕셔너리로 자동 폴백하여 봇이 절대 멈추지 않는다.
-
-        Returns:
-            (윈도우 내 메시지 수, 제한 초과 여부)
         """
         key = f"spam:{guild_id}:{user_id}"
         now_ms = int(time.time() * 1000)
@@ -183,30 +177,39 @@ class AutoMod(commands.Cog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
-    #  ④ Message Event Listener (도배 검사 후 금지어 검사 실행)
+    #  ④ Message Event Listener (🔍 촘촘한 디버그 로그 추가형)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # 관리자 및 봇 프리패스 (기존 로직 유지)
+        # 🔍 디버그 관문 0: Cog 수신 자체를 감지하는지 확인 (3순위 의심용)
+        print(f"[SPAM][DEBUG] on_message 진입 | Author: {message.author} (Bot: {message.author.bot}) | Content: '{message.content}'", flush=True)
+
         if message.author.bot or not message.guild:
             return
         
         perms = message.author.guild_permissions
         if perms.administrator or perms.manage_messages:
+            # 🔍 디버그 관문 1: 관리자 스킵 여부
+            print(f"[SPAM][DEBUG] 관리자 프리패스로 스킵: {message.author}", flush=True)
             return
 
-        # ⚡ [Upstash 비용 구세주] Redis 호출 전 조기 탈출로 커맨드 절약
+        # 🔍 디버그 관문 2: 글자 수 검사 (1순위 의심인 'Message Content Intent' 누락 시 0글자로 인식되어 무조건 여기서 스킵됨)
         if len(message.content) < 2 and not message.attachments:
+            print(f"[SPAM][DEBUG] 짧은 메시지 스킵 | Content: '{message.content}' (len={len(message.content)})", flush=True)
             return
 
         settings = await self.get_guild_settings(message.guild.id)
+        # 🔍 디버그 관문 3: 서버 세팅값 조회 결과 확인 (2순위 의심용)
+        print(f"[SPAM][DEBUG] Settings 조회 결과: {settings}", flush=True)
+
         if not settings or not settings.get("automod_enabled", True):
+            print(f"[SPAM][DEBUG] automod 비활성 상태로 스킵", flush=True)
             return
 
         limit = settings.get("spam_limit", 5)        # 윈도우당 허용 메시지 수
         window = settings.get("spam_interval", 10)   # 윈도우 크기 (초)
 
-        # 1. 도배 감지 실행 (Lua Script 호출 및 Redis 캐싱)
+        # 1. 도배 감지 실행
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
             user_id=message.author.id,
@@ -214,28 +217,51 @@ class AutoMod(commands.Cog):
             limit=limit,
             window_sec=window,
         )
+        # 🔍 디버그 관문 4: Redis 판정 결과 출력
+        print(f"[SPAM][DEBUG] ZSET 결과 -> count={count}, limit={limit}, exceeded={exceeded}", flush=True)
 
         if exceeded:
-            # ── 처벌 실행 ──────────────────────────────────
+            # 🔍 디버그 관문 5: 초과하여 진짜 처벌로 들어왔는지 확인
+            print(f"[SPAM][DEBUG] 🚨 처벌 진입! (Target: {message.author})", flush=True)
+
+            # 메시지 삭제
             try:
                 await message.delete()
+                print(f"[SPAM][DEBUG] 메시지 삭제 완료", flush=True)
             except discord.NotFound:
-                pass  # 이미 삭제됨
+                pass  
             except discord.Forbidden:
                 print(f"[SPAM][WARN] 메시지 삭제 권한 없음 (guild={message.guild.id})", flush=True)
 
-            # 처벌 로그 배치 큐 전송 (데이터베이스 무결성을 위해 channel_id 제거)
+            # 타임아웃 처벌 적용 (10분)
+            import datetime
+            punishment_log = "spam_delete"
+            punishment_reason = f"도배 감지 ({count}/{limit} in {window}s)"
+
+            try:
+                duration = datetime.timedelta(minutes=10)
+                await message.author.timeout(duration, reason=punishment_reason)
+                punishment_log = "spam_timeout"
+                punishment_reason += " -> 10분 타임아웃 처분"
+                print(f"[SPAM][DEBUG] {message.author} 타임아웃 10분 적용 완료", flush=True)
+            except discord.Forbidden:
+                print(f"[SPAM][WARN] 처벌 권한 없음 (guild={message.guild.id}, user={message.author.id})", flush=True)
+                punishment_reason += " (권한 부족으로 처벌 실패)"
+            except Exception as e:
+                print(f"[SPAM][ERROR] 처벌 적용 중 에러: {type(e).__name__}: {e}", flush=True)
+
+            # 처벌 로그 배치 큐 전송 (클로드 꿀팁 반영: 채널명 추가)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
-                action="spam_delete",
-                reason=f"도배 감지 ({count}/{limit} in {window}s) | 채널: #{message.channel.name}"
+                action=punishment_log,
+                reason=f"{punishment_reason} | 채널: #{message.channel.name}",
             )
 
             try:
                 await message.channel.send(
-                    f"{message.author.mention}, spam detected. Your message has been deleted.",
-                    delete_after=3.0
+                    f"⚠️ {message.author.mention}, 도배가 감지되어 메시지가 삭제되고 **10분간 입막음(Timeout)** 처리되었습니다.",
+                    delete_after=5.0
                 )
             except discord.Forbidden:
                 pass
@@ -259,7 +285,7 @@ class AutoMod(commands.Cog):
                     guild_id=message.guild.id,
                     user_id=message.author.id,
                     action="bad_word_delete",
-                    reason=f"Forbidden word detected: {word}"
+                    reason=f"Forbidden word detected: {word} | 채널: #{message.channel.name}"
                 )
 
                 try:
@@ -280,9 +306,9 @@ class AutoMod(commands.Cog):
         payload = {
             "guild_id": str(guild_id),
             "user_id": str(user_id),
-            "action_type": action,   # Mapped to Supabase column 'action_type'
+            "action_type": action,
             "reason": reason,
-            "moderator_id": str(self.bot.user.id) if self.bot.user else None, # Automate system bot ID
+            "moderator_id": str(self.bot.user.id) if self.bot.user else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
@@ -297,7 +323,6 @@ class AutoMod(commands.Cog):
 
     @tasks.loop(seconds=LOG_FLUSH_INTERVAL)
     async def flush_log_queue(self):
-        """Background worker loop that drains the queue and pushes bulk entries every 5 seconds."""
         try:
             await self._drain_and_insert()
         except Exception as e:
@@ -305,12 +330,10 @@ class AutoMod(commands.Cog):
 
     @flush_log_queue.before_loop
     async def before_flush_log_queue(self):
-        """Wait until the Discord gateway client connection is stable before running."""
         await self.bot.wait_until_ready()
         print("[LOG-QUEUE] Background batch flusher activated (Interval: 5s)", flush=True)
 
     async def _drain_and_insert(self, final: bool = False) -> None:
-        """Drains up to LOG_BATCH_MAX_SIZE entries from the queue for bulk insertion."""
         if self.log_queue.empty():
             return
 
@@ -330,7 +353,6 @@ class AutoMod(commands.Cog):
             await self._requeue_failed(batch)
 
     async def _bulk_insert_supabase(self, batch: list) -> bool:
-        """Executes synchronous Supabase SDK insertion isolated inside a thread pool."""
         rows = [{k: v for k, v in row.items() if not k.startswith("_")} for row in batch]
         
         if not self.supabase:
@@ -351,11 +373,9 @@ class AutoMod(commands.Cog):
             return False
 
     def _sync_bulk_insert(self, rows: list):
-        """Synchronous target execution for the database thread pool."""
         return self.supabase.table("automod_logs").insert(rows).execute()
 
     async def _requeue_failed(self, batch: list) -> None:
-        """Re-enqueues failed rows with an incremented retry count; moves to DLQ if max retries exceeded."""
         for row in batch:
             row["_retry"] = row.get("_retry", 0) + 1
 
@@ -369,10 +389,9 @@ class AutoMod(commands.Cog):
                 await self._push_to_dead_letter(row)
 
     async def _push_to_dead_letter(self, row: dict) -> None:
-        """Evacuates unprocessable logs into the Upstash Redis list (DLQ) for disaster recovery."""
         try:
             await self.redis.rpush("kyvo:log:dlq", json.dumps(row, ensure_ascii=False))
-            await self.redis.ltrim("kyvo:log:dlq", -10000, -1)  # Bound DLQ growth
+            await self.redis.ltrim("kyvo:log:dlq", -10000, -1)
             print(f"[LOG-QUEUE][DLQ] Retry limit exceeded -> Evacuated to Redis DLQ "
                   f"(Guild: {row.get('guild_id')})", flush=True)
         except Exception as e:
@@ -380,9 +399,7 @@ class AutoMod(commands.Cog):
             print(f"[LOG-QUEUE][FATAL] DLQ backup fallback failed. Log lost: "
                   f"{type(e).__name__}: {e} | payload={row}", flush=True)
 
-    # Legacy compatibility wrapper
     async def _log_to_supabase(self, *args, **kwargs) -> None:
-        """[Deprecated] Redirects legacy immediate writes to the async batch queue."""
         self.enqueue_log(*args, **kwargs)
 
     # ══════════════════════════════════════════════════════════
@@ -392,7 +409,6 @@ class AutoMod(commands.Cog):
     @commands.command(name="reload_settings", aliases=["refresh_settings", "설정새로고침"])
     @commands.has_permissions(administrator=True)
     async def reload_settings(self, ctx):
-        """[Admin] Forcefully purge the settings cache for this server."""
         ok = await self.invalidate_settings_cache(ctx.guild.id)
         if ok:
             await ctx.send("✅ **Settings cache purged.** The latest configuration will be loaded on the next message.")
@@ -402,7 +418,6 @@ class AutoMod(commands.Cog):
     @commands.command(name="logqueue")
     @commands.has_permissions(administrator=True)
     async def logqueue_status(self, ctx):
-        """Checks the live metrics and memory overhead of the log batch queue."""
         try:
             dlq_size = await self.redis.llen("kyvo:log:dlq")
         except Exception:
@@ -421,7 +436,6 @@ class AutoMod(commands.Cog):
     @commands.command(name="clearspam")
     @commands.has_permissions(manage_messages=True)
     async def clear_spam(self, ctx, member: discord.Member):
-        """[관리자] 특정 유저의 도배 카운터를 즉시 초기화한다 (오탐 구제용)."""
         key = f"spam:{ctx.guild.id}:{member.id}"
         try:
             await self.redis.delete(key)
