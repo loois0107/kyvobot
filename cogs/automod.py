@@ -1,3 +1,4 @@
+import time
 import asyncio
 import json
 import os
@@ -6,10 +7,38 @@ import discord
 from discord.ext import commands, tasks
 import redis.asyncio as aioredis
 
+# ══════════════════════════════════════════════════════════
+#  ① 슬라이딩 윈도우 Lua 스크립트 (Redis 서버에서 원자적으로 실행)
+# ══════════════════════════════════════════════════════════
+SLIDING_WINDOW_LUA = """
+local key    = KEYS[1]
+local now    = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit  = tonumber(ARGV[3])
+local member = ARGV[4]
+
+-- 1) 윈도우 밖으로 밀려난 오래된 기록 제거
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+
+-- 2) 현재 메시지 기록
+redis.call('ZADD', key, now, member)
+
+-- 3) 윈도우 내 메시지 수 집계
+local count = redis.call('ZCARD', key)
+
+-- 4) 키 자동 만료 (윈도우 + 1초 여유). 죽은 유저의 키가 영원히 남지 않게 한다.
+redis.call('PEXPIRE', key, window + 1000)
+
+if count > limit then
+    return {count, 1}
+end
+return {count, 0}
+"""
+
 class AutoMod(commands.Cog):
     """
     AutoMod (Anti-Spam & Bad Word Filtering) Cog.
-    - Read: Cache-Aside Pattern (Upstash Redis) to prevent Supabase load.
+    - Read: Cache-Aside Pattern (Upstash Redis) with isolated thread-pool DB query & negative caching.
     - Write: In-memory Batch Queue for Supabase Bulk Insertion.
     """
 
@@ -20,6 +49,9 @@ class AutoMod(commands.Cog):
     LOG_MAX_RETRY = 3           # Max retries on database insert failure
     # ─────────────────────────────────────────────────
 
+    # ══════════════════════════════════════════════════════════
+    #  ② 생성자 및 Lua 스크립트 등록
+    # ══════════════════════════════════════════════════════════
     def __init__(self, bot):
         self.bot = bot
         self.supabase = getattr(bot, "supabase", None)
@@ -31,11 +63,14 @@ class AutoMod(commands.Cog):
             redis_url = os.getenv("REDIS_URL")
             self.redis = aioredis.from_url(redis_url, decode_responses=True)
 
-        # In-memory sliding window cache for spam detection
+        # Redis 장애 시에만 사용하는 로컬 폴백 캐시 (평시엔 비어 있음)
         self.spam_cache = {}
 
+        # Lua 스크립트를 Redis에 등록 (EVALSHA로 재사용되어 대역폭 절약)
+        self.spam_script = self.redis.register_script(SLIDING_WINDOW_LUA)
+
         # Async queue to temporarily buffer infraction logs
-        self.log_queue = asyncio.Queue(maxsize=self.LOG_QUEUE_MAX_SIZE)
+        self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=self.LOG_QUEUE_MAX_SIZE)
         self.log_dropped_count = 0      # Cumulative counter for dropped logs
 
         # Start the background batch flusher task
@@ -54,84 +89,147 @@ class AutoMod(commands.Cog):
     #  Cache-Aside Guild Settings Layer (Read Optimizer)
     # ══════════════════════════════════════════════════════════
 
-    async def _get_cached_guild_settings(self, guild_id: str) -> dict:
-        """Fetch guild settings from Redis cache first; fallback to Supabase on cache miss (TTL: 5m)."""
-        cache_key = f"guild:{guild_id}:settings"
+    async def get_guild_settings(self, guild_id: int) -> dict:
+        """
+        Cache-Aside Lookup.
+        Fetches settings from Redis first. On cache miss, queries Supabase via an isolated 
+        thread pool and re-caches the data. Implements negative caching for empty settings.
+        """
+        key = f"guild:{guild_id}:settings"
+
+        # 1) Attempt Cache Lookup
         try:
-            cached_data = await self.redis.get(cache_key)
-            if cached_data:
-                return json.loads(cached_data)
-        except Exception as cache_err:
-            print(f"[❌ AUTOMOD] Redis cache lookup failed: {cache_err}", flush=True)
+            cached = await self.redis.get(key)
+            if cached:
+                return json.loads(cached)
+        except Exception as e:
+            print(f"[CACHE][WARN] Lookup failed, bypassing to DB: {type(e).__name__}: {e}", flush=True)
 
-        # Fallback to Supabase on cache miss
-        guild_settings = {}
-        if hasattr(self.bot, "get_guild_settings"):
-            try:
-                guild_settings = await self.bot.get_guild_settings(guild_id)
-            except Exception as err:
-                print(f"[❌ AUTOMOD] bot.get_guild_settings failed: {err}", flush=True)
-        else:
-            try:
-                if self.supabase:
-                    res = self.supabase.table("guild_settings").select("*").eq("guild_id", str(guild_id)).execute()
-                    if res.data:
-                        guild_settings = res.data[0]
-            except Exception as db_err:
-                print(f"[❌ AUTOMOD] Supabase fallback query failed: {db_err}", flush=True)
-
-        # Cache the fetched data for 5 minutes
+        # 2) Cache Miss -> Query Supabase inside an isolated Thread Pool
+        loop = asyncio.get_running_loop()
         try:
-            await self.redis.setex(cache_key, 300, json.dumps(guild_settings, ensure_ascii=False))
-        except Exception as cache_err:
-            print(f"[❌ AUTOMOD] Redis cache save failed: {cache_err}", flush=True)
+            res = await loop.run_in_executor(
+                None,
+                lambda: self.supabase.table("guild_settings")
+                        .select("*").eq("guild_id", str(guild_id))
+                        .maybe_single().execute(),
+            )
+            settings = res.data or {}
+        except Exception as e:
+            print(f"[DB][ERROR] Failed to fetch guild settings (guild={guild_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return {}  # Return empty dict if DB is down to keep the bot running gracefully
 
-        return guild_settings
+        # 3) Re-cache Data. Apply a shorter TTL (60s) for empty settings to mitigate cache stampede.
+        ttl = 300 if settings else 60
+        try:
+            await self.redis.setex(key, ttl, json.dumps(settings, ensure_ascii=False))
+        except Exception as e:
+            print(f"[CACHE][WARN] Failed to re-cache settings: {type(e).__name__}: {e}", flush=True)
+
+        return settings
+
+    async def invalidate_settings_cache(self, guild_id: int) -> bool:
+        """Forcefully purges the configuration cache for the given guild."""
+        key = f"guild:{guild_id}:settings"
+        try:
+            deleted = await self.redis.delete(key)
+            print(f"[CACHE] Invalidation success: {key} ({deleted} keys removed)", flush=True)
+            return True
+        except Exception as e:
+            print(f"[CACHE][ERROR] Invalidation failed ({key}): {type(e).__name__}: {e}", flush=True)
+            return False
 
     # ══════════════════════════════════════════════════════════
-    #  Message Event Listener (Spam / Bad Word Filter)
+    #  ③ 도배 감지 핵심 함수 (ZSET 및 로컬 폴백)
     # ══════════════════════════════════════════════════════════
+    async def check_spam(self, guild_id: int, user_id: int, message_id: int,
+                         limit: int, window_sec: int) -> tuple[int, bool]:
+        """
+        Redis ZSET 슬라이딩 윈도우로 도배 여부를 판정한다.
+        Redis 장애 시 로컬 딕셔너리로 자동 폴백한다.
 
+        Returns:
+            (윈도우 내 메시지 수, 제한 초과 여부)
+        """
+        key = f"spam:{guild_id}:{user_id}"
+        now_ms = int(time.time() * 1000)
+        window_ms = window_sec * 1000
+
+        try:
+            count, exceeded = await self.spam_script(
+                keys=[key],
+                args=[now_ms, window_ms, limit, str(message_id)],
+            )
+            return int(count), bool(exceeded)
+
+        except Exception as e:
+            print(f"[SPAM][WARN] Redis 판정 실패, 로컬 폴백: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return self._check_spam_local(guild_id, user_id, limit, window_sec)
+
+    def _check_spam_local(self, guild_id: int, user_id: int,
+                          limit: int, window_sec: int) -> tuple[int, bool]:
+        """[폴백] Redis가 죽었을 때만 동작하는 인메모리 슬라이딩 윈도우."""
+        key = (guild_id, user_id)
+        now = time.time()
+        cutoff = now - window_sec
+
+        timestamps = [t for t in self.spam_cache.get(key, []) if t > cutoff]
+        timestamps.append(now)
+        self.spam_cache[key] = timestamps
+
+        count = len(timestamps)
+        return count, count > limit
+
+    # ══════════════════════════════════════════════════════════
+    #  ④ Message Event Listener (도배 검사 후 금지어 검사 실행)
+    # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
-    async def on_message(self, message):
-        # Bypass bots and DM channels
-        if message.author.bot or message.guild is None:
+    async def on_message(self, message: discord.Message):
+        # 관리자 및 봇 프리패스 (기존 로직 유지)
+        if message.author.bot or not message.guild:
+            return
+        
+        perms = message.author.guild_permissions
+        if perms.administrator or perms.manage_messages:
             return
 
-        # Bypass Administrators and Moderators
-        member = message.guild.get_member(message.author.id)
-        if member and (member.guild_permissions.manage_messages or member.guild_permissions.administrator):
+        # ⚡ [Upstash 비용 구세주] Redis 호출 전 조기 탈출로 커맨드 절약
+        if len(message.content) < 2 and not message.attachments:
             return
 
-        # 1. Fetch server settings from Cache-Aside layer
-        settings = await self._get_cached_guild_settings(str(message.guild.id))
-        if not settings:
+        settings = await self.get_guild_settings(message.guild.id)
+        if not settings or not settings.get("automod_enabled", True):
             return
 
-        # 2. Anti-Spam (In-memory Sliding Window Filter)
-        user_id = message.author.id
-        now = datetime.now(timezone.utc).timestamp()
+        limit = settings.get("spam_limit", 5)        # 윈도우당 허용 메시지 수
+        window = settings.get("spam_interval", 10)   # 윈도우 크기 (초)
 
-        if user_id not in self.spam_cache:
-            self.spam_cache[user_id] = []
+        # 1. 도배 감지 실행 (Lua Script 호출 및 Redis 캐싱)
+        count, exceeded = await self.check_spam(
+            guild_id=message.guild.id,
+            user_id=message.author.id,
+            message_id=message.id,
+            limit=limit,
+            window_sec=window,
+        )
 
-        # Retain messages sent within the last 5.0 seconds
-        self.spam_cache[user_id] = [t for t in self.spam_cache[user_id] if now - t < 5.0]
-        self.spam_cache[user_id].append(now)
-
-        # Trigger action if rate exceeds 5 messages per 5 seconds
-        if len(self.spam_cache[user_id]) > 5:
+        if exceeded:
+            # ── 처벌 실행 ──────────────────────────────────
             try:
                 await message.delete()
+            except discord.NotFound:
+                pass  # 이미 삭제됨
             except discord.Forbidden:
-                pass
+                print(f"[SPAM][WARN] 메시지 삭제 권한 없음 (guild={message.guild.id})", flush=True)
 
-            # [Async Non-blocking Write] Enqueue log and resume immediately
+            # 처벌 로그 배치 큐 전송 (channel_id 제거하여 에러 방지)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
                 action="spam_delete",
-                reason="Spam detected (Exceeded sliding window limit)"
+                reason=f"도배 감지 ({count}/{limit} in {window}s)",
             )
 
             try:
@@ -143,7 +241,7 @@ class AutoMod(commands.Cog):
                 pass
             return
 
-        # 3. Bad Word Filtering
+        # 2. 금지어 필터링 실행 (도배에 안 걸렸을 때만 순차 진행)
         forbidden_words = settings.get("forbidden_words", [])
         if isinstance(forbidden_words, str):
             forbidden_words = [w.strip() for w in forbidden_words.split(",") if w.strip()]
@@ -152,10 +250,11 @@ class AutoMod(commands.Cog):
             if word in message.content:
                 try:
                     await message.delete()
+                except discord.NotFound:
+                    pass
                 except discord.Forbidden:
                     pass
 
-                # [Async Non-blocking Write] Enqueue log and resume immediately
                 self.enqueue_log(
                     guild_id=message.guild.id,
                     user_id=message.author.id,
@@ -177,10 +276,7 @@ class AutoMod(commands.Cog):
     # ══════════════════════════════════════════════════════════
 
     def enqueue_log(self, guild_id: int, user_id: int, action: str, reason: str) -> None:
-        """
-        Pushes infraction logs into the in-memory queue instead of writing directly to the DB.
-        Synchronous execution ensures the main event loop is never blocked.
-        """
+        """Pushes infraction logs into the in-memory queue instead of writing directly to the DB."""
         payload = {
             "guild_id": str(guild_id),
             "user_id": str(user_id),
@@ -290,8 +386,18 @@ class AutoMod(commands.Cog):
         self.enqueue_log(*args, **kwargs)
 
     # ══════════════════════════════════════════════════════════
-    #  Monitoring Command (Admin Only)
+    #  Management & Monitoring Commands (Admin Only)
     # ══════════════════════════════════════════════════════════
+
+    @commands.command(name="reload_settings", aliases=["refresh_settings", "설정새로고침"])
+    @commands.has_permissions(administrator=True)
+    async def reload_settings(self, ctx):
+        """[Admin] Forcefully purge the settings cache for this server."""
+        ok = await self.invalidate_settings_cache(ctx.guild.id)
+        if ok:
+            await ctx.send("✅ **Settings cache purged.** The latest configuration will be loaded on the next message.")
+        else:
+            await ctx.send("⚠️ **Failed to connect to Redis.** Changes will apply automatically within 5 minutes via natural TTL.")
 
     @commands.command(name="logqueue")
     @commands.has_permissions(administrator=True)
@@ -308,6 +414,22 @@ class AutoMod(commands.Cog):
         embed.add_field(name="Redis DLQ Size", value=f"{dlq_size} items", inline=True)
         embed.add_field(name="Flush Interval", value=f"{self.LOG_FLUSH_INTERVAL}s", inline=False)
         await ctx.send(embed=embed)
+
+    # ══════════════════════════════════════════════════════════
+    #  ⑤ 초기화 명령어 (관리자 수동 오탐 구제용)
+    # ══════════════════════════════════════════════════════════
+    @commands.command(name="clearspam")
+    @commands.has_permissions(manage_messages=True)
+    async def clear_spam(self, ctx, member: discord.Member):
+        """[관리자] 특정 유저의 도배 카운터를 즉시 초기화한다 (오탐 구제용)."""
+        key = f"spam:{ctx.guild.id}:{member.id}"
+        try:
+            await self.redis.delete(key)
+            self.spam_cache.pop((ctx.guild.id, member.id), None)
+            await ctx.send(f"✅ {member.mention} 의 도배 카운터를 초기화했습니다.")
+        except Exception as e:
+            print(f"[SPAM][ERROR] 카운터 초기화 실패: {type(e).__name__}: {e}", flush=True)
+            await ctx.send("⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.")
 
 async def setup(bot):
     await bot.add_cog(AutoMod(bot))
