@@ -56,7 +56,7 @@ class AutoMod(commands.Cog):
         self.bot = bot
         self.supabase = getattr(bot, "supabase", None)
         
-        # Initialize Redis connection
+        # Initialize Redis connection (with robust environment variable fallback)
         if hasattr(bot, "redis"):
             self.redis = bot.redis
         else:
@@ -147,7 +147,7 @@ class AutoMod(commands.Cog):
                          limit: int, window_sec: int) -> tuple[int, bool]:
         """
         Redis ZSET 슬라이딩 윈도우로 도배 여부를 판정한다.
-        Redis 장애 시 로컬 딕셔너리로 자동 폴백한다.
+        Redis 장애 시 로컬 딕셔너리로 자동 폴백하여 봇이 절대 멈추지 않는다.
 
         Returns:
             (윈도우 내 메시지 수, 제한 초과 여부)
@@ -224,12 +224,12 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 print(f"[SPAM][WARN] 메시지 삭제 권한 없음 (guild={message.guild.id})", flush=True)
 
-            # 처벌 로그 배치 큐 전송 (channel_id 제거하여 에러 방지)
+            # 처벌 로그 배치 큐 전송 (데이터베이스 무결성을 위해 channel_id 제거)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
                 action="spam_delete",
-                reason=f"도배 감지 ({count}/{limit} in {window}s)",
+                reason=f"도배 감지 ({count}/{limit} in {window}s) | 채널: #{message.channel.name}"
             )
 
             try:
