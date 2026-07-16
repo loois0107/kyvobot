@@ -2,13 +2,13 @@ import time
 import asyncio
 import json
 import os
-from datetime import datetime, timezone, timedelta  # ⚡ [클로드 반영] timedelta 추가 완료!
+from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands, tasks
 import redis.asyncio as aioredis
 
 # ══════════════════════════════════════════════════════════
-#  ① 슬라이딩 윈도우 Lua 스크립트 (Redis 서버에서 원자적으로 실행)
+#  ① Sliding Window Lua Script (Executed atomically on Redis)
 # ══════════════════════════════════════════════════════════
 SLIDING_WINDOW_LUA = """
 local key    = KEYS[1]
@@ -17,16 +17,16 @@ local window = tonumber(ARGV[2])
 local limit  = tonumber(ARGV[3])
 local member = ARGV[4]
 
--- 1) 윈도우 밖으로 밀려난 오래된 기록 제거
+-- 1) Remove old logs that fell out of the window
 redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
 
--- 2) 현재 메시지 기록
+-- 2) Record the current message timestamp
 redis.call('ZADD', key, now, member)
 
--- 3) 윈도우 내 메시지 수 집계
+-- 3) Count remaining active logs in the window
 local count = redis.call('ZCARD', key)
 
--- 4) 키 자동 만료 (윈도우 + 1초 여유). 죽은 유저의 키가 영원히 남지 않게 한다.
+-- 4) Set auto-expiration on the key (window + 1s buffer) to prevent memory leak
 redis.call('PEXPIRE', key, window + 1000)
 
 if count > limit then
@@ -50,7 +50,7 @@ class AutoMod(commands.Cog):
     # ─────────────────────────────────────────────────
 
     # ══════════════════════════════════════════════════════════
-    #  ② 생성자 및 Lua 스크립트 등록
+    #  ② Constructor & Lua Script Registration
     # ══════════════════════════════════════════════════════════
     def __init__(self, bot):
         self.bot = bot
@@ -63,10 +63,10 @@ class AutoMod(commands.Cog):
             redis_url = os.getenv("REDIS_URL")
             self.redis = aioredis.from_url(redis_url, decode_responses=True)
 
-        # Redis 장애 시에만 사용하는 로컬 폴백 캐시 (평시엔 비어 있음)
+        # Local fallback cache used only when Redis is unavailable
         self.spam_cache = {}
 
-        # Lua 스크립트를 Redis에 등록 (EVALSHA로 재사용되어 대역폭 절약)
+        # Register Lua script to Redis for bandwidth optimization (reused via EVALSHA)
         self.spam_script = self.redis.register_script(SLIDING_WINDOW_LUA)
 
         # Async queue to temporarily buffer infraction logs
@@ -139,12 +139,12 @@ class AutoMod(commands.Cog):
             return False
 
     # ══════════════════════════════════════════════════════════
-    #  ③ 도배 감지 핵심 함수 (ZSET 및 로컬 폴백)
+    #  ③ Spam Detection Core (ZSET with Local Fallback)
     # ══════════════════════════════════════════════════════════
     async def check_spam(self, guild_id: int, user_id: int, message_id: int,
                          limit: int, window_sec: int) -> tuple[int, bool]:
         """
-        Redis ZSET 슬라이딩 윈도우로 도배 여부를 판정한다.
+        Evaluates spam state using Redis ZSET sliding window atomically.
         """
         key = f"spam:{guild_id}:{user_id}"
         now_ms = int(time.time() * 1000)
@@ -158,13 +158,13 @@ class AutoMod(commands.Cog):
             return int(count), bool(exceeded)
 
         except Exception as e:
-            print(f"[SPAM][WARN] Redis 판정 실패, 로컬 폴백: "
+            print(f"[SPAM][WARN] Redis evaluation failed, falling back to local: "
                   f"{type(e).__name__}: {e}", flush=True)
             return self._check_spam_local(guild_id, user_id, limit, window_sec)
 
     def _check_spam_local(self, guild_id: int, user_id: int,
                           limit: int, window_sec: int) -> tuple[int, bool]:
-        """[폴백] Redis가 죽었을 때만 동작하는 인메모리 슬라이딩 윈도우."""
+        """[Fallback] Memory-based sliding window running only when Redis is down."""
         key = (guild_id, user_id)
         now = time.time()
         cutoff = now - window_sec
@@ -177,40 +177,39 @@ class AutoMod(commands.Cog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
-    #  ④ Message Event Listener (클로드 피드백 반영 완료)
+    #  ④ Message Event Listener (Clean English Debug Logs)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # ⚡ [클로드 반영] 봇 메시지 및 DM 조기 차단으로 로그 오염 원천 봉쇄
+        # 🔍 Debug Gate 0: Filter out bots and DM channels to prevent log pollution
         if message.author.bot or not message.guild:
             return
 
-        # 🔍 디버그 관문 0: 실제 유저의 메시지 수신만 감지하여 깔끔한 로그 유지
-        print(f"[SPAM][DEBUG] on_message 진입 | Author: {message.author} | Content: '{message.content}'", flush=True)
+        print(f"[SPAM][DEBUG] on_message entered | Author: {message.author} | Content: '{message.content}'", flush=True)
         
         perms = message.author.guild_permissions
         if perms.administrator or perms.manage_messages:
-            # 🔍 디버그 관문 1: 관리자 프리패스 스킵
-            print(f"[SPAM][DEBUG] 관리자 프리패스로 스킵: {message.author}", flush=True)
+            # 🔍 Debug Gate 1: Admin Bypass
+            print(f"[SPAM][DEBUG] Bypassed admin/moderator: {message.author}", flush=True)
             return
 
-        # ⚡ [클로드 반영] 내용이 아예 없는 경우(첨부도 없는 경우)만 스킵 (한 글자 도배 완벽 방어)
+        # ⚡ Skip evaluation only if message content is completely empty and lacks attachments
         if not message.content and not message.attachments:
-            print(f"[SPAM][DEBUG] 내용 없는 빈 메시지 스킵", flush=True)
+            print(f"[SPAM][DEBUG] Bypassed empty message with no attachments", flush=True)
             return
 
         settings = await self.get_guild_settings(message.guild.id)
-        # 🔍 디버그 관문 2: 세팅값 조회 결과 확인
-        print(f"[SPAM][DEBUG] Settings 조회 결과: {settings}", flush=True)
+        # 🔍 Debug Gate 2: Configuration Lookup
+        print(f"[SPAM][DEBUG] Settings loaded: {settings}", flush=True)
 
         if not settings or not settings.get("automod_enabled", True):
-            print(f"[SPAM][DEBUG] automod 비활성 상태로 스킵", flush=True)
+            print(f"[SPAM][DEBUG] Bypassed because automod is disabled", flush=True)
             return
 
-        limit = settings.get("spam_limit", 5)        # 윈도우당 허용 메시지 수
-        window = settings.get("spam_interval", 10)   # 윈도우 크기 (초)
+        limit = settings.get("spam_limit", 5)        # Max allowed messages per window
+        window = settings.get("spam_interval", 10)   # Sliding window size (seconds)
 
-        # 1. 도배 감지 실행
+        # 1. Execute Spam Detection
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
             user_id=message.author.id,
@@ -218,57 +217,57 @@ class AutoMod(commands.Cog):
             limit=limit,
             window_sec=window,
         )
-        # 🔍 디버그 관문 3: Redis 판정 결과 출력
-        print(f"[SPAM][DEBUG] ZSET 결과 -> count={count}, limit={limit}, exceeded={exceeded}", flush=True)
+        # 🔍 Debug Gate 3: Spam check evaluation output
+        print(f"[SPAM][DEBUG] ZSET Result -> count={count}, limit={limit}, exceeded={exceeded}", flush=True)
 
         if exceeded:
-            # 🔍 디버그 관문 4: 처벌 진입 확인
-            print(f"[SPAM][DEBUG] 🚨 처벌 진입! (Target: {message.author})", flush=True)
+            # 🔍 Debug Gate 4: Punishment entry
+            print(f"[SPAM][DEBUG] 🚨 Punishment triggered! (Target: {message.author})", flush=True)
 
-            # 메시지 삭제
+            # Delete spam message
             try:
                 await message.delete()
-                print(f"[SPAM][DEBUG] 메시지 삭제 완료", flush=True)
+                print(f"[SPAM][DEBUG] Message deleted successfully.", flush=True)
             except discord.NotFound:
                 pass  
             except discord.Forbidden:
-                print(f"[SPAM][WARN] 메시지 삭제 권한 없음 (guild={message.guild.id})", flush=True)
+                print(f"[SPAM][WARN] Missing permission to delete message (guild={message.guild.id})", flush=True)
 
-            # 타임아웃 처벌 적용 (10분) - ⚡ [클로드 반영] 모듈 중복 바인딩 버그 완전 해결!
+            # Apply 10-minute timeout
             punishment_log = "spam_delete"
-            punishment_reason = f"도배 감지 ({count}/{limit} in {window}s)"
+            punishment_reason = f"Spam detected ({count}/{limit} in {window}s)"
 
             try:
-                duration = timedelta(minutes=10)  # 상단 timedelta 클래스를 사용하도록 클린업
+                duration = timedelta(minutes=10)
                 await message.author.timeout(duration, reason=punishment_reason)
                 punishment_log = "spam_timeout"
-                punishment_reason += " -> 10분 타임아웃 처분"
-                print(f"[SPAM][DEBUG] {message.author} 타임아웃 10분 적용 완료", flush=True)
+                punishment_reason += " -> 10m Timeout applied"
+                print(f"[SPAM][DEBUG] Timeout (10m) applied to {message.author}", flush=True)
             except discord.Forbidden:
-                print(f"[SPAM][WARN] 처벌 권한 없음 (guild={message.guild.id}, user={message.author.id})", flush=True)
-                punishment_reason += " (권한 부족으로 처벌 실패)"
+                print(f"[SPAM][WARN] Missing permission to punish (guild={message.guild.id}, user={message.author.id})", flush=True)
+                punishment_reason += " (Punishment failed due to missing permission)"
             except Exception as e:
-                print(f"[SPAM][ERROR] 처벌 적용 중 에러: {type(e).__name__}: {e}", flush=True)
+                print(f"[SPAM][ERROR] Failed to apply punishment: {type(e).__name__}: {e}", flush=True)
 
-            # 처벌 로그 배치 큐 전송 (채널명 포함)
+            # Enqueue infraction log (with Channel Name)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
                 action=punishment_log,
-                reason=f"{punishment_reason} | 채널: #{message.channel.name}",
+                reason=f"{punishment_reason} | Channel: #{message.channel.name}",
             )
 
-            # ⚡ [클로드 반영] 경고 메시지 전송 예외처리 대폭 강화 (Forbidden, HTTPException)
+            # Send ephemeral-style warning message
             try:
                 await message.channel.send(
-                    f"⚠️ {message.author.mention}, 도배가 감지되어 메시지가 삭제되고 **10분간 입막음(Timeout)** 처리되었습니다.",
+                    f"⚠️ {message.author.mention}, spam detected. Your messages have been deleted and you have been **timed out for 10 minutes**.",
                     delete_after=5.0
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
             return
 
-        # 2. 금지어 필터링 실행 (도배 미검출 시에만 후속 검사)
+        # 2. Execute Bad Word Filter (Evaluated only if user did not trigger spam)
         forbidden_words = settings.get("forbidden_words", [])
         if isinstance(forbidden_words, str):
             forbidden_words = [w.strip() for w in forbidden_words.split(",") if w.strip()]
@@ -286,7 +285,7 @@ class AutoMod(commands.Cog):
                     guild_id=message.guild.id,
                     user_id=message.author.id,
                     action="bad_word_delete",
-                    reason=f"Forbidden word detected: {word} | 채널: #{message.channel.name}"
+                    reason=f"Forbidden word detected: {word} | Channel: #{message.channel.name}"
                 )
 
                 try:
@@ -432,19 +431,20 @@ class AutoMod(commands.Cog):
         await ctx.send(embed=embed)
 
     # ══════════════════════════════════════════════════════════
-    #  ⑤ 초기화 명령어 (관리자 수동 오탐 구제용)
+    #  ⑤ Maintenance Commands (Admin Only)
     # ══════════════════════════════════════════════════════════
     @commands.command(name="clearspam")
     @commands.has_permissions(manage_messages=True)
     async def clear_spam(self, ctx, member: discord.Member):
+        """[Admin] Manually clear a specific user's spam counter to resolve false-positives."""
         key = f"spam:{ctx.guild.id}:{member.id}"
         try:
             await self.redis.delete(key)
             self.spam_cache.pop((ctx.guild.id, member.id), None)
-            await ctx.send(f"✅ {member.mention} 의 도배 카운터를 초기화했습니다.")
+            await ctx.send(f"✅ Successfully cleared spam counter for {member.mention}.")
         except Exception as e:
-            print(f"[SPAM][ERROR] 카운터 초기화 실패: {type(e).__name__}: {e}", flush=True)
-            await ctx.send("⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.")
+            print(f"[SPAM][ERROR] Failed to clear spam counter: {type(e).__name__}: {e}", flush=True)
+            await ctx.send("⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.")
 
 async def setup(bot):
     await bot.add_cog(AutoMod(bot))
