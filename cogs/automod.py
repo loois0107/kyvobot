@@ -2,7 +2,7 @@ import time
 import asyncio
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta  # ⚡ [클로드 반영] timedelta 추가 완료!
 import discord
 from discord.ext import commands, tasks
 import redis.asyncio as aioredis
@@ -177,29 +177,30 @@ class AutoMod(commands.Cog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
-    #  ④ Message Event Listener (🔍 촘촘한 디버그 로그 추가형)
+    #  ④ Message Event Listener (클로드 피드백 반영 완료)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # 🔍 디버그 관문 0: Cog 수신 자체를 감지하는지 확인 (3순위 의심용)
-        print(f"[SPAM][DEBUG] on_message 진입 | Author: {message.author} (Bot: {message.author.bot}) | Content: '{message.content}'", flush=True)
-
+        # ⚡ [클로드 반영] 봇 메시지 및 DM 조기 차단으로 로그 오염 원천 봉쇄
         if message.author.bot or not message.guild:
             return
+
+        # 🔍 디버그 관문 0: 실제 유저의 메시지 수신만 감지하여 깔끔한 로그 유지
+        print(f"[SPAM][DEBUG] on_message 진입 | Author: {message.author} | Content: '{message.content}'", flush=True)
         
         perms = message.author.guild_permissions
         if perms.administrator or perms.manage_messages:
-            # 🔍 디버그 관문 1: 관리자 스킵 여부
+            # 🔍 디버그 관문 1: 관리자 프리패스 스킵
             print(f"[SPAM][DEBUG] 관리자 프리패스로 스킵: {message.author}", flush=True)
             return
 
-        # 🔍 디버그 관문 2: 글자 수 검사 (1순위 의심인 'Message Content Intent' 누락 시 0글자로 인식되어 무조건 여기서 스킵됨)
-        if len(message.content) < 2 and not message.attachments:
-            print(f"[SPAM][DEBUG] 짧은 메시지 스킵 | Content: '{message.content}' (len={len(message.content)})", flush=True)
+        # ⚡ [클로드 반영] 내용이 아예 없는 경우(첨부도 없는 경우)만 스킵 (한 글자 도배 완벽 방어)
+        if not message.content and not message.attachments:
+            print(f"[SPAM][DEBUG] 내용 없는 빈 메시지 스킵", flush=True)
             return
 
         settings = await self.get_guild_settings(message.guild.id)
-        # 🔍 디버그 관문 3: 서버 세팅값 조회 결과 확인 (2순위 의심용)
+        # 🔍 디버그 관문 2: 세팅값 조회 결과 확인
         print(f"[SPAM][DEBUG] Settings 조회 결과: {settings}", flush=True)
 
         if not settings or not settings.get("automod_enabled", True):
@@ -217,11 +218,11 @@ class AutoMod(commands.Cog):
             limit=limit,
             window_sec=window,
         )
-        # 🔍 디버그 관문 4: Redis 판정 결과 출력
+        # 🔍 디버그 관문 3: Redis 판정 결과 출력
         print(f"[SPAM][DEBUG] ZSET 결과 -> count={count}, limit={limit}, exceeded={exceeded}", flush=True)
 
         if exceeded:
-            # 🔍 디버그 관문 5: 초과하여 진짜 처벌로 들어왔는지 확인
+            # 🔍 디버그 관문 4: 처벌 진입 확인
             print(f"[SPAM][DEBUG] 🚨 처벌 진입! (Target: {message.author})", flush=True)
 
             # 메시지 삭제
@@ -233,13 +234,12 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 print(f"[SPAM][WARN] 메시지 삭제 권한 없음 (guild={message.guild.id})", flush=True)
 
-            # 타임아웃 처벌 적용 (10분)
-            import datetime
+            # 타임아웃 처벌 적용 (10분) - ⚡ [클로드 반영] 모듈 중복 바인딩 버그 완전 해결!
             punishment_log = "spam_delete"
             punishment_reason = f"도배 감지 ({count}/{limit} in {window}s)"
 
             try:
-                duration = datetime.timedelta(minutes=10)
+                duration = timedelta(minutes=10)  # 상단 timedelta 클래스를 사용하도록 클린업
                 await message.author.timeout(duration, reason=punishment_reason)
                 punishment_log = "spam_timeout"
                 punishment_reason += " -> 10분 타임아웃 처분"
@@ -250,7 +250,7 @@ class AutoMod(commands.Cog):
             except Exception as e:
                 print(f"[SPAM][ERROR] 처벌 적용 중 에러: {type(e).__name__}: {e}", flush=True)
 
-            # 처벌 로그 배치 큐 전송 (클로드 꿀팁 반영: 채널명 추가)
+            # 처벌 로그 배치 큐 전송 (채널명 포함)
             self.enqueue_log(
                 guild_id=message.guild.id,
                 user_id=message.author.id,
@@ -258,16 +258,17 @@ class AutoMod(commands.Cog):
                 reason=f"{punishment_reason} | 채널: #{message.channel.name}",
             )
 
+            # ⚡ [클로드 반영] 경고 메시지 전송 예외처리 대폭 강화 (Forbidden, HTTPException)
             try:
                 await message.channel.send(
                     f"⚠️ {message.author.mention}, 도배가 감지되어 메시지가 삭제되고 **10분간 입막음(Timeout)** 처리되었습니다.",
                     delete_after=5.0
                 )
-            except discord.Forbidden:
+            except (discord.Forbidden, discord.HTTPException):
                 pass
             return
 
-        # 2. 금지어 필터링 실행 (도배에 안 걸렸을 때만 순차 진행)
+        # 2. 금지어 필터링 실행 (도배 미검출 시에만 후속 검사)
         forbidden_words = settings.get("forbidden_words", [])
         if isinstance(forbidden_words, str):
             forbidden_words = [w.strip() for w in forbidden_words.split(",") if w.strip()]
@@ -293,7 +294,7 @@ class AutoMod(commands.Cog):
                         f"{message.author.mention}, forbidden word detected. Your message has been deleted.",
                         delete_after=3.0
                     )
-                except discord.Forbidden:
+                except (discord.Forbidden, discord.HTTPException):
                     pass
                 break
 
