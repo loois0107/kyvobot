@@ -60,7 +60,7 @@
   "music_no_playing": "❌ 현재 재생 중인 음악이 없습니다.",
   "music_stopped": "⏹️ 플레이어를 종료하고 음성 채널에서 퇴장했습니다.",
   "music_not_connected": "❌ 제가 음성 채널에 연결되어 있지 않습니다.",
-  "music_error": "❌ 음악 엔진 내부 오류 발생: `{error}`",
+  "music_error": "❌ 음악 내부 오류 발생: `{error}`",
   "welcome_title": "❖ 보안 승인: 완료",
   "welcome_manifest_header": "─── 【 오퍼레이터 입장 매니페스트 】 ───",
   "welcome_cluster_node": "📡 **클러스터 노드:**",
@@ -147,5 +147,7 @@
   "bj_status_push": "🤝 **결과: 무승부 (푸쉬)** | 배팅 금액이 반환되었습니다.",
   "bj_status_bust": "💥 **결과: 버스트 (초과)** | 21점을 초과하여 패배했습니다. `-{points} MP`",
   "bj_btn_hit": "히트 (카드리시브)",
-  "bj_btn_stand": "스탠드 (오픈)"
+  "bj_btn_stand": "스탠드 (오픈)",
+  "clear_spam_success": "✅ {mention}님의 도배 카운터를 즉시 초기화했습니다.",
+  "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다."
 }

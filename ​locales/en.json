@@ -53,7 +53,7 @@
   "giveaway_active_title": "🎁 Active Giveaway Event: {prize}",
   "giveaway_active_desc": "Press the matrix icon underneath to enter the drawing loop!\n\n• **Target Winners:** `{winners}`\n• **Remaining Lifecycle:** {time}",
   "music_disabled": "❌ Music player subsystem is currently locked by central administration.",
-  "music_not_in_voice": "❌ Please connect to a voice sector channel node first.",
+  "music_not_in_voice": "❌ Please connect to a voice sector sector node first.",
   "music_added_queue": "✅ Added payload to track queue: {title}",
   "music_now_playing": "🎵 Current Stream: {title}",
   "music_skipped": "⏭️ Skipped current audio stream node.",
@@ -147,5 +147,7 @@
   "bj_status_push": "🤝 **RESULT: PUSH MATRIX** | Betting asset returned safely.",
   "bj_status_bust": "💥 **RESULT: BUST LOGGED** | Exceeded 21. Transaction failed. `-{points} MP`",
   "bj_btn_hit": "Hit",
-  "bj_btn_stand": "Stand"
+  "bj_btn_stand": "Stand",
+  "clear_spam_success": "✅ Successfully cleared spam counter for {mention}.",
+  "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration."
 }
