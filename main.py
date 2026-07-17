@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
+print(">>> KYVO MAIN.PY VERSION 2026-07-17-CUSTOMCOMMANDS-FIX <<<", flush=True)
 from supabase import create_client, Client
 from aiohttp import web
 
