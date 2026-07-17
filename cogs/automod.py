@@ -7,34 +7,11 @@ import discord
 from discord.ext import commands, tasks
 import redis.asyncio as aioredis
 
-# ══════════════════════════════════════════════════════════
-#  ① 다국어 언어 사전 (LOCALES) - 한국어 및 영어 지원
-# ══════════════════════════════════════════════════════════
-LOCALES = {
-    "en": {
-        "spam_warn": "⚠️ {mention}, spam detected. Your messages have been deleted and you have been **timed out for 10 minutes**.",
-        "spam_reason": "Spam detected ({count}/{limit} in {window}s)",
-        "spam_timeout_applied": " -> 10m Timeout applied",
-        "spam_failed_permission": " (Punishment failed due to missing permission)",
-        "bad_word_warn": "{mention}, forbidden word detected. Your message has been deleted.",
-        "bad_word_reason": "Forbidden word detected: {word}",
-        "clear_spam_success": "✅ Successfully cleared spam counter for {mention}.",
-        "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.",
-    },
-    "ko": {
-        "spam_warn": "⚠️ {mention}님, 도배가 감지되어 메시지가 삭제되고 **10분간 입막음(타임아웃)** 처리되었습니다.",
-        "spam_reason": "도배 감지 ({count}/{limit}명 중 {window}초 내)",
-        "spam_timeout_applied": " -> 10분 타임아웃 처분 완료",
-        "spam_failed_permission": " (권한 부족으로 처벌 실패)",
-        "bad_word_warn": "{mention}님, 금지어가 감지되어 메시지가 삭제되었습니다.",
-        "bad_word_reason": "금지어 감지: {word}",
-        "clear_spam_success": "✅ {mention}님의 도배 카운터를 즉시 초기화했습니다.",
-        "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.",
-    }
-}
+# ⚡ [아키텍처 혁신] 모든 Cog의 기저가 되는 공통 마스터 베이스 콕 임포트
+from cogs.base import KyvoBaseCog
 
 # ══════════════════════════════════════════════════════════
-#  ② 슬라이딩 윈도우 Lua 스크립트
+#  ① 슬라이딩 윈도우 Lua 스크립트 (AutoMod 고유 자산 유지)
 # ══════════════════════════════════════════════════════════
 SLIDING_WINDOW_LUA = """
 local key    = KEYS[1]
@@ -54,24 +31,23 @@ end
 return {count, 0}
 """
 
-class AutoMod(commands.Cog):
+class AutoMod(KyvoBaseCog):
+    """
+    KyvoBaseCog를 상속받아 무거운 캐시 및 다국어 헬퍼(get_msg)를 상속받고,
+    자체적인 도배 방지 및 금지어 필터링 기능만 격리 수행하는 슬림화된 AutoMod 엔진.
+    """
     def __init__(self, bot):
-        self.bot = bot
-        self.supabase = getattr(bot, "supabase", None)
-        
-        if hasattr(bot, "redis"):
-            self.redis = bot.redis
-        else:
-            redis_url = os.getenv("REDIS_URL")
-            self.redis = aioredis.from_url(redis_url, decode_responses=True)
+        # ⚡ [중요] 부모 클래스(KyvoBaseCog)의 __init__을 호출하여 bot, supabase, redis 자동 세팅 완료!
+        super().__init__(bot)
 
+        # AutoMod 모듈 전용 고유 비즈니스 상태 레이어 초기화
         self.spam_cache = {}
         self.spam_script = self.redis.register_script(SLIDING_WINDOW_LUA)
         self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self.log_dropped_count = 0
 
         self.flush_log_queue.start()
-        print("[⚡ AUTOMOD] Initialization complete. Multi-language support active.", flush=True)
+        print("[⚡ AUTOMOD] Initialization complete. Multi-language support active via Base Cog.", flush=True)
 
     async def cog_unload(self):
         self.flush_log_queue.cancel()
@@ -80,65 +56,11 @@ class AutoMod(commands.Cog):
         except Exception as e:
             print(f"[LOG-QUEUE][ERROR] Graceful flush failed: {type(e).__name__}: {e}", flush=True)
 
-    # ══════════════════════════════════════════════════════════
-    #  ③ 다국어 텍스트 추출 헬퍼 함수 (i18n 핵심)
-    # ══════════════════════════════════════════════════════════
-    async def get_msg(self, guild_id: int, key: string, **kwargs) -> str:
-        """서버 설정 언어(ko/en)에 맞는 메시지를 찾아 포맷팅해 반환합니다."""
-        settings = await self.get_guild_settings(guild_id)
-        # DB에 language 설정이 없으면 기본적으로 'ko'를 사용합니다 (국내 중심)
-        lang = settings.get("language", "ko")
-        
-        # 만약 없는 언어나 키를 요청할 경우 영어를 폴백으로 작동
-        lang_dict = LOCALES.get(lang, LOCALES["en"])
-        template = lang_dict.get(key, LOCALES["en"].get(key, f"Missing [{key}]"))
-        
-        return template.format(**kwargs)
+    # 💡 [중복 소각 완료] 기존의 get_msg, get_guild_settings, invalidate_settings_cache 
+    #    및 LOCALES 딕셔너리는 이제 부모 클래스(KyvoBaseCog)가 완벽하게 처리하므로 통째로 삭제됨!
 
     # ══════════════════════════════════════════════════════════
-    #  Cache-Aside Guild Settings Layer
-    # ══════════════════════════════════════════════════════════
-    async def get_guild_settings(self, guild_id: int) -> dict:
-        key = f"guild:{guild_id}:settings"
-        try:
-            cached = await self.redis.get(key)
-            if cached:
-                return json.loads(cached)
-        except Exception as e:
-            print(f"[CACHE][WARN] Lookup failed: {type(e).__name__}: {e}", flush=True)
-
-        loop = asyncio.get_running_loop()
-        try:
-            res = await loop.run_in_executor(
-                None,
-                lambda: self.supabase.table("guild_settings")
-                        .select("*").eq("guild_id", str(guild_id))
-                        .maybe_single().execute(),
-            )
-            settings = res.data or {}
-        except Exception as e:
-            print(f"[DB][ERROR] Failed to fetch guild settings (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            return {}
-
-        ttl = 300 if settings else 60
-        try:
-            await self.redis.setex(key, ttl, json.dumps(settings, ensure_ascii=False))
-        except Exception as e:
-            print(f"[CACHE][WARN] Failed to re-cache settings: {type(e).__name__}: {e}", flush=True)
-
-        return settings
-
-    async def invalidate_settings_cache(self, guild_id: int) -> bool:
-        key = f"guild:{guild_id}:settings"
-        try:
-            await self.redis.delete(key)
-            return True
-        except Exception as e:
-            print(f"[CACHE][ERROR] Invalidation failed: {type(e).__name__}: {e}", flush=True)
-            return False
-
-    # ══════════════════════════════════════════════════════════
-    #  Spam Detection Core
+    #  ② Spam Detection Core
     # ══════════════════════════════════════════════════════════
     async def check_spam(self, guild_id: int, user_id: int, message_id: int,
                          limit: int, window_sec: int) -> tuple[int, bool]:
@@ -170,7 +92,7 @@ class AutoMod(commands.Cog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
-    #  ④ Message Event Listener (i18n 다국어 출력 적용)
+    #  ③ Message Event Listener (부모 Cog의 상속 함수 완벽 연동)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -184,6 +106,7 @@ class AutoMod(commands.Cog):
         if not message.content and not message.attachments:
             return
 
+        # ⚡ 부모 클래스로부터 상속받은 캐시-aside 설정 로더 가동
         settings = await self.get_guild_settings(message.guild.id)
         if not settings or not settings.get("automod_enabled", True):
             return
@@ -207,7 +130,7 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 print(f"[SPAM][WARN] Missing permission to delete message (guild={message.guild.id})", flush=True)
 
-            # i18n 기반 처벌 사유 문자열 조립
+            # ⚡ 부모 클래스의 통합 다국어 로더(get_msg)를 호출하여 실시간 문자열 치환
             base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
             punishment_log = "spam_delete"
 
@@ -230,7 +153,7 @@ class AutoMod(commands.Cog):
                 reason=f"{base_reason} | Channel: #{message.channel.name}",
             )
 
-            # 유저 대상 경고문 전송 (i18n 적용)
+            # ⚡ 부모 클래스의 get_msg 기반으로 유저 경고 메시지 출력
             warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
             try:
                 await message.channel.send(warn_msg, delete_after=5.0)
@@ -252,6 +175,7 @@ class AutoMod(commands.Cog):
                 except discord.Forbidden:
                     pass
 
+                # ⚡ 금지어 사유 및 알림도 부모 클래스의 상속 get_msg로 일원화
                 log_reason = await self.get_msg(message.guild.id, "bad_word_reason", word=word)
                 self.enqueue_log(
                     guild_id=message.guild.id,
@@ -268,7 +192,7 @@ class AutoMod(commands.Cog):
                 break
 
     # ══════════════════════════════════════════════════════════
-    #  Log Batch Queue Async Engine
+    #  ④ Log Batch Queue Async Engine (AutoMod 고유 자산 유지)
     # ══════════════════════════════════════════════════════════
     def enqueue_log(self, guild_id: int, user_id: int, action: str, reason: str) -> None:
         payload = {
@@ -354,14 +278,15 @@ class AutoMod(commands.Cog):
         self.enqueue_log(*args, **kwargs)
 
     # ══════════════════════════════════════════════════════════
-    #  ⑤ Admin Commands
+    #  ⑤ Admin Commands (상속 함수 연동형 리팩터링 완료)
     # ══════════════════════════════════════════════════════════
     @commands.command(name="reload_settings", aliases=["refresh_settings", "설정새로고침"])
     @commands.has_permissions(administrator=True)
     async def reload_settings(self, ctx):
+        # ⚡ 부모 클래스에서 상속받은 캐시 폭파(invalidate) 메서드 호출
         ok = await self.invalidate_settings_cache(ctx.guild.id)
         if ok:
-            await ctx.send("✅ **Settings cache purged.**")
+            await ctx.send("✅ **Settings cache purged via Base Engine.**")
         else:
             await ctx.send("⚠️ **Failed to connect to Redis.**")
 

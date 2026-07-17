@@ -30,6 +30,7 @@ class KyvoBot(commands.Bot):
             'cogs.economy',
             'cogs.leveling',
             'cogs.ticket_ai'
+            'cogs.custom_commands'
         ]
         
         for ext in extensions:
