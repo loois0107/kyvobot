@@ -3,9 +3,10 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
-print(">>> KYVO MAIN.PY VERSION 2026-07-17-CUSTOMCOMMANDS-FIX <<<", flush=True)
 from supabase import create_client, Client
 from aiohttp import web
+
+print(">>> KYVO MAIN.PY VERSION 2026-07-17-CUSTOMCOMMANDS-FIX <<<", flush=True)
 
 class KyvoBot(commands.Bot):
     def __init__(self):
@@ -20,11 +21,11 @@ class KyvoBot(commands.Bot):
         self.supabase: Client = create_client(supabase_url, supabase_key)
 
     async def setup_hook(self):
-        # 🔒 [GLOBAL DEFENSE BLOCK] Bind the global slash command error handler
+        print(">>> SETUP_HOOK STARTED <<<", flush=True)
         self.tree.on_error = self.on_app_command_error
 
-        # [RENDER INFRASTRUCTURE HACK] Start Dummy Web Server
         self.loop.create_task(self.keep_alive_server())
+        print(">>> keep_alive task created <<<", flush=True)
 
         extensions = [
             'cogs.automod',
@@ -33,29 +34,27 @@ class KyvoBot(commands.Bot):
             'cogs.ticket_ai',
             'cogs.custom_commands',
         ]
+        print(">>> Loading extensions... <<<", flush=True)
         
         for ext in extensions:
             try:
                 await self.load_extension(ext)
-                print(f"[SYSTEM LOADING] Successfully loaded slot module: {ext}")
+                print(f"[SYSTEM LOADING] Successfully loaded slot module: {ext}", flush=True)
             except Exception as e:
-                print(f"[CRITICAL LAYER ERROR] Failure launching extension node {ext}: {e}")
+                print(f"[CRITICAL LAYER ERROR] Failure launching extension node {ext}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
 
-        # Automatically deploy slash commands globally across all servers upon initialization
         try:
-            print("[SYSTEM LOG] Syncing application commands globally...")
-            synced = await self.tree.sync() # Empty arguments trigger a true global sync hierarchy
-            print(f"[SYSTEM LOG] Successfully synced {len(synced)} commands globally to Discord.")
+            print("[SYSTEM LOG] Syncing application commands globally...", flush=True)
+            synced = await self.tree.sync()
+            print(f"[SYSTEM LOG] Successfully synced {len(synced)} commands globally to Discord.", flush=True)
         except Exception as e:
-            print(f"[SYSTEM ERROR] Failed global sync during startup: {e}")
+            print(f"[SYSTEM ERROR] Failed global sync during startup: {e}", flush=True)
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        """🛡️ Centralized Interceptor Matrix: Catches all global slash command failures smoothly."""
-        
-        # Guard: If the bot already deferred or responded, use followup to prevent crash cascades
         send_message = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
 
-        # 1. Handle Command Rate Limits (Cooldowns)
         if isinstance(error, app_commands.CommandOnCooldown):
             await send_message(
                 f"⏳ **Command on Cooldown!**\n"
@@ -64,7 +63,6 @@ class KyvoBot(commands.Bot):
             )
             return
 
-        # 2. Handle Unauthorized Access (Missing Permissions)
         elif isinstance(error, app_commands.MissingPermissions):
             await send_message(
                 "❌ **Permission Denied!**\n"
@@ -73,9 +71,8 @@ class KyvoBot(commands.Bot):
             )
             return
 
-        # 3. Fallback for unexpected infrastructure crashes
         else:
-            print(f"[CRITICAL SLASH EXCEPTION] Intercepted runtime crash node: {error}")
+            print(f"[CRITICAL SLASH EXCEPTION] Intercepted runtime crash node: {error}", flush=True)
             try:
                 await send_message(
                     "⚠️ **Internal Server Error!**\n"
@@ -86,17 +83,15 @@ class KyvoBot(commands.Bot):
                 pass
 
     async def keep_alive_server(self):
-        """Deploys a dummy HTTP server to satisfy Render.com Web Service port binding requirements."""
         app = web.Application()
         app.router.add_get('/', lambda request: web.Response(text="KyvoBot AI Engine is Online and Running!"))
         runner = web.AppRunner(app)
         await runner.setup()
         
-        # Capture dynamic port bound by Render infrastructure (Fallback to 8080)
         port = int(os.environ.get("PORT", 8080))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f"[WEB INFRASTRUCTURE] Dummy health-check server bound to port {port}.")
+        print(f"[WEB INFRASTRUCTURE] Dummy health-check server bound to port {port}.", flush=True)
 
     async def get_guild_settings(self, guild_id: str) -> dict:
         try:
@@ -113,17 +108,16 @@ class KyvoBot(commands.Bot):
                 self.supabase.table("guild_settings").insert({"guild_id": guild_id, "settings": default_settings}).execute()
                 return default_settings
         except Exception as e:
-            print(f"[DATABASE EXCEPTION] Failed tracking configuration matrix blocks for guild ID {guild_id}: {e}")
+            print(f"[DATABASE EXCEPTION] Failed tracking configuration matrix blocks for guild ID {guild_id}: {e}", flush=True)
             return {}
 
     async def bulk_update_guild_settings(self, guild_id: str, settings: dict):
         try:
             self.supabase.table("guild_settings").update({"settings": settings}).eq("guild_id", guild_id).execute()
         except Exception as e:
-            print(f"[DATABASE EXCEPTION] Failed committing execution changes onto tracking block {guild_id}: {e}")
+            print(f"[DATABASE EXCEPTION] Failed committing execution changes onto tracking block {guild_id}: {e}", flush=True)
 
     async def get_user_data(self, user_id: str) -> dict:
-        """Fetches flat user profile data row matching your explicit schema columns."""
         try:
             response = self.supabase.table("users").select("*").eq("user_id", user_id).execute()
             if response.data:
@@ -133,36 +127,30 @@ class KyvoBot(commands.Bot):
                 self.supabase.table("users").insert(default_profile).execute()
                 return default_profile
         except Exception as e:
-            print(f"[DATABASE EXCEPTION] Flat profile matrix data acquisition fault on record ID {user_id}: {e}")
+            print(f"[DATABASE EXCEPTION] Flat profile matrix data acquisition fault on record ID {user_id}: {e}", flush=True)
             return {}
 
     async def save_user_data(self, user_id: str, profile_data: dict):
-        """Commits transaction updates directly back into flat database columns."""
         try:
             update_payload = profile_data.copy()
-            update_payload.pop("user_id", None)  # Protect primary key from mutation
+            update_payload.pop("user_id", None)
             
             self.supabase.table("users").update(update_payload).eq("user_id", user_id).execute()
         except Exception as e:
-            print(f"[DATABASE EXCEPTION] Critical write blockage handling flat record adjustments for user reference {user_id}: {e}")
+            print(f"[DATABASE EXCEPTION] Critical write blockage handling flat record adjustments for user reference {user_id}: {e}", flush=True)
 
 bot = KyvoBot()
 
 @bot.event
 async def on_ready():
-    print("==========================================================================")
-    print(f"[APPLICATION CORE LIVE] Established secure connection tunnel as: {bot.user.name}")
-    print(f"[GATEWAY IDENTIFIER] Network ID: {bot.user.id}")
-    print("[SECURITY MATRIX] System modules running on optimized multi-thread clusters.")
-    print("==========================================================================")
+    print("==========================================================================", flush=True)
+    print(f"[APPLICATION CORE LIVE] Established secure connection tunnel as: {bot.user.name}", flush=True)
+    print(f"[GATEWAY IDENTIFIER] Network ID: {bot.user.id}", flush=True)
+    print("[SECURITY MATRIX] System modules running on optimized multi-thread clusters.", flush=True)
+    print("==========================================================================", flush=True)
 
 @bot.command(name="sync")
 async def sync_application_commands(ctx: commands.Context, scope: str = "local"):
-    """
-    !sync -> Sync application commands locally to this specific server context
-    !sync global -> Force push and update application commands globally across all servers
-    !sync clear -> Purge guild-specific local command registration entries
-    """
     if scope == "global":
         await ctx.send("🌐 Deploying core command registry GLOBALLY to all servers... (Takes a few minutes)")
         try:
@@ -186,15 +174,15 @@ async def sync_application_commands(ctx: commands.Context, scope: str = "local")
             bot.tree.copy_global_to(guild=ctx.guild)
             synced = await bot.tree.sync(guild=ctx.guild)
             await ctx.send(f"✅ Success! Deployed {len(synced)} command nodes directly to this server registry.")
-            print(f"[SERVER SYNC] Successfully deployed {len(synced)} commands locally.")
+            print(f"[SERVER SYNC] Successfully deployed {len(synced)} commands locally.", flush=True)
         except Exception as e:
             await ctx.send(f"❌ Sync failed: `{e}`")
-            print(f"[SERVER SYNC ERROR] Critical crash: {e}")
+            print(f"[SERVER SYNC ERROR] Critical crash: {e}", flush=True)
 
 if __name__ == "__main__":
     bot_token = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN")
     
     if not bot_token:
-        print("[BOOT ABORT] Missing deployment parameter token configuration!")
+        print("[BOOT ABORT] Missing deployment parameter token configuration!", flush=True)
     else:
         bot.run(bot_token)
