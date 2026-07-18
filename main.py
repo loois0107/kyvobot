@@ -111,11 +111,16 @@ class KyvoBot(commands.Bot):
             print(f"[DATABASE EXCEPTION] Failed tracking configuration matrix blocks for guild ID {guild_id}: {e}", flush=True)
             return {}
 
+    # 🛡️ [데이터 안정성 수정 완료] 데이터 누실을 원천 차단하기 위해 update 대신 upsert 매커니즘 도입!
     async def bulk_update_guild_settings(self, guild_id: str, settings: dict):
+        """행이 없어도 생성되도록 upsert로 저장한다 (update는 조용히 무시됨)."""
         try:
-            self.supabase.table("guild_settings").update({"settings": settings}).eq("guild_id", guild_id).execute()
+            self.supabase.table("guild_settings").upsert(
+                {"guild_id": str(guild_id), "settings": settings},
+                on_conflict="guild_id"
+            ).execute()
         except Exception as e:
-            print(f"[DATABASE EXCEPTION] Failed committing execution changes onto tracking block {guild_id}: {e}", flush=True)
+            print(f"[DATABASE EXCEPTION] Failed committing settings for {guild_id}: {e}", flush=True)
 
     async def get_user_data(self, user_id: str) -> dict:
         try:
