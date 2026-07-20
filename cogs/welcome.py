@@ -1,14 +1,15 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from cogs.base import KyvoBaseCog
 import io
 import os
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-class Welcome(commands.Cog):
+class Welcome(KyvoBaseCog):
     def __init__(self, bot):
-        self.bot = bot
+        super().__init__(bot)
         self.font_path = "Font.ttf"
         self.fonts = {}
         self.preload_fonts()
@@ -33,31 +34,24 @@ class Welcome(commands.Cog):
         if member.bot:
             return
 
-        guild_id = str(member.guild.id)
-        
-        try:
-            settings = await self.bot.get_guild_settings(guild_id)
-            if settings:
-                autorole_id = settings.get("autorole_id")
-                if autorole_id:
-                    role = member.guild.get_role(int(autorole_id))
-                    if role:
-                        try:
-                            await member.add_roles(role, reason="KYVO AUTOMOD: New member autorole injection.")
-                        except discord.Forbidden:
-                            pass
-        except Exception as e:
-            print(f"[AUTOROLE ERROR] {e}")
+        guild_id = member.guild.id
 
-        try:
-            res = self.bot.supabase.table("guild_settings").select("welcome_settings").eq("guild_id", guild_id).execute()
-            if not res.data:
-                res = self.bot.supabase.table("guild_settings").select("welcome_settings").eq("guild_id", int(guild_id)).execute()
-            welcome_set = res.data[0].get("welcome_settings", {}) if res.data else {}
-        except Exception as e:
-            print(f"[WELCOME DB FETCH ERROR] {e}")
-            return
+        # 🛡️ [아키텍처 최적화] Redis Cache-Aside를 타는 단일 조회로 통합 - 예전엔 autorole용/welcome_settings용
+        # DB 왕복이 멤버 한 명 들어올 때마다 두 번씩 발생했다. guild_settings 행 하나에 두 값이 다 들어있으므로
+        # (settings.autorole_id, 최상위 welcome_settings) 한 번만 긁어와서 나눠 쓰면 된다.
+        row = await self.get_guild_settings(guild_id)
+        nested_settings = row.get("settings") or {}
 
+        autorole_id = nested_settings.get("autorole_id")
+        if autorole_id:
+            role = member.guild.get_role(int(autorole_id))
+            if role:
+                try:
+                    await member.add_roles(role, reason="KYVO AUTOMOD: New member autorole injection.")
+                except discord.Forbidden:
+                    pass
+
+        welcome_set = row.get("welcome_settings") or {}
         if not welcome_set.get("enabled", False):
             return
 
@@ -122,7 +116,7 @@ class Welcome(commands.Cog):
             card.save(image_binary, "PNG")
             image_binary.seek(0)
             file = discord.File(fp=image_binary, filename="welcome_card.png")
-            
+
             welcome_embed = discord.Embed(
                 title=f"📥 SYSTEM ACCESS GRANTED",
                 description=f"Welcome {member.mention} to **{member.guild.name}**!",
@@ -134,36 +128,38 @@ class Welcome(commands.Cog):
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         if member.bot: return
-        guild_id = str(member.guild.id)
-        locale = str(member.guild.preferred_locale)
+        guild_id = member.guild.id
         try:
-            settings = await self.bot.get_guild_settings(guild_id)
-            if not settings or not settings.get("goodbye_enabled", False): 
+            row = await self.get_guild_settings(guild_id)
+            nested_settings = row.get("settings") or {}
+            if not nested_settings.get("goodbye_enabled", False):
                 return
 
-            channel_id = settings.get("goodbye_channel_id")
+            channel_id = nested_settings.get("goodbye_channel_id")
             if not channel_id: return
 
             channel = member.guild.get_channel(int(channel_id))
             if not channel: return
 
-            raw_msg = settings.get("goodbye_message", "Has disconnected from the grid.")
+            raw_msg = nested_settings.get("goodbye_message", "Has disconnected from the grid.")
             formatted_msg = raw_msg.replace("{username}", member.name)\
                                    .replace("{server}", member.guild.name)\
                                    .replace("{member_count}", str(member.guild.member_count))
 
-            title = self.bot.locale_manager.get(locale, "goodbye_title")
+            # 🛡️ [i18n 배선 수리] 죽은 self.bot.locale_manager 대신, 서버 설정 언어(guild_settings.language) 기반
+            # KyvoBaseCog.get_msg로 교체 - 예전엔 매번 AttributeError가 나서 이 임베드가 아예 발송된 적이 없었다.
+            title = await self.get_msg(guild_id, "goodbye_title")
+            header = await self.get_msg(guild_id, "goodbye_manifest_header")
+            lbl_target = await self.get_msg(guild_id, "goodbye_offline_target")
+            lbl_pool = await self.get_msg(guild_id, "goodbye_remaining_pool")
+            lbl_alert = await self.get_msg(guild_id, "goodbye_alert_system")
+            footer_text = await self.get_msg(guild_id, "goodbye_footer")
+
             embed = discord.Embed(
                 title=title,
                 color=discord.Color.from_str("#FF0055"),
                 timestamp=discord.utils.utcnow()
             )
-            
-            header = self.bot.locale_manager.get(locale, "goodbye_manifest_header")
-            lbl_target = self.bot.locale_manager.get(locale, "goodbye_offline_target")
-            lbl_pool = self.bot.locale_manager.get(locale, "goodbye_remaining_pool")
-            lbl_alert = self.bot.locale_manager.get(locale, "goodbye_alert_system")
-            footer_text = self.bot.locale_manager.get(locale, "goodbye_footer")
 
             manifest_data = (
                 f"**{header}**\n\n"

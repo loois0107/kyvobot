@@ -33,6 +33,7 @@ class KyvoBot(commands.Bot):
             'cogs.leveling',
             'cogs.ticket_ai',
             'cogs.custom_commands',
+            'cogs.welcome',
         ]
         print(">>> Loading extensions... <<<", flush=True)
         
