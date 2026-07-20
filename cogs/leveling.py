@@ -37,16 +37,47 @@ class KyvoLeveling(KyvoBaseCog):
     def calculate_xp_for_next_level(self, level: int) -> int:
         return 5 * (level ** 2) + 50 * level + 100
 
+    # ══════════════════════════════════════════════════════════
+    #  XP 쿨다운 (Redis SET NX EX, automod의 check_spam/_check_spam_local과 동일한
+    #  "Redis 우선 시도 -> 예외 시 로컬 dict 폴백" 구조)
+    # ══════════════════════════════════════════════════════════
+    async def _try_start_xp_cooldown(self, guild_id: int, user_id: str) -> bool:
+        """True면 쿨다운이 새로 시작된 것(=XP 지급 가능), False면 아직 쿨다운 중."""
+        key = f"cooldown:{guild_id}:{user_id}"
+        try:
+            acquired = await self.redis.set(key, "1", ex=60, nx=True)
+            return bool(acquired)
+        except Exception as e:
+            print(f"[XP][WARN] Redis cooldown check failed, falling back to local: {type(e).__name__}: {e}", flush=True)
+            return self._try_start_xp_cooldown_local(user_id)
+
+    def _try_start_xp_cooldown_local(self, user_id: str) -> bool:
+        now = time.time()
+        last = self.xp_cooldowns.get(user_id)
+        if last is not None and now - last < 60:
+            return False
+        self.xp_cooldowns[user_id] = now
+        return True
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
+        # 🐞 [XP DEBUG] 아래 print들은 어느 조건에서 스킵됐는지 추적하기 위한 디버그 로그.
+        if message.author.bot:
+            print(f"[XP DEBUG] SKIP(author_is_bot): author={message.author.id}")
+            return
+        if not message.guild:
+            print(f"[XP DEBUG] SKIP(no_guild/DM): author={message.author.id}")
             return
 
         guild_id = message.guild.id
         user_id = str(message.author.id)
-        now = time.time()
 
-        if user_id in self.xp_cooldowns and now - self.xp_cooldowns[user_id] < 60:
+        # 🛡️ [Redis 전환] 로컬 dict는 Render 콜드 스타트/재시작에 매번 초기화되던 문제가 있었다.
+        # Redis SET NX EX 60이 원자적으로 "쿨다운 시작 성공 여부"를 판단해주므로 그걸로 대체하고,
+        # Redis 장애 시에만 automod와 동일한 방식으로 로컬 dict로 안전하게 폴백한다.
+        cooldown_started = await self._try_start_xp_cooldown(guild_id, user_id)
+        if not cooldown_started:
+            print(f"[XP DEBUG] SKIP(cooldown): user={user_id} guild={guild_id}")
             return
 
         # 🛡️ [아키텍처 최적화] Redis Cache-Aside를 타는 KyvoBaseCog.get_guild_settings로 교체.
@@ -58,9 +89,11 @@ class KyvoLeveling(KyvoBaseCog):
 
         blacklisted_channels = leveling_set.get("blacklisted_channels", [])
         if message.channel.id in blacklisted_channels or str(message.channel.id) in blacklisted_channels:
+            print(f"[XP DEBUG] SKIP(blacklisted_channel): channel={message.channel.id} guild={guild_id}")
             return
 
         xp_rate = float(leveling_set.get("xp_rate", 1.0))
+        print(f"[XP DEBUG] GRANT: user={user_id} guild={guild_id} xp_rate={xp_rate}")
 
         user_data = await self.bot.get_user_data(user_id)
         current_xp = user_data.get("xp", 0)
@@ -101,7 +134,6 @@ class KyvoLeveling(KyvoBaseCog):
         user_data["xp"] = new_xp
         user_data["level"] = current_level
         await self.bot.save_user_data(user_id, user_data)
-        self.xp_cooldowns[user_id] = now
 
     @app_commands.command(name="level", description="Generate your customized server rank card.")
     async def level(self, interaction: discord.Interaction):
