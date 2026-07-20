@@ -242,13 +242,10 @@ class KyvoEconomy(commands.Cog):
         economy_set["shop_items"] = shop_items
         settings["economy_settings"] = economy_set
 
-        # Dual-Write synchronization to maintain compatibility with legacy structures and new dashboard columns
+        # settings JSON 내부(nested) 하나에만 쓴다 - 최상위 economy_settings 컬럼은 아무도 안 읽는 죽은
+        # 컬럼이라 예전엔 매번 거기에도 dual-write하고 있었다.
         await self.bot.bulk_update_guild_settings(guild_id, settings)
-        try:
-            self.bot.supabase.table("guild_settings").update({"economy_settings": economy_set}).eq("guild_id", guild_id).execute()
-        except Exception as e:
-            print(f"[DB INTEGRATION WARNING] Failed mapping direct column updates to dashboard: {e}")
-            
+
         await interaction.followup.send(f"✅ Successfully appended asset **{name}** to shop registry for **{price:,}** units.", ephemeral=True)
 
     @shop_group.command(name="buy", description="Purchase an item from the server shop.")

@@ -37,8 +37,8 @@ class Welcome(KyvoBaseCog):
         guild_id = member.guild.id
 
         # 🛡️ [아키텍처 최적화] Redis Cache-Aside를 타는 단일 조회로 통합 - 예전엔 autorole용/welcome_settings용
-        # DB 왕복이 멤버 한 명 들어올 때마다 두 번씩 발생했다. guild_settings 행 하나에 두 값이 다 들어있으므로
-        # (settings.autorole_id, 최상위 welcome_settings) 한 번만 긁어와서 나눠 쓰면 된다.
+        # DB 왕복이 멤버 한 명 들어올 때마다 두 번씩 발생했다. guild_settings에 welcome_settings라는 단독
+        # 컬럼은 실존하지 않는다 (42703로 확인됨) - autorole_id와 마찬가지로 settings JSON 안에 중첩되어 있다.
         row = await self.get_guild_settings(guild_id)
         nested_settings = row.get("settings") or {}
 
@@ -51,7 +51,7 @@ class Welcome(KyvoBaseCog):
                 except discord.Forbidden:
                     pass
 
-        welcome_set = row.get("welcome_settings") or {}
+        welcome_set = nested_settings.get("welcome_settings") or {}
         if not welcome_set.get("enabled", False):
             return
 

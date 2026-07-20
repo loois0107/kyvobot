@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+from cogs.base import KyvoBaseCog
 import time
 import random
 import io
@@ -8,9 +9,9 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 import aiohttp
 
-class KyvoLeveling(commands.Cog):
+class KyvoLeveling(KyvoBaseCog):
     def __init__(self, bot):
-        self.bot = bot
+        super().__init__(bot)
         self.xp_cooldowns = {}
         self.font_path = "Font.ttf"
         self.fonts = {}
@@ -41,21 +42,19 @@ class KyvoLeveling(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        guild_id = str(message.guild.id)
+        guild_id = message.guild.id
         user_id = str(message.author.id)
         now = time.time()
 
         if user_id in self.xp_cooldowns and now - self.xp_cooldowns[user_id] < 60:
             return
 
-        leveling_set = {}
-        try:
-            res = self.bot.supabase.table("guild_settings").select("leveling_settings").eq("guild_id", guild_id).execute()
-            if not res.data:
-                res = self.bot.supabase.table("guild_settings").select("leveling_settings").eq("guild_id", int(guild_id)).execute()
-            leveling_set = res.data[0].get("leveling_settings", {}) if res.data else {}
-        except Exception:
-            pass
+        # 🛡️ [아키텍처 최적화] Redis Cache-Aside를 타는 KyvoBaseCog.get_guild_settings로 교체.
+        # 예전엔 top-level "leveling_settings" 컬럼을 직접 select했는데, 대시보드는 그 컬럼에 절대
+        # 안 쓰고 settings JSON 내부(settings.leveling_settings)에만 쓰기 때문에 그 컬럼은 항상 비어있었다.
+        row = await self.get_guild_settings(guild_id)
+        nested_settings = row.get("settings") or {}
+        leveling_set = nested_settings.get("leveling_settings") or {}
 
         blacklisted_channels = leveling_set.get("blacklisted_channels", [])
         if message.channel.id in blacklisted_channels or str(message.channel.id) in blacklisted_channels:
@@ -108,16 +107,11 @@ class KyvoLeveling(commands.Cog):
     async def level(self, interaction: discord.Interaction):
         await interaction.response.defer()
         user_id = str(interaction.user.id)
-        guild_id = str(interaction.guild_id)
+        guild_id = interaction.guild_id
 
-        leveling_set = {}
-        try:
-            guild_res = self.bot.supabase.table("guild_settings").select("leveling_settings").eq("guild_id", guild_id).execute()
-            if not guild_res.data:
-                guild_res = self.bot.supabase.table("guild_settings").select("leveling_settings").eq("guild_id", int(guild_id)).execute()
-            leveling_set = guild_res.data[0].get("leveling_settings", {}) if guild_res.data else {}
-        except Exception:
-            pass
+        row = await self.get_guild_settings(guild_id)
+        nested_settings = row.get("settings") or {}
+        leveling_set = nested_settings.get("leveling_settings") or {}
 
         def clean_hex_color(hex_str, fallback):
             if not hex_str: return fallback
@@ -140,15 +134,15 @@ class KyvoLeveling(commands.Cog):
             response = self.bot.supabase.table("users").select("user_id", "xp", "level").execute()
             if response.data:
                 leaderboard = []
-                for row in response.data:
-                    row_user_id = row.get("user_id")
+                for user_row in response.data:
+                    row_user_id = user_row.get("user_id")
                     if not row_user_id: continue
                     member = interaction.guild.get_member(int(row_user_id))
                     if member is not None and not member.bot:
                         leaderboard.append({
                             "user_id": str(row_user_id),
-                            "level": row.get("level", 1),
-                            "xp": row.get("xp", 0)
+                            "level": user_row.get("level", 1),
+                            "xp": user_row.get("xp", 0)
                         })
                 leaderboard.sort(key=lambda x: (x["level"], x["xp"]), reverse=True)
                 for index, entry in enumerate(leaderboard):
