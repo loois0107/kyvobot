@@ -155,6 +155,7 @@ async def on_ready():
     print("==========================================================================", flush=True)
 
 @bot.command(name="sync")
+@commands.is_owner()  # 🔒 서버별 권한이 아니라 봇 인프라(전역 커맨드 트리) 관리 명령이라 오너 전용으로 제한
 async def sync_application_commands(ctx: commands.Context, scope: str = "local"):
     if scope == "global":
         await ctx.send("🌐 Deploying core command registry GLOBALLY to all servers... (Takes a few minutes)")
@@ -163,7 +164,7 @@ async def sync_application_commands(ctx: commands.Context, scope: str = "local")
             await ctx.send(f"✅ Global Success! Registered {len(synced)} slash command nodes globally.")
         except Exception as e:
             await ctx.send(f"❌ Global Sync failed: `{e}`")
-            
+
     elif scope == "clear":
         await ctx.send("🗑️ Clearing guild-specific local command leftovers from this server...")
         try:
@@ -172,7 +173,7 @@ async def sync_application_commands(ctx: commands.Context, scope: str = "local")
             await ctx.send("💥 Successfully wiped local command cache! Only clean global commands will remain.")
         except Exception as e:
             await ctx.send(f"❌ Clear failed: `{e}`")
-            
+
     else:
         await ctx.send("🔄 Copying active core commands directly to this server instance...")
         try:
@@ -183,6 +184,24 @@ async def sync_application_commands(ctx: commands.Context, scope: str = "local")
         except Exception as e:
             await ctx.send(f"❌ Sync failed: `{e}`")
             print(f"[SERVER SYNC ERROR] Critical crash: {e}", flush=True)
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    # 접두사(!) 명령어 전용 에러 훅. 슬래시 명령어는 on_app_command_error가 따로 처리한다.
+    if isinstance(error, commands.CommandNotFound):
+        # custom_commands 코그가 같은 "!"/"/" 접두사를 커스텀 명령어 조회용으로도 쓰기 때문에,
+        # 등록된 프리픽스 명령이 아닌 "!foo"는 여기서 조용히 무시해야 커스텀 명령어 UX가 안 깨진다.
+        return
+
+    if isinstance(error, commands.NotOwner):
+        await ctx.send("🔒 **Access Denied.** `!sync` is a bot-owner-only infrastructure command, not a server permission.")
+        return
+
+    print(f"[PREFIX COMMAND ERROR] {ctx.command}: {error}", flush=True)
+    try:
+        await ctx.send(f"⚠️ **Command Error:** `{error}`")
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     bot_token = os.getenv("DISCORD_BOT_TOKEN") or os.getenv("BOT_TOKEN") or os.getenv("TOKEN")
