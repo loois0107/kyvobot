@@ -98,32 +98,38 @@ class AutoMod(KyvoBaseCog):
     #  (반환값을 버림), message.author.is_timed_out()은 같은 burst 안에서 절대 갱신되지 않는다.
     #  그래서 디스코드 캐시에 의존하지 않고 우리가 직접 Redis에 처벌 상태를 기록해서 판단한다.
     # ══════════════════════════════════════════════════════════
-    async def is_already_punished(self, guild_id: int, user_id: int) -> bool:
+    async def try_claim_punishment(self, guild_id: int, user_id: int, duration_sec: int) -> bool:
+        """True면 이 호출이 처벌을 원자적으로 선점한 것(=진행), False면 이미 누가 선점함(=스킵).
+        GET으로 먼저 확인하고 나중에 SET하는 방식은 확인과 기록 사이에 시간차가 생겨서, 거의 동시에
+        도착한 메시지 두 개가 둘 다 "아직 처벌 안 됨"을 보고 통과하는 경쟁 조건이 실제로 발생했다
+        (7:21 테스트에서 1초 안에 로그 2건). SET NX는 확인+기록이 Redis 서버에서 원자적으로 처리되므로
+        동시에 여러 개가 들어와도 정확히 하나만 성공한다."""
         key = f"punished:{guild_id}:{user_id}"
         try:
-            val = await self.redis.get(key)
-            return val is not None
+            acquired = await self.redis.set(key, "1", ex=duration_sec, nx=True)
+            return bool(acquired)
         except Exception as e:
-            print(f"[SPAM][WARN] Redis punished-flag check failed, falling back to local: {type(e).__name__}: {e}", flush=True)
-            return self._is_already_punished_local(guild_id, user_id)
+            print(f"[SPAM][WARN] Redis punished-flag claim failed, falling back to local: {type(e).__name__}: {e}", flush=True)
+            return self._try_claim_punishment_local(guild_id, user_id, duration_sec)
 
-    def _is_already_punished_local(self, guild_id: int, user_id: int) -> bool:
+    def _try_claim_punishment_local(self, guild_id: int, user_id: int, duration_sec: int) -> bool:
         key = (guild_id, user_id)
+        now = time.time()
         expiry = self.punished_cache.get(key)
-        if expiry is None:
+        if expiry is not None and now < expiry:
             return False
-        if time.time() >= expiry:
-            del self.punished_cache[key]
-            return False
+        self.punished_cache[key] = now + duration_sec
         return True
 
-    async def mark_punished(self, guild_id: int, user_id: int, duration_sec: int) -> None:
+    async def release_punishment_claim(self, guild_id: int, user_id: int) -> None:
+        """타임아웃 API 호출 자체가 실패했을 때 선점을 되돌린다 - 실제로 제재되지 않았으므로
+        다음 메시지가 다시 처벌을 시도할 수 있어야 한다."""
         key = f"punished:{guild_id}:{user_id}"
         try:
-            await self.redis.set(key, "1", ex=duration_sec)
+            await self.redis.delete(key)
         except Exception as e:
-            print(f"[SPAM][WARN] Redis punished-flag write failed, falling back to local: {type(e).__name__}: {e}", flush=True)
-            self.punished_cache[(guild_id, user_id)] = time.time() + duration_sec
+            print(f"[SPAM][WARN] Redis punished-flag release failed: {type(e).__name__}: {e}", flush=True)
+        self.punished_cache.pop((guild_id, user_id), None)
 
     # ══════════════════════════════════════════════════════════
     #  ③ Message Event Listener (부모 Cog의 상속 함수 완벽 연동)
@@ -164,15 +170,16 @@ class AutoMod(KyvoBaseCog):
             except discord.Forbidden:
                 print(f"[SPAM][WARN] Missing permission to delete message (guild={message.guild.id})", flush=True)
 
-            # 🛡️ [중복 처벌 방지] 슬라이딩 윈도우 카운트는 처벌 발동 후에도 리셋되지 않아서, 같은 burst
-            # 안에서 도착하는 후속 메시지마다 재타임아웃 시도 + 로그 기록이 매번 다시 발동했었다
-            # (7/17 사건: 1초 안에 로그 5건). message.author.is_timed_out()은 discord.py가 Member를
-            # 제자리 갱신 안 해서 항상 False로 남아 못 쓴다 - 대신 Redis에 직접 처벌 플래그를 둔다.
-            # 메시지 삭제는 이 체크와 무관하게 항상 실행된다.
+            # 🛡️ [중복 처벌 방지 - 원자적 선점] 슬라이딩 윈도우 카운트는 처벌 발동 후에도 리셋되지
+            # 않아서, 같은 burst 안에서 도착하는 후속 메시지마다 재타임아웃 시도 + 로그 기록이 매번
+            # 다시 발동했었다. GET으로 먼저 확인하고 나중에 SET하는 방식은 그 사이 시간차 때문에
+            # 여전히 중복이 발생했다(1초 안에 로그 2건) - SET NX로 확인+선점을 원자적으로 한 번에
+            # 처리해서 동시에 도착해도 정확히 하나만 통과하도록 바꾼다. 메시지 삭제는 이 체크와
+            # 무관하게 항상 실행된다.
             timeout_seconds = 600  # 10분 - 처벌 지속시간과 플래그 TTL을 반드시 일치시켜야 한다
-            already_punished = await self.is_already_punished(message.guild.id, message.author.id)
+            claimed = await self.try_claim_punishment(message.guild.id, message.author.id, timeout_seconds)
 
-            if not already_punished:
+            if claimed:
                 # ⚡ 부모 클래스의 통합 다국어 로더(get_msg)를 호출하여 실시간 문자열 치환
                 base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
                 punishment_log = "spam_delete"
@@ -183,14 +190,14 @@ class AutoMod(KyvoBaseCog):
                     punishment_log = "spam_timeout"
                     suffix = await self.get_msg(message.guild.id, "spam_timeout_applied")
                     base_reason += suffix
-                    # 🛡️ 타임아웃이 실제로 성공했을 때만 플래그를 세운다 - 권한 부족 등으로 실패하면
-                    # 유저는 실제로 타임아웃된 게 아니므로 다음 메시지에서도 계속 처벌을 시도해야 한다.
-                    await self.mark_punished(message.guild.id, message.author.id, timeout_seconds)
                 except discord.Forbidden:
                     suffix = await self.get_msg(message.guild.id, "spam_failed_permission")
                     base_reason += suffix
+                    # 🛡️ 실제로 제재되지 않았으므로 선점을 풀어서 다음 메시지가 다시 시도할 수 있게 한다.
+                    await self.release_punishment_claim(message.guild.id, message.author.id)
                 except Exception as e:
                     print(f"[SPAM][ERROR] Failed to apply punishment: {type(e).__name__}: {e}", flush=True)
+                    await self.release_punishment_claim(message.guild.id, message.author.id)
 
                 self.enqueue_log(
                     guild_id=message.guild.id,
