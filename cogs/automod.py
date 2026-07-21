@@ -148,11 +148,14 @@ class AutoMod(KyvoBaseCog):
 
         # ⚡ 부모 클래스로부터 상속받은 캐시-aside 설정 로더 가동
         settings = await self.get_guild_settings(message.guild.id)
-        if not settings or not settings.get("automod_enabled", True):
+        if not settings:
             return
 
-        limit = settings.get("spam_limit", 5)
-        window = settings.get("spam_interval", 10)
+        # 🛡️ [죽은 참조 정리] automod_enabled/spam_limit/spam_interval은 guild_settings에 대응하는
+        # 컬럼이 실제로 존재하지 않아 대시보드로 설정할 방법이 없다(직접 조회로 확인됨). settings.get()으로
+        # 읽는 척하지 않고, 설정 UI가 실제로 생기기 전까지는 고정값을 명시적으로 쓴다.
+        limit = 5
+        window = 10
 
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
@@ -215,9 +218,10 @@ class AutoMod(KyvoBaseCog):
             return
 
         # 2. 금지어 필터링
-        forbidden_words = settings.get("forbidden_words", [])
-        if isinstance(forbidden_words, str):
-            forbidden_words = [w.strip() for w in forbidden_words.split(",") if w.strip()]
+        # 🛡️ [죽은 참조 정리] guild_settings에 forbidden_words/banned_words 컬럼이 없어서(직접 조회로
+        # 확인됨) 대시보드에서 채울 방법이 없다. settings.get()으로 읽는 척하지 않고 빈 리스트를 명시한다 -
+        # 실제 컬럼이 생기면 이 한 줄만 바꾸면 된다.
+        forbidden_words: list[str] = []
 
         for word in forbidden_words:
             if word in message.content:
