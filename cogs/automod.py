@@ -195,12 +195,14 @@ class AutoMod(KyvoBaseCog):
     #  ④ Log Batch Queue Async Engine (AutoMod 고유 자산 유지)
     # ══════════════════════════════════════════════════════════
     def enqueue_log(self, guild_id: int, user_id: int, action: str, reason: str) -> None:
+        # 🛡️ [스키마 정합성 수정] 실제 automod_logs 테이블 컬럼은 "action"(NOT NULL)이지 "action_type"이
+        # 아니고, "moderator_id" 컬럼은 아예 존재하지 않는다 - 둘 다 insert마다 실패를 유발해서
+        # 7/16~7/21 사이 처벌 로그 23건이 DB에 한 번도 안 들어가고 DLQ에만 쌓였다.
         payload = {
             "guild_id": str(guild_id),
             "user_id": str(user_id),
-            "action_type": action,
+            "action": action,
             "reason": reason,
-            "moderator_id": str(self.bot.user.id) if self.bot.user else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
