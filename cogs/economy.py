@@ -307,7 +307,16 @@ class KyvoEconomy(commands.Cog):
                 inventory.append({"name": target_item["name"], "quantity": 1})
 
             user_data["inventory"] = inventory
-            await self.bot.save_user_data(user_id, user_data)
+            # 🛡️ points 차감과 inventory 지급은 이 한 번의 save_user_data 호출로 같이 저장된다(별도 쓰기
+            # 두 번이 아님) - 그래서 "포인트만 빠지고 아이템은 안 들어감" 같은 부분 실패는 구조적으로
+            # 불가능하다. 다만 이 저장 자체가 실패하면 여태 무조건 성공 메시지를 보내고 있었다.
+            save_ok = await self.bot.save_user_data(user_id, user_data)
+            if not save_ok:
+                await interaction.followup.send(
+                    "❌ **Ledger Write Failed:** Your purchase could not be saved due to a database error. No points were deducted.",
+                    ephemeral=True
+                )
+                return
 
             await interaction.followup.send(f"🛍️ **Transaction Complete!** Purchased asset **{target_item['name']}** for **{item_price:,}** {currency_name}!")
         finally:
