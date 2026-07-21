@@ -126,32 +126,37 @@ class AutoMod(KyvoBaseCog):
             try:
                 await message.delete()
             except discord.NotFound:
-                pass  
+                pass
             except discord.Forbidden:
                 print(f"[SPAM][WARN] Missing permission to delete message (guild={message.guild.id})", flush=True)
 
-            # ⚡ 부모 클래스의 통합 다국어 로더(get_msg)를 호출하여 실시간 문자열 치환
-            base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
-            punishment_log = "spam_delete"
+            # 🛡️ [중복 처벌 방지] 슬라이딩 윈도우 카운트는 처벌 발동 후에도 리셋되지 않아서, 같은 burst
+            # 안에서 도착하는 후속 메시지마다 재타임아웃 시도 + 로그 기록이 매번 다시 발동했었다
+            # (7/17 사건: 1초 안에 로그 5건). 메시지 삭제는 계속하되, 이미 타임아웃 중인 유저면
+            # 재처벌/재로깅만 건너뛴다.
+            if not message.author.is_timed_out():
+                # ⚡ 부모 클래스의 통합 다국어 로더(get_msg)를 호출하여 실시간 문자열 치환
+                base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
+                punishment_log = "spam_delete"
 
-            try:
-                duration = timedelta(minutes=10)
-                await message.author.timeout(duration, reason=base_reason)
-                punishment_log = "spam_timeout"
-                suffix = await self.get_msg(message.guild.id, "spam_timeout_applied")
-                base_reason += suffix
-            except discord.Forbidden:
-                suffix = await self.get_msg(message.guild.id, "spam_failed_permission")
-                base_reason += suffix
-            except Exception as e:
-                print(f"[SPAM][ERROR] Failed to apply punishment: {type(e).__name__}: {e}", flush=True)
+                try:
+                    duration = timedelta(minutes=10)
+                    await message.author.timeout(duration, reason=base_reason)
+                    punishment_log = "spam_timeout"
+                    suffix = await self.get_msg(message.guild.id, "spam_timeout_applied")
+                    base_reason += suffix
+                except discord.Forbidden:
+                    suffix = await self.get_msg(message.guild.id, "spam_failed_permission")
+                    base_reason += suffix
+                except Exception as e:
+                    print(f"[SPAM][ERROR] Failed to apply punishment: {type(e).__name__}: {e}", flush=True)
 
-            self.enqueue_log(
-                guild_id=message.guild.id,
-                user_id=message.author.id,
-                action=punishment_log,
-                reason=f"{base_reason} | Channel: #{message.channel.name}",
-            )
+                self.enqueue_log(
+                    guild_id=message.guild.id,
+                    user_id=message.author.id,
+                    action=punishment_log,
+                    reason=f"{base_reason} | Channel: #{message.channel.name}",
+                )
 
             # ⚡ 부모 클래스의 get_msg 기반으로 유저 경고 메시지 출력
             warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
