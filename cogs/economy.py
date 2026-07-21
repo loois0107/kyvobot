@@ -82,7 +82,15 @@ class KyvoEconomy(commands.Cog):
             user_data = await self.bot.get_user_data(str(user_id))
             user_data["points"] = user_data.get("points", 0) + reward
 
-            await self.bot.save_user_data(str(user_id), user_data)
+            save_ok = await self.bot.save_user_data(str(user_id), user_data)
+            if not save_ok:
+                await interaction.followup.send(
+                    "❌ **Ledger Write Failed:** Your daily reward could not be saved due to a database error. Please try again shortly.",
+                    ephemeral=True
+                )
+                return
+
+            # 저장이 실제로 성공했을 때만 쿨다운을 건다 - 실패했는데 24시간 묶어두면 보상도 못 받고 재시도도 못 함
             self.cooldowns[user_id] = now
 
             # Premium UI Upgrade: Celebration Embed
@@ -153,8 +161,14 @@ class KyvoEconomy(commands.Cog):
                 status_msg = f"The house cleared your position. You lost **-{amount:,}** {currency_name}."
                 embed_color = discord.Color.red()
 
-            await self.bot.save_user_data(str(user_id), user_data)
-            
+            save_ok = await self.bot.save_user_data(str(user_id), user_data)
+            if not save_ok:
+                await interaction.followup.send(
+                    "❌ **Ledger Write Failed:** Your wager result could not be saved due to a database error. Your balance was not changed.",
+                    ephemeral=True
+                )
+                return
+
             # Premium UI Upgrade: Casino Embed Layout
             embed = discord.Embed(
                 title=title_text,
@@ -347,7 +361,11 @@ class KyvoEconomy(commands.Cog):
 
         user_data = await self.bot.get_user_data(str(target.id))
         user_data["points"] = min(2000000000, user_data.get("points", 0) + amount)
-        await self.bot.save_user_data(str(target.id), user_data)
+        save_ok = await self.bot.save_user_data(str(target.id), user_data)
+
+        if not save_ok:
+            await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not allocate funds to {target.mention} due to a database error.", ephemeral=True)
+            return
 
         print(f"[ECONOMY ADMIN] Granted {amount} to {target.name} via admin override.")
         await interaction.followup.send(f"✅ Successfully allocated **+{amount:,}** {currency_name} to {target.mention}.", ephemeral=True)
@@ -375,7 +393,11 @@ class KyvoEconomy(commands.Cog):
         current_points = user_data.get("points", 0)
         
         user_data["points"] = max(0, current_points - amount)
-        await self.bot.save_user_data(str(target.id), user_data)
+        save_ok = await self.bot.save_user_data(str(target.id), user_data)
+
+        if not save_ok:
+            await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not deduct funds from {target.mention} due to a database error.", ephemeral=True)
+            return
 
         print(f"[ECONOMY ADMIN] Deducted {amount} from {target.name} via admin override.")
         await interaction.followup.send(f"✅ Successfully liquidated **-{amount:,}** {currency_name} from {target.mention}.", ephemeral=True)

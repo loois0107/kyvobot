@@ -136,14 +136,16 @@ class KyvoBot(commands.Bot):
             print(f"[DATABASE EXCEPTION] Flat profile matrix data acquisition fault on record ID {user_id}: {e}", flush=True)
             return {}
 
-    async def save_user_data(self, user_id: str, profile_data: dict):
+    async def save_user_data(self, user_id: str, profile_data: dict) -> bool:
         try:
             update_payload = profile_data.copy()
             update_payload.pop("user_id", None)
-            
+
             self.supabase.table("users").update(update_payload).eq("user_id", user_id).execute()
+            return True
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Critical write blockage handling flat record adjustments for user reference {user_id}: {e}", flush=True)
+            return False
 
 bot = KyvoBot()
 

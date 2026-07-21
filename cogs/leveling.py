@@ -110,6 +110,17 @@ class KyvoLeveling(KyvoBaseCog):
             xp_needed = self.calculate_xp_for_next_level(current_level)
             leveled_up = True
 
+        user_data["xp"] = new_xp
+        user_data["level"] = current_level
+
+        # 🛡️ [정직성 수정] 예전엔 레벨업 축하 메시지/역할 지급을 먼저 하고 나서 저장을 시도했다 -
+        # 저장이 실패하면 유저는 레벨업했다고 믿고 보상 역할까지 받았는데 실제 DB엔 반영이 안 되는
+        # 상황이 가능했다. 이제 저장 성공을 먼저 확인한 뒤에만 축하/보상을 진행한다.
+        save_ok = await self.bot.save_user_data(user_id, user_data)
+        if not save_ok:
+            print(f"[XP][ERROR] Failed to persist XP for user={user_id} guild={guild_id}", flush=True)
+            return
+
         if leveled_up:
             try:
                 alert_embed = discord.Embed(
@@ -130,10 +141,6 @@ class KyvoLeveling(KyvoBaseCog):
                         await message.author.add_roles(reward_role, reason=f"[KYVO REWARD]")
                     except discord.Forbidden:
                         pass
-
-        user_data["xp"] = new_xp
-        user_data["level"] = current_level
-        await self.bot.save_user_data(user_id, user_data)
 
     @app_commands.command(name="level", description="Generate your customized server rank card.")
     async def level(self, interaction: discord.Interaction):
