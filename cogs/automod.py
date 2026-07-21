@@ -42,6 +42,7 @@ class AutoMod(KyvoBaseCog):
 
         # AutoMod 모듈 전용 고유 비즈니스 상태 레이어 초기화
         self.spam_cache = {}
+        self.punished_cache = {}  # Redis 장애 시 폴백용 (guild_id, user_id) -> 만료 시각(epoch)
         self.spam_script = self.redis.register_script(SLIDING_WINDOW_LUA)
         self.log_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self.log_dropped_count = 0
@@ -92,6 +93,39 @@ class AutoMod(KyvoBaseCog):
         return count, count > limit
 
     # ══════════════════════════════════════════════════════════
+    #  ②-2 중복 처벌 방지 플래그 (Redis 우선, check_spam과 동일한 폴백 구조)
+    #  discord.py의 Member.timeout()은 self를 제자리 갱신하지 않고 새 Member를 리턴만 하기 때문에
+    #  (반환값을 버림), message.author.is_timed_out()은 같은 burst 안에서 절대 갱신되지 않는다.
+    #  그래서 디스코드 캐시에 의존하지 않고 우리가 직접 Redis에 처벌 상태를 기록해서 판단한다.
+    # ══════════════════════════════════════════════════════════
+    async def is_already_punished(self, guild_id: int, user_id: int) -> bool:
+        key = f"punished:{guild_id}:{user_id}"
+        try:
+            val = await self.redis.get(key)
+            return val is not None
+        except Exception as e:
+            print(f"[SPAM][WARN] Redis punished-flag check failed, falling back to local: {type(e).__name__}: {e}", flush=True)
+            return self._is_already_punished_local(guild_id, user_id)
+
+    def _is_already_punished_local(self, guild_id: int, user_id: int) -> bool:
+        key = (guild_id, user_id)
+        expiry = self.punished_cache.get(key)
+        if expiry is None:
+            return False
+        if time.time() >= expiry:
+            del self.punished_cache[key]
+            return False
+        return True
+
+    async def mark_punished(self, guild_id: int, user_id: int, duration_sec: int) -> None:
+        key = f"punished:{guild_id}:{user_id}"
+        try:
+            await self.redis.set(key, "1", ex=duration_sec)
+        except Exception as e:
+            print(f"[SPAM][WARN] Redis punished-flag write failed, falling back to local: {type(e).__name__}: {e}", flush=True)
+            self.punished_cache[(guild_id, user_id)] = time.time() + duration_sec
+
+    # ══════════════════════════════════════════════════════════
     #  ③ Message Event Listener (부모 Cog의 상속 함수 완벽 연동)
     # ══════════════════════════════════════════════════════════
     @commands.Cog.listener()
@@ -132,19 +166,26 @@ class AutoMod(KyvoBaseCog):
 
             # 🛡️ [중복 처벌 방지] 슬라이딩 윈도우 카운트는 처벌 발동 후에도 리셋되지 않아서, 같은 burst
             # 안에서 도착하는 후속 메시지마다 재타임아웃 시도 + 로그 기록이 매번 다시 발동했었다
-            # (7/17 사건: 1초 안에 로그 5건). 메시지 삭제는 계속하되, 이미 타임아웃 중인 유저면
-            # 재처벌/재로깅만 건너뛴다.
-            if not message.author.is_timed_out():
+            # (7/17 사건: 1초 안에 로그 5건). message.author.is_timed_out()은 discord.py가 Member를
+            # 제자리 갱신 안 해서 항상 False로 남아 못 쓴다 - 대신 Redis에 직접 처벌 플래그를 둔다.
+            # 메시지 삭제는 이 체크와 무관하게 항상 실행된다.
+            timeout_seconds = 600  # 10분 - 처벌 지속시간과 플래그 TTL을 반드시 일치시켜야 한다
+            already_punished = await self.is_already_punished(message.guild.id, message.author.id)
+
+            if not already_punished:
                 # ⚡ 부모 클래스의 통합 다국어 로더(get_msg)를 호출하여 실시간 문자열 치환
                 base_reason = await self.get_msg(message.guild.id, "spam_reason", count=count, limit=limit, window=window)
                 punishment_log = "spam_delete"
 
                 try:
-                    duration = timedelta(minutes=10)
+                    duration = timedelta(seconds=timeout_seconds)
                     await message.author.timeout(duration, reason=base_reason)
                     punishment_log = "spam_timeout"
                     suffix = await self.get_msg(message.guild.id, "spam_timeout_applied")
                     base_reason += suffix
+                    # 🛡️ 타임아웃이 실제로 성공했을 때만 플래그를 세운다 - 권한 부족 등으로 실패하면
+                    # 유저는 실제로 타임아웃된 게 아니므로 다음 메시지에서도 계속 처벌을 시도해야 한다.
+                    await self.mark_punished(message.guild.id, message.author.id, timeout_seconds)
                 except discord.Forbidden:
                     suffix = await self.get_msg(message.guild.id, "spam_failed_permission")
                     base_reason += suffix
