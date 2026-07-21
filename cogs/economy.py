@@ -147,7 +147,7 @@ class KyvoEconomy(KyvoBaseCog):
         economy_set = await self._get_economy_settings(interaction.guild_id)
         currency_name = economy_set.get("currency_name", "Points")
 
-        user_data = await self.bot.get_user_data(str(interaction.user.id))
+        user_data = await self.bot.get_user_data(str(interaction.user.id), str(interaction.guild_id))
         current_points = user_data.get("points", 0)
 
         # Premium UI Upgrade: Formatted Embed
@@ -191,10 +191,10 @@ class KyvoEconomy(KyvoBaseCog):
             currency_name = economy_set.get("currency_name", "Points")
 
             reward = random.randint(100, 500)
-            user_data = await self.bot.get_user_data(str(user_id))
+            user_data = await self.bot.get_user_data(str(user_id), str(interaction.guild_id))
             user_data["points"] = user_data.get("points", 0) + reward
 
-            save_ok = await self.bot.save_user_data(str(user_id), user_data)
+            save_ok = await self.bot.save_user_data(str(user_id), str(interaction.guild_id), user_data)
             if not save_ok:
                 await interaction.followup.send(
                     "❌ **Ledger Write Failed:** Your daily reward could not be saved due to a database error. Please try again shortly.",
@@ -250,7 +250,7 @@ class KyvoEconomy(KyvoBaseCog):
                 await interaction.followup.send(f"❌ The minimum wager amount allowed on this server is **{min_bet}** {currency_name}.", ephemeral=True)
                 return
 
-            user_data = await self.bot.get_user_data(str(user_id))
+            user_data = await self.bot.get_user_data(str(user_id), str(interaction.guild_id))
             current_points = user_data.get("points", 0)
 
             if current_points < amount:
@@ -269,7 +269,7 @@ class KyvoEconomy(KyvoBaseCog):
                 status_msg = f"The house cleared your position. You lost **-{amount:,}** {currency_name}."
                 embed_color = discord.Color.red()
 
-            save_ok = await self.bot.save_user_data(str(user_id), user_data)
+            save_ok = await self.bot.save_user_data(str(user_id), str(interaction.guild_id), user_data)
             if not save_ok:
                 await interaction.followup.send(
                     "❌ **Ledger Write Failed:** Your wager result could not be saved due to a database error. Your balance was not changed.",
@@ -314,7 +314,7 @@ class KyvoEconomy(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        user_data = await self.bot.get_user_data(str(user_id))
+        user_data = await self.bot.get_user_data(str(user_id), str(guild_id))
         current_points = user_data.get("points", 0)
 
         if current_points < bet:
@@ -375,7 +375,7 @@ class KyvoEconomy(KyvoBaseCog):
         if result == "push":
             status_key = "bj_status_push"
         else:
-            user_data = await self.bot.get_user_data(str(game.user_id))
+            user_data = await self.bot.get_user_data(str(game.user_id), str(game.guild_id))
             current_points = user_data.get("points", 0)
             if result == "win":
                 user_data["points"] = current_points + game.bet
@@ -384,7 +384,7 @@ class KyvoEconomy(KyvoBaseCog):
                 user_data["points"] = max(0, current_points - game.bet)
                 status_key = "bj_status_lose" if result == "lose" else "bj_status_bust"
 
-            save_ok = await self.bot.save_user_data(str(game.user_id), user_data)
+            save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
             if not save_ok:
                 return discord.Embed(
                     title="❌ Ledger Write Failed",
@@ -517,7 +517,7 @@ class KyvoEconomy(KyvoBaseCog):
                 await interaction.followup.send(f"❌ Asset lookup failure: '**{item_name}**' does not exist inside the shop index.")
                 return
 
-            user_data = await self.bot.get_user_data(user_id)
+            user_data = await self.bot.get_user_data(user_id, str(interaction.guild_id))
             current_points = user_data.get("points", 0)
             item_price = target_item["price"]
 
@@ -538,7 +538,7 @@ class KyvoEconomy(KyvoBaseCog):
             # 🛡️ points 차감과 inventory 지급은 이 한 번의 save_user_data 호출로 같이 저장된다(별도 쓰기
             # 두 번이 아님) - 그래서 "포인트만 빠지고 아이템은 안 들어감" 같은 부분 실패는 구조적으로
             # 불가능하다. 다만 이 저장 자체가 실패하면 여태 무조건 성공 메시지를 보내고 있었다.
-            save_ok = await self.bot.save_user_data(user_id, user_data)
+            save_ok = await self.bot.save_user_data(user_id, str(interaction.guild_id), user_data)
             if not save_ok:
                 await interaction.followup.send(
                     "❌ **Ledger Write Failed:** Your purchase could not be saved due to a database error. No points were deducted.",
@@ -554,7 +554,7 @@ class KyvoEconomy(KyvoBaseCog):
     async def inventory_view(self, interaction: discord.Interaction):
         """Renders user inventory arrays fetched dynamically out of Supabase."""
         await interaction.response.defer()
-        user_data = await self.bot.get_user_data(str(interaction.user.id))
+        user_data = await self.bot.get_user_data(str(interaction.user.id), str(interaction.guild_id))
         inventory = user_data.get("inventory", [])
 
         if not inventory:
@@ -592,9 +592,9 @@ class KyvoEconomy(KyvoBaseCog):
         economy_set = await self._get_economy_settings(interaction.guild_id)
         currency_name = economy_set.get("currency_name", "Points")
 
-        user_data = await self.bot.get_user_data(str(target.id))
+        user_data = await self.bot.get_user_data(str(target.id), str(interaction.guild_id))
         user_data["points"] = min(2000000000, user_data.get("points", 0) + amount)
-        save_ok = await self.bot.save_user_data(str(target.id), user_data)
+        save_ok = await self.bot.save_user_data(str(target.id), str(interaction.guild_id), user_data)
 
         if not save_ok:
             await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not allocate funds to {target.mention} due to a database error.", ephemeral=True)
@@ -618,11 +618,11 @@ class KyvoEconomy(KyvoBaseCog):
         economy_set = await self._get_economy_settings(interaction.guild_id)
         currency_name = economy_set.get("currency_name", "Points")
 
-        user_data = await self.bot.get_user_data(str(target.id))
+        user_data = await self.bot.get_user_data(str(target.id), str(interaction.guild_id))
         current_points = user_data.get("points", 0)
 
         user_data["points"] = max(0, current_points - amount)
-        save_ok = await self.bot.save_user_data(str(target.id), user_data)
+        save_ok = await self.bot.save_user_data(str(target.id), str(interaction.guild_id), user_data)
 
         if not save_ok:
             await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not deduct funds from {target.mention} due to a database error.", ephemeral=True)

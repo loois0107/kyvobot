@@ -123,25 +123,28 @@ class KyvoBot(commands.Bot):
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Failed committing settings for {guild_id}: {e}", flush=True)
 
-    async def get_user_data(self, user_id: str) -> dict:
+    async def get_user_data(self, user_id: str, guild_id: str) -> dict:
         try:
-            response = self.supabase.table("users").select("*").eq("user_id", user_id).execute()
+            response = self.supabase.table("users").select("*") \
+                .eq("user_id", user_id).eq("guild_id", guild_id).execute()
             if response.data:
                 return response.data[0]
             else:
-                default_profile = {"user_id": user_id, "points": 0, "xp": 0, "level": 1}
+                default_profile = {"user_id": user_id, "guild_id": guild_id, "points": 0, "xp": 0, "level": 1}
                 self.supabase.table("users").insert(default_profile).execute()
                 return default_profile
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Flat profile matrix data acquisition fault on record ID {user_id}: {e}", flush=True)
             return {}
 
-    async def save_user_data(self, user_id: str, profile_data: dict) -> bool:
+    async def save_user_data(self, user_id: str, guild_id: str, profile_data: dict) -> bool:
         try:
             update_payload = profile_data.copy()
             update_payload.pop("user_id", None)
+            update_payload.pop("guild_id", None)
 
-            self.supabase.table("users").update(update_payload).eq("user_id", user_id).execute()
+            self.supabase.table("users").update(update_payload) \
+                .eq("user_id", user_id).eq("guild_id", guild_id).execute()
             return True
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Critical write blockage handling flat record adjustments for user reference {user_id}: {e}", flush=True)

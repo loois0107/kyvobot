@@ -95,7 +95,7 @@ class KyvoLeveling(KyvoBaseCog):
         xp_rate = float(leveling_set.get("xp_rate", 1.0))
         print(f"[XP DEBUG] GRANT: user={user_id} guild={guild_id} xp_rate={xp_rate}")
 
-        user_data = await self.bot.get_user_data(user_id)
+        user_data = await self.bot.get_user_data(user_id, str(guild_id))
         current_xp = user_data.get("xp", 0)
         current_level = user_data.get("level", 1)
 
@@ -116,7 +116,7 @@ class KyvoLeveling(KyvoBaseCog):
         # 🛡️ [정직성 수정] 예전엔 레벨업 축하 메시지/역할 지급을 먼저 하고 나서 저장을 시도했다 -
         # 저장이 실패하면 유저는 레벨업했다고 믿고 보상 역할까지 받았는데 실제 DB엔 반영이 안 되는
         # 상황이 가능했다. 이제 저장 성공을 먼저 확인한 뒤에만 축하/보상을 진행한다.
-        save_ok = await self.bot.save_user_data(user_id, user_data)
+        save_ok = await self.bot.save_user_data(user_id, str(guild_id), user_data)
         if not save_ok:
             print(f"[XP][ERROR] Failed to persist XP for user={user_id} guild={guild_id}", flush=True)
             return
@@ -163,14 +163,17 @@ class KyvoLeveling(KyvoBaseCog):
         overlay_opacity = float(leveling_set.get("overlay_opacity", 0.6))
         background_url = str(leveling_set.get("background_url", "")).strip()
 
-        user_data = await self.bot.get_user_data(user_id)
+        user_data = await self.bot.get_user_data(user_id, str(guild_id))
         current_xp = user_data.get("xp", 0)
         current_level = user_data.get("level", 1)
         xp_needed = self.calculate_xp_for_next_level(current_level)
 
         actual_rank = 1
         try:
-            response = self.bot.supabase.table("users").select("user_id", "xp", "level").execute()
+            # 🛡️ guild_id 필터 추가 - users가 서버별 구조로 바뀌면서 이제 실제로 스코프가 가능해졌다.
+            # 예전엔 필터가 없어서 랭킹 하나 보여주는 데 전체 서버의 유저를 다 긁어왔었다.
+            response = self.bot.supabase.table("users").select("user_id", "xp", "level") \
+                .eq("guild_id", str(guild_id)).execute()
             if response.data:
                 leaderboard = []
                 for user_row in response.data:
