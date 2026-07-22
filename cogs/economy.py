@@ -123,18 +123,19 @@ class BlackjackView(discord.ui.View):
 # ══════════════════════════════════════════════════════════
 #  💣 Mines Core Rules (Cog 상태와 무관한 순수 함수들)
 # ══════════════════════════════════════════════════════════
-MINES_GRID_SIZE = 5
-MINES_TOTAL_CELLS = MINES_GRID_SIZE * MINES_GRID_SIZE  # 25
-MINES_MULTIPLIER_CAP = 100.0
-
 # 🛡️ [서버 설정으로 확장 가능하게 구조 열어둠] 지금은 상수지만, 실제 쓰는 곳은
 # KyvoEconomy._get_house_edge() 헬퍼 하나만 거친다 - 나중에 economy_settings에 house_edge
 # 필드가 생기면 그 헬퍼 안쪽만 고치면 되고, 호출부는 하나도 안 건드려도 된다.
 HOUSE_EDGE = 0.03
 
-# 서버 경제 규모(/daily 평균 보상 ~300)에 맞춘 최대 베팅 - 서버 경제가 커지면 이 값만 올리면 된다.
-# 100배 캡까지 갔을 때의 최악의 경우 지급액(MINES_MAX_BET * 100)도 이 스케일에 맞게 억제된다.
-MINES_MAX_BET = 5_000
+# 서버 경제 규모(/daily 평균 보상 ~300)에 맞춘 도박 테이블 공용 최대 베팅 - 서버 경제가 커지면
+# 이 값만 올리면 된다. 지뢰찾기/룰렛 등 모든 도박 게임이 이 하나의 상수를 공유한다(게임별로
+# 따로 정하지 않음 - "서버 경제 규모에 맞는 한도"라는 기준 자체는 게임 종류와 무관하기 때문).
+TABLE_MAX_BET = 5_000
+
+MINES_GRID_SIZE = 5
+MINES_TOTAL_CELLS = MINES_GRID_SIZE * MINES_GRID_SIZE  # 25
+MINES_MULTIPLIER_CAP = 100.0
 
 
 def mines_fair_multiplier(total_cells: int, mines: int, opened: int) -> float:
@@ -256,6 +257,119 @@ class MinesView(discord.ui.View):
     async def on_timeout(self):
         # 블랙잭과 동일한 설계: 정산은 캐시아웃/지뢰 발견 시에만 발생하므로, 타임아웃 시점엔 포인트를
         # 건드린 적이 없다. 그냥 잠그고 락만 푼다.
+        self.disable_all()
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        self.cog.active_transactions.discard(self.game.user_id)
+
+
+# ══════════════════════════════════════════════════════════
+#  🔫 Russian Roulette Core Rules
+# ══════════════════════════════════════════════════════════
+# 6연발 실린더에 총알 1발, 한 번 돌린 채로 고정(재장전 없음) - 지뢰찾기의 초기하분포 공식과
+# 완전히 동일한 수학(total_cells=6, mines=1)이라 mines_fair_multiplier/mines_multiplier를
+# 그대로 재사용한다. 검증 결과 이 게임의 이론적 최대 배율은 5.82x(5번째 생존 시)로,
+# MINES_MULTIPLIER_CAP(100배)에는 절대 도달하지 않는다 - 캡은 안전망으로만 남겨둔다.
+ROULETTE_CHAMBERS = 6
+ROULETTE_BULLETS = 1
+ROULETTE_MAX_PULLS = ROULETTE_CHAMBERS - ROULETTE_BULLETS  # 5
+
+
+class RouletteGame:
+    """진행 중인 러시안룰렛 한 판의 상태. 지뢰찾기와 동일하게 View 인스턴스에 인메모리로 충분."""
+
+    def __init__(self, user_id: int, guild_id: int, bet: int, currency_name: str, house_edge: float):
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.bet = bet
+        self.currency_name = currency_name
+        self.house_edge = house_edge
+        # 지뢰찾기의 generate_mine_positions와 동일한 패턴: 총알 위치를 시작 시점에 한 번 고정해두고,
+        # 방아쇠를 당길 때마다 "지금 칸이 그 위치인가"만 확인한다(실린더를 한 번 돌린 채 고정 = 재장전 없음).
+        self.bullet_position = random.randint(0, ROULETTE_CHAMBERS - 1)
+        self.pulls = 0  # 지금까지 생존한 방아쇠 횟수 (0~5)
+
+    @property
+    def current_multiplier(self) -> float:
+        return mines_multiplier(ROULETTE_CHAMBERS, ROULETTE_BULLETS, self.pulls, self.house_edge)
+
+    @property
+    def potential_profit(self) -> int:
+        """지뢰찾기와 동일한 델타 모델 - 베팅액은 시작 시 차감된 적이 없으므로 배율 전체가 아니라
+        (배율-1)*베팅액만큼만 순이익으로 더한다."""
+        return int(self.bet * (self.current_multiplier - 1))
+
+    @property
+    def is_final_chamber(self) -> bool:
+        """5번째까지 생존하면 안전 약실이 0개 - 6번째 칸은 총알이 확정이라 더 당길 수 없다."""
+        return self.pulls >= ROULETTE_MAX_PULLS
+
+    def pull_trigger(self) -> bool:
+        """다음 약실을 당긴다. True면 생존(빈 약실), False면 총알."""
+        hit = self.pulls == self.bullet_position
+        if not hit:
+            self.pulls += 1
+        return not hit
+
+    def render_cylinder_text(self, reveal_bullet: bool = False) -> str:
+        """임베드에 표시할 실린더 텍스트. reveal_bullet=True면(패배 시) 총알 위치까지 보여준다."""
+        chambers = []
+        for i in range(ROULETTE_CHAMBERS):
+            if i < self.pulls:
+                chambers.append("⚪")
+            elif reveal_bullet and i == self.bullet_position:
+                chambers.append("🔴")
+            else:
+                chambers.append("⚫")
+        return " ".join(chambers)
+
+
+class RouletteView(discord.ui.View):
+    def __init__(self, cog: "KyvoEconomy", game: RouletteGame, trigger_label: str, cashout_label: str):
+        super().__init__(timeout=90)
+        self.cog = cog
+        self.game = game
+        self.message: discord.Message | None = None
+
+        self.trigger_button = discord.ui.Button(label=trigger_label, style=discord.ButtonStyle.danger, row=0)
+        self.trigger_button.callback = self._trigger_callback
+        self.add_item(self.trigger_button)
+
+        # 최소 1번은 생존해야 순이익이 생기므로(0번째 생존 시 배율 1.0x = 순이익 0), 지뢰찾기와
+        # 동일하게 첫 생존 전까지는 비활성화해둔다.
+        self.cashout_button = discord.ui.Button(label=cashout_label, style=discord.ButtonStyle.success, row=0, disabled=True)
+        self.cashout_button.callback = self._cashout_callback
+        self.add_item(self.cashout_button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.game.user_id:
+            await interaction.response.send_message("❌ This is not your revolver.", ephemeral=True)
+            return False
+        return True
+
+    def sync_buttons(self):
+        """생존 횟수에 맞춰 버튼 상태를 갱신한다. 5번째까지 생존하면(안전 약실 0개) 방아쇠 버튼
+        자체를 뷰에서 제거한다 - 6번째 칸은 존재하지 않으므로 아예 안 보여준다."""
+        self.cashout_button.disabled = self.game.pulls < 1
+        if self.game.is_final_chamber and self.trigger_button in self.children:
+            self.remove_item(self.trigger_button)
+
+    async def _trigger_callback(self, interaction: discord.Interaction):
+        await self.cog.handle_roulette_trigger(interaction, self)
+
+    async def _cashout_callback(self, interaction: discord.Interaction):
+        await self.cog.handle_roulette_cashout(interaction, self)
+
+    def disable_all(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def on_timeout(self):
+        # 지뢰찾기와 동일한 설계: 정산은 캐시아웃/총알 발견 시에만 발생하므로, 타임아웃 시점엔
+        # 포인트를 건드린 적이 없다. 그냥 잠그고 락만 푼다.
         self.disable_all()
         if self.message:
             try:
@@ -595,8 +709,8 @@ class KyvoEconomy(KyvoBaseCog):
         min_bet = economy_set.get("min_bet", 10)
 
         # 서버 설정의 min_bet이 이 게임 자체의 최대 베팅 한도보다 커진 경우를 명확히 막는다.
-        if min_bet > MINES_MAX_BET:
-            msg = await self.get_msg(guild_id, "mines_err_table_unavailable", min_bet=min_bet, max_bet=MINES_MAX_BET)
+        if min_bet > TABLE_MAX_BET:
+            msg = await self.get_msg(guild_id, "mines_err_table_unavailable", min_bet=min_bet, max_bet=TABLE_MAX_BET)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -605,8 +719,8 @@ class KyvoEconomy(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        if bet > MINES_MAX_BET:
-            msg = await self.get_msg(guild_id, "mines_err_max_bet", max_bet=MINES_MAX_BET)
+        if bet > TABLE_MAX_BET:
+            msg = await self.get_msg(guild_id, "mines_err_max_bet", max_bet=TABLE_MAX_BET)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -724,6 +838,150 @@ class KyvoEconomy(KyvoBaseCog):
         embed.add_field(name=multiplier_label, value=f"`{game.current_multiplier:.2f}x`", inline=True)
         embed.add_field(name=payout_label, value=f"🪙 `+{game.potential_profit:,}`" if not finished else "—", inline=True)
         embed.add_field(name=grid_label, value=game.render_grid_text(reveal_all=reveal_mines), inline=False)
+        embed.set_footer(text=f"Wager: {game.bet:,} {game.currency_name}")
+        return embed
+
+    # ========================================================
+    # [🔫 RUSSIAN ROULETTE TABLE]
+    # ========================================================
+
+    @app_commands.command(name="roulette", description="Play Russian Roulette against the house - pull the trigger or walk away.")
+    @app_commands.describe(bet="The amount of currency you want to wager.")
+    async def roulette(self, interaction: discord.Interaction, bet: int):
+        await interaction.response.defer()
+        user_id = interaction.user.id
+        guild_id = interaction.guild_id
+
+        if user_id in self.active_transactions:
+            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            return
+
+        economy_set = await self._get_economy_settings(guild_id)
+        currency_name = economy_set.get("currency_name", "Points")
+        min_bet = economy_set.get("min_bet", 10)
+
+        # 서버 설정의 min_bet이 이 게임 자체의 최대 베팅 한도보다 커진 경우를 명확히 막는다.
+        if min_bet > TABLE_MAX_BET:
+            msg = await self.get_msg(guild_id, "roulette_err_table_unavailable", min_bet=min_bet, max_bet=TABLE_MAX_BET)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if bet < min_bet:
+            msg = await self.get_msg(guild_id, "roulette_err_min_bet", min_bet=min_bet)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if bet > TABLE_MAX_BET:
+            msg = await self.get_msg(guild_id, "roulette_err_max_bet", max_bet=TABLE_MAX_BET)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        user_data = await self.bot.get_user_data(str(user_id), str(guild_id))
+        current_points = user_data.get("points", 0)
+
+        if current_points < bet:
+            msg = await self.get_msg(guild_id, "roulette_err_no_points", points=current_points)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        self.active_transactions.add(user_id)
+        house_edge = await self._get_house_edge(guild_id)
+        game = RouletteGame(user_id, guild_id, bet, currency_name, house_edge)
+
+        trigger_label = await self.get_msg(guild_id, "roulette_btn_trigger")
+        cashout_label = await self.get_msg(guild_id, "roulette_btn_cashout")
+        embed = await self._build_roulette_embed(game, finished=False)
+        view = RouletteView(self, game, trigger_label, cashout_label)
+        message = await interaction.followup.send(embed=embed, view=view)
+        view.message = message
+
+    async def handle_roulette_trigger(self, interaction: discord.Interaction, view: RouletteView):
+        game = view.game
+        survived = game.pull_trigger()
+
+        if not survived:
+            embed = await self._resolve_roulette_shot(game)
+            view.disable_all()
+            await interaction.response.edit_message(embed=embed, view=view)
+            self.active_transactions.discard(game.user_id)
+            return
+
+        view.sync_buttons()
+        embed = await self._build_roulette_embed(game, finished=False, final_chamber=game.is_final_chamber)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def handle_roulette_cashout(self, interaction: discord.Interaction, view: RouletteView):
+        game = view.game
+        embed = await self._resolve_roulette_cashout(game)
+        view.disable_all()
+        await interaction.response.edit_message(embed=embed, view=view)
+        self.active_transactions.discard(game.user_id)
+
+    async def _resolve_roulette_shot(self, game: RouletteGame) -> discord.Embed:
+        """총알을 맞았을 때의 정산. {points}는 원래 보유 포인트나 차감 후 잔액이 아니라
+        정확히 '이번에 잃은 베팅액'(game.bet)이어야 한다."""
+        user_data = await self.bot.get_user_data(str(game.user_id), str(game.guild_id))
+        current_points = user_data.get("points", 0)
+        user_data["points"] = max(0, current_points - game.bet)
+
+        save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
+        if not save_ok:
+            return discord.Embed(
+                title="❌ Ledger Write Failed",
+                description="Your roulette result could not be saved due to a database error. Your balance was not changed.",
+                color=discord.Color.red()
+            )
+
+        status_msg = await self.get_msg(game.guild_id, "roulette_status_shot", points=game.bet)
+        return await self._build_roulette_embed(game, finished=True, status_msg=status_msg, reveal_bullet=True)
+
+    async def _resolve_roulette_cashout(self, game: RouletteGame) -> discord.Embed:
+        """캐시아웃 정산. 지뢰찾기와 동일하게 배율 전체가 아니라 순이익(potential_profit)만 더한다."""
+        net_profit = game.potential_profit
+        user_data = await self.bot.get_user_data(str(game.user_id), str(game.guild_id))
+        current_points = user_data.get("points", 0)
+        user_data["points"] = current_points + net_profit
+
+        save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
+        if not save_ok:
+            return discord.Embed(
+                title="❌ Ledger Write Failed",
+                description="Your cash-out could not be saved due to a database error. Your balance was not changed.",
+                color=discord.Color.red()
+            )
+
+        status_msg = await self.get_msg(
+            game.guild_id, "roulette_status_cashout",
+            points=net_profit, multiplier=f"{game.current_multiplier:.2f}"
+        )
+        return await self._build_roulette_embed(game, finished=True, status_msg=status_msg)
+
+    async def _build_roulette_embed(self, game: RouletteGame, finished: bool, status_msg: str | None = None,
+                                     reveal_bullet: bool = False, final_chamber: bool = False) -> discord.Embed:
+        title = await self.get_msg(game.guild_id, "roulette_title")
+        trigger_label = await self.get_msg(game.guild_id, "roulette_field_trigger_count")
+        multiplier_label = await self.get_msg(game.guild_id, "roulette_field_multiplier")
+        payout_label = await self.get_msg(game.guild_id, "roulette_field_payout")
+        cylinder_label = await self.get_msg(game.guild_id, "roulette_field_cylinder")
+
+        if finished:
+            description = status_msg
+        elif final_chamber:
+            description = await self.get_msg(game.guild_id, "roulette_status_final_chamber")
+        elif game.pulls > 0:
+            description = await self.get_msg(game.guild_id, "roulette_status_survived")
+        else:
+            description = await self.get_msg(game.guild_id, "roulette_status_playing")
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.gold() if finished else discord.Color.dark_red()
+        )
+        embed.add_field(name=trigger_label, value=f"{game.pulls} / {ROULETTE_MAX_PULLS}", inline=True)
+        embed.add_field(name=multiplier_label, value=f"`{game.current_multiplier:.2f}x`", inline=True)
+        embed.add_field(name=payout_label, value=f"🪙 `+{game.potential_profit:,}`" if not finished else "—", inline=True)
+        embed.add_field(name=cylinder_label, value=game.render_cylinder_text(reveal_bullet=reveal_bullet), inline=False)
         embed.set_footer(text=f"Wager: {game.bet:,} {game.currency_name}")
         return embed
 
