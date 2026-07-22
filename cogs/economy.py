@@ -120,6 +120,151 @@ class BlackjackView(discord.ui.View):
         self.cog.active_transactions.discard(self.game.user_id)
 
 
+# ══════════════════════════════════════════════════════════
+#  💣 Mines Core Rules (Cog 상태와 무관한 순수 함수들)
+# ══════════════════════════════════════════════════════════
+MINES_GRID_SIZE = 5
+MINES_TOTAL_CELLS = MINES_GRID_SIZE * MINES_GRID_SIZE  # 25
+MINES_MULTIPLIER_CAP = 100.0
+
+# 🛡️ [서버 설정으로 확장 가능하게 구조 열어둠] 지금은 상수지만, 실제 쓰는 곳은
+# KyvoEconomy._get_house_edge() 헬퍼 하나만 거친다 - 나중에 economy_settings에 house_edge
+# 필드가 생기면 그 헬퍼 안쪽만 고치면 되고, 호출부는 하나도 안 건드려도 된다.
+HOUSE_EDGE = 0.03
+
+# 서버 경제 규모(/daily 평균 보상 ~300)에 맞춘 최대 베팅 - 서버 경제가 커지면 이 값만 올리면 된다.
+# 100배 캡까지 갔을 때의 최악의 경우 지급액(MINES_MAX_BET * 100)도 이 스케일에 맞게 억제된다.
+MINES_MAX_BET = 5_000
+
+
+def mines_fair_multiplier(total_cells: int, mines: int, opened: int) -> float:
+    """공정 배율(하우스 엣지 0%) - 복원추출 없는 초기하분포 기반. opened=0이면 1.0."""
+    if opened <= 0:
+        return 1.0
+    safe_cells = total_cells - mines
+    multiplier = 1.0
+    for i in range(opened):
+        multiplier *= (total_cells - i) / (safe_cells - i)
+    return multiplier
+
+
+def mines_multiplier(total_cells: int, mines: int, opened: int, house_edge: float) -> float:
+    """하우스 엣지 + 100배 캡까지 적용한 최종 배율. opened=0이면 엣지 적용 없이 1.0."""
+    if opened <= 0:
+        return 1.0
+    fair = mines_fair_multiplier(total_cells, mines, opened)
+    return min(fair * (1 - house_edge), MINES_MULTIPLIER_CAP)
+
+
+def generate_mine_positions(total_cells: int, mines: int) -> set[int]:
+    return set(random.sample(range(total_cells), mines))
+
+
+class MinesGame:
+    """진행 중인 지뢰찾기 한 판의 상태. 블랙잭과 동일하게 Redis 없이 View 인스턴스에 인메모리로 충분 -
+    discord.py가 View를 메시지와 자동으로 연결해줘서 별도 추적 dict가 필요 없다."""
+
+    def __init__(self, user_id: int, guild_id: int, bet: int, currency_name: str, mine_count: int, house_edge: float):
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.bet = bet
+        self.currency_name = currency_name
+        self.mine_count = mine_count
+        self.house_edge = house_edge
+        self.mine_positions = generate_mine_positions(MINES_TOTAL_CELLS, mine_count)
+        self.opened_cells: set[int] = set()
+        self.max_safe_cells = MINES_TOTAL_CELLS - mine_count
+
+    @property
+    def current_multiplier(self) -> float:
+        return mines_multiplier(MINES_TOTAL_CELLS, self.mine_count, len(self.opened_cells), self.house_edge)
+
+    @property
+    def at_cap(self) -> bool:
+        return self.current_multiplier >= MINES_MULTIPLIER_CAP
+
+    @property
+    def potential_profit(self) -> int:
+        """캐시아웃 시 실제로 더해질 순이익. 베팅액(bet)은 게임 시작 시 차감된 적이 없으므로
+        (블랙잭 승리가 bet을 그대로 한 번만 더하는 것과 같은 '델타만 적용' 방식) 배율 전체가 아니라
+        (배율-1)*베팅액만큼만 더해야 한다 - 안 그러면 원금을 이중으로 챙겨주는 꼴이 된다."""
+        return int(self.bet * (self.current_multiplier - 1))
+
+    def render_grid_text(self, reveal_all: bool = False) -> str:
+        """임베드에 표시할 텍스트 그리드. reveal_all=True면(패배 시) 지뢰 위치까지 다 보여준다."""
+        rows = []
+        for r in range(MINES_GRID_SIZE):
+            cells = []
+            for c in range(MINES_GRID_SIZE):
+                idx = r * MINES_GRID_SIZE + c
+                if idx in self.opened_cells:
+                    cells.append("💎")
+                elif reveal_all and idx in self.mine_positions:
+                    cells.append("💣")
+                else:
+                    cells.append("⬛")
+            rows.append(" ".join(cells))
+        return "\n".join(rows)
+
+
+class MinesView(discord.ui.View):
+    def __init__(self, cog: "KyvoEconomy", game: MinesGame, cashout_label: str):
+        super().__init__(timeout=90)
+        self.cog = cog
+        self.game = game
+        self.message: discord.Message | None = None
+        self.cashout_label = cashout_label
+        self.cashout_button: discord.ui.Button | None = None
+        self.cell_buttons: dict[int, discord.ui.Button] = {}
+
+        for i in range(MINES_TOTAL_CELLS):
+            btn = discord.ui.Button(label="​", style=discord.ButtonStyle.secondary, row=i // MINES_GRID_SIZE)
+            btn.callback = self._make_cell_callback(i)
+            self.cell_buttons[i] = btn
+            self.add_item(btn)
+
+    def _make_cell_callback(self, index: int):
+        async def callback(interaction: discord.Interaction):
+            await self.cog.handle_mines_cell(interaction, self, index)
+        return callback
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.game.user_id:
+            await interaction.response.send_message("❌ This is not your minefield.", ephemeral=True)
+            return False
+        return True
+
+    def open_cell_button(self, index: int):
+        """칸을 열어서 버튼 그리드에서 제거한다. 디스코드 View는 컴포넌트 최대 25개라 5x5 그리드만으로
+        이미 한도를 다 쓰기 때문에, Cash Out 버튼을 넣으려면 자리를 비워야 한다 - 열린 칸의 상태(💎)는
+        버튼이 아니라 embed의 텍스트 그리드(render_grid_text)가 대신 보여준다."""
+        btn = self.cell_buttons.pop(index, None)
+        if btn is not None:
+            self.remove_item(btn)
+        if self.cashout_button is None:
+            self.cashout_button = discord.ui.Button(label=self.cashout_label, style=discord.ButtonStyle.success, row=index // MINES_GRID_SIZE)
+            self.cashout_button.callback = self._cashout_callback
+            self.add_item(self.cashout_button)
+
+    async def _cashout_callback(self, interaction: discord.Interaction):
+        await self.cog.handle_mines_cashout(interaction, self)
+
+    def disable_all(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def on_timeout(self):
+        # 블랙잭과 동일한 설계: 정산은 캐시아웃/지뢰 발견 시에만 발생하므로, 타임아웃 시점엔 포인트를
+        # 건드린 적이 없다. 그냥 잠그고 락만 푼다.
+        self.disable_all()
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        self.cog.active_transactions.discard(self.game.user_id)
+
+
 class KyvoEconomy(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
@@ -416,6 +561,169 @@ class KyvoEconomy(KyvoBaseCog):
         )
         embed.add_field(name=dealer_label, value=dealer_display, inline=False)
         embed.add_field(name=player_label, value=player_display, inline=False)
+        embed.set_footer(text=f"Wager: {game.bet:,} {game.currency_name}")
+        return embed
+
+    # ========================================================
+    # [💣 MINES TABLE]
+    # ========================================================
+
+    async def _get_house_edge(self, guild_id) -> float:
+        """지금은 상수를 그대로 반환하지만, 이 헬퍼 하나만 거치도록 해서 나중에 economy_settings에
+        house_edge 필드가 생기면 이 안쪽만 고치면 되게 만들어뒀다 (호출부는 안 건드림)."""
+        return HOUSE_EDGE
+
+    @app_commands.command(name="mines", description="Play a round of Mines - reveal safe tiles and cash out before you hit one.")
+    @app_commands.describe(bet="The amount of currency you want to wager.", danger_level="Number of mines hidden in the 5x5 grid.")
+    @app_commands.choices(danger_level=[
+        app_commands.Choice(name="Low (1 mine)", value=1),
+        app_commands.Choice(name="Medium (3 mines)", value=3),
+        app_commands.Choice(name="High (5 mines)", value=5),
+    ])
+    async def mines(self, interaction: discord.Interaction, bet: int, danger_level: app_commands.Choice[int]):
+        await interaction.response.defer()
+        user_id = interaction.user.id
+        guild_id = interaction.guild_id
+        mine_count = danger_level.value
+
+        if user_id in self.active_transactions:
+            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            return
+
+        economy_set = await self._get_economy_settings(guild_id)
+        currency_name = economy_set.get("currency_name", "Points")
+        min_bet = economy_set.get("min_bet", 10)
+
+        # 서버 설정의 min_bet이 이 게임 자체의 최대 베팅 한도보다 커진 경우를 명확히 막는다.
+        if min_bet > MINES_MAX_BET:
+            msg = await self.get_msg(guild_id, "mines_err_table_unavailable", min_bet=min_bet, max_bet=MINES_MAX_BET)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if bet < min_bet:
+            msg = await self.get_msg(guild_id, "mines_err_min_bet", min_bet=min_bet)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if bet > MINES_MAX_BET:
+            msg = await self.get_msg(guild_id, "mines_err_max_bet", max_bet=MINES_MAX_BET)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        user_data = await self.bot.get_user_data(str(user_id), str(guild_id))
+        current_points = user_data.get("points", 0)
+
+        if current_points < bet:
+            msg = await self.get_msg(guild_id, "mines_err_no_points", points=current_points)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        self.active_transactions.add(user_id)
+        house_edge = await self._get_house_edge(guild_id)
+        game = MinesGame(user_id, guild_id, bet, currency_name, mine_count, house_edge)
+
+        cashout_label = await self.get_msg(guild_id, "mines_btn_cashout")
+        embed = await self._build_mines_embed(game, finished=False)
+        view = MinesView(self, game, cashout_label)
+        message = await interaction.followup.send(embed=embed, view=view)
+        view.message = message
+
+    async def handle_mines_cell(self, interaction: discord.Interaction, view: MinesView, index: int):
+        game = view.game
+
+        if index in game.mine_positions:
+            embed = await self._resolve_mines_loss(game)
+            view.disable_all()
+            await interaction.response.edit_message(embed=embed, view=view)
+            self.active_transactions.discard(game.user_id)
+            return
+
+        game.opened_cells.add(index)
+        view.open_cell_button(index)
+
+        if len(game.opened_cells) >= game.max_safe_cells:
+            # 열 수 있는 안전칸을 전부 열었다 - 더 열 칸이 없으니 자동으로 캐시아웃 처리한다.
+            embed = await self._resolve_mines_cashout(game)
+            view.disable_all()
+            await interaction.response.edit_message(embed=embed, view=view)
+            self.active_transactions.discard(game.user_id)
+            return
+
+        embed = await self._build_mines_embed(game, finished=False)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def handle_mines_cashout(self, interaction: discord.Interaction, view: MinesView):
+        game = view.game
+        embed = await self._resolve_mines_cashout(game)
+        view.disable_all()
+        await interaction.response.edit_message(embed=embed, view=view)
+        self.active_transactions.discard(game.user_id)
+
+    async def _resolve_mines_loss(self, game: MinesGame) -> discord.Embed:
+        """지뢰를 밟았을 때의 정산. {points}는 원래 보유 포인트나 차감 후 잔액이 아니라
+        정확히 '이번에 잃은 베팅액'(game.bet)이어야 한다."""
+        user_data = await self.bot.get_user_data(str(game.user_id), str(game.guild_id))
+        current_points = user_data.get("points", 0)
+        user_data["points"] = max(0, current_points - game.bet)
+
+        save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
+        if not save_ok:
+            return discord.Embed(
+                title="❌ Ledger Write Failed",
+                description="Your mines result could not be saved due to a database error. Your balance was not changed.",
+                color=discord.Color.red()
+            )
+
+        status_msg = await self.get_msg(game.guild_id, "mines_status_mine_hit", points=game.bet)
+        return await self._build_mines_embed(game, finished=True, status_msg=status_msg, reveal_mines=True)
+
+    async def _resolve_mines_cashout(self, game: MinesGame) -> discord.Embed:
+        """캐시아웃 정산. 베팅액은 시작 시점에 차감된 적이 없으므로(블랙잭 승리가 bet을 그대로
+        한 번만 더하는 것과 동일한 '델타만 적용' 방식) 배율 전체가 아니라 순이익(potential_profit)만 더한다."""
+        net_profit = game.potential_profit
+        user_data = await self.bot.get_user_data(str(game.user_id), str(game.guild_id))
+        current_points = user_data.get("points", 0)
+        user_data["points"] = current_points + net_profit
+
+        save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
+        if not save_ok:
+            return discord.Embed(
+                title="❌ Ledger Write Failed",
+                description="Your cash-out could not be saved due to a database error. Your balance was not changed.",
+                color=discord.Color.red()
+            )
+
+        status_msg = await self.get_msg(
+            game.guild_id, "mines_status_cashout",
+            points=net_profit, multiplier=f"{game.current_multiplier:.2f}"
+        )
+        return await self._build_mines_embed(game, finished=True, status_msg=status_msg)
+
+    async def _build_mines_embed(self, game: MinesGame, finished: bool, status_msg: str | None = None, reveal_mines: bool = False) -> discord.Embed:
+        title = await self.get_msg(game.guild_id, "mines_title")
+        mines_label = await self.get_msg(game.guild_id, "mines_field_mines_count")
+        multiplier_label = await self.get_msg(game.guild_id, "mines_field_multiplier")
+        payout_label = await self.get_msg(game.guild_id, "mines_field_payout")
+        grid_label = await self.get_msg(game.guild_id, "mines_field_grid")
+
+        if finished:
+            description = status_msg
+        elif game.at_cap:
+            description = await self.get_msg(game.guild_id, "mines_status_max_multiplier")
+        elif game.opened_cells:
+            description = await self.get_msg(game.guild_id, "mines_status_safe")
+        else:
+            description = await self.get_msg(game.guild_id, "mines_status_playing")
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.gold() if finished else discord.Color.dark_green()
+        )
+        embed.add_field(name=mines_label, value=str(game.mine_count), inline=True)
+        embed.add_field(name=multiplier_label, value=f"`{game.current_multiplier:.2f}x`", inline=True)
+        embed.add_field(name=payout_label, value=f"🪙 `+{game.potential_profit:,}`" if not finished else "—", inline=True)
+        embed.add_field(name=grid_label, value=game.render_grid_text(reveal_all=reveal_mines), inline=False)
         embed.set_footer(text=f"Wager: {game.bet:,} {game.currency_name}")
         return embed
 
