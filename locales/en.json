@@ -193,5 +193,6 @@
   "cc_role_remove_saved": "✅ Custom command `/{name}` will now remove the role **{role}** from whoever triggers it.",
   "cc_role_add_success": "✅ You received the **{role}** role!",
   "cc_role_remove_success": "✅ The **{role}** role has been removed from you.",
-  "cc_role_action_unavailable": "⚠️ This command is currently unavailable. Please contact a server administrator."
+  "cc_role_action_unavailable": "⚠️ This command is currently unavailable. Please contact a server administrator.",
+  "voice_temp_channel_name": "{user}'s Channel"
 }

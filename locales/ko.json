@@ -193,5 +193,6 @@
   "cc_role_remove_saved": "✅ 커스텀 명령어 `/{name}`을 실행하면 이제 **{role}** 역할이 제거됩니다.",
   "cc_role_add_success": "✅ **{role}** 역할을 받았습니다!",
   "cc_role_remove_success": "✅ **{role}** 역할이 제거되었습니다.",
-  "cc_role_action_unavailable": "⚠️ 이 명령어는 지금 사용할 수 없습니다. 서버 관리자에게 문의하세요."
+  "cc_role_action_unavailable": "⚠️ 이 명령어는 지금 사용할 수 없습니다. 서버 관리자에게 문의하세요.",
+  "voice_temp_channel_name": "{user}의 채널"
 }

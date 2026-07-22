@@ -34,6 +34,7 @@ class KyvoBot(commands.Bot):
             'cogs.ticket_ai',
             'cogs.custom_commands',
             'cogs.welcome',
+            'cogs.voice',
         ]
         print(">>> Loading extensions... <<<", flush=True)
         
