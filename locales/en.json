@@ -182,5 +182,16 @@
   "roulette_btn_trigger": "Pull Trigger",
   "roulette_btn_cashout": "Cash Out",
   "clear_spam_success": "✅ Successfully cleared spam counter for {mention}.",
-  "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration."
+  "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.",
+  "cc_err_admin_role_blocked": "❌ `{role}` cannot be used - it has Administrator permissions, which are never allowed as a custom-command reward.",
+  "cc_warning_dangerous_role": "⚠️ The role **{role}** grants the following elevated permissions: {permissions}\n\nAnyone who triggers this command will receive **all of these permissions**. Are you sure you want to continue?",
+  "cc_confirm_button": "Confirm",
+  "cc_cancel_button": "Cancel",
+  "cc_action_cancelled": "🚫 Cancelled. No custom command was created.",
+  "cc_confirm_timeout": "⏳ Confirmation timed out. No custom command was created.",
+  "cc_role_add_saved": "✅ Custom command `/{name}` will now grant the role **{role}** to whoever triggers it.",
+  "cc_role_remove_saved": "✅ Custom command `/{name}` will now remove the role **{role}** from whoever triggers it.",
+  "cc_role_add_success": "✅ You received the **{role}** role!",
+  "cc_role_remove_success": "✅ The **{role}** role has been removed from you.",
+  "cc_role_action_unavailable": "⚠️ This command is currently unavailable. Please contact a server administrator."
 }

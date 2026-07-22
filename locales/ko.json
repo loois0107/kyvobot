@@ -182,5 +182,16 @@
   "roulette_btn_trigger": "방아쇠 당기기",
   "roulette_btn_cashout": "캐시아웃",
   "clear_spam_success": "✅ {mention}님의 도배 카운터를 즉시 초기화했습니다.",
-  "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다."
+  "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.",
+  "cc_err_admin_role_blocked": "❌ `{role}`은 Administrator 권한을 가진 역할이라 커스텀 명령어 보상으로 사용할 수 없습니다.",
+  "cc_warning_dangerous_role": "⚠️ **{role}** 역할은 다음 상위 권한을 갖고 있습니다: {permissions}\n\n이 명령어를 실행하는 누구든 **이 권한을 전부** 받게 됩니다. 계속하시겠습니까?",
+  "cc_confirm_button": "확인",
+  "cc_cancel_button": "취소",
+  "cc_action_cancelled": "🚫 취소되었습니다. 커스텀 명령어가 생성되지 않았습니다.",
+  "cc_confirm_timeout": "⏳ 확인 시간이 초과되었습니다. 커스텀 명령어가 생성되지 않았습니다.",
+  "cc_role_add_saved": "✅ 커스텀 명령어 `/{name}`을 실행하면 이제 **{role}** 역할이 부여됩니다.",
+  "cc_role_remove_saved": "✅ 커스텀 명령어 `/{name}`을 실행하면 이제 **{role}** 역할이 제거됩니다.",
+  "cc_role_add_success": "✅ **{role}** 역할을 받았습니다!",
+  "cc_role_remove_success": "✅ **{role}** 역할이 제거되었습니다.",
+  "cc_role_action_unavailable": "⚠️ 이 명령어는 지금 사용할 수 없습니다. 서버 관리자에게 문의하세요."
 }
