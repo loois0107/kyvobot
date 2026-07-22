@@ -874,7 +874,15 @@ class KyvoEconomy(KyvoBaseCog):
             color=0x2b2d31,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
-        description_lines = [f"• **{item['name']}** ` x{item['quantity']} `" for item in inventory]
+        # 🛡️ [레거시 데이터 방어] /shop buy는 항상 {"name", "quantity"} 딕셔너리로 쓰지만, 예전 스키마의
+        # 잔재로 문자열만 들어있는 레코드가 실제로 발견됐다(item['name']에서 TypeError로 /inventory 전체가
+        # 죽었음). 형태가 맞지 않는 항목도 죽지 않고 최대한 그대로 보여준다.
+        description_lines = []
+        for item in inventory:
+            if isinstance(item, dict) and "name" in item:
+                description_lines.append(f"• **{item['name']}** ` x{item.get('quantity', 1)} `")
+            else:
+                description_lines.append(f"• **{item}** ` x1 `")
         embed.description = "\n".join(description_lines)
         embed.set_footer(text="KyvoBot Distributed Inventory Node")
         await interaction.followup.send(embed=embed)
