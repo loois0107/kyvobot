@@ -39,6 +39,7 @@ class KyvoBot(commands.Bot):
             'cogs.giveaway',
             'cogs.reaction_roles',
             'cogs.party',
+            'cogs.tier_verify',
         ]
         print(">>> Loading extensions... <<<", flush=True)
         
