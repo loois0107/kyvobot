@@ -223,5 +223,8 @@
   "giveaway_err_duration_range": "❌ 마감 시간은 {min}분에서 {max}분 사이여야 합니다.",
   "giveaway_payout_notice": "⚠️ 상품을 받지 못하셨다면 서버 관리자에게 문의해주세요.",
   "giveaway_admin_success": "✅ 추첨이 생성되었습니다! <t:{timestamp}:R>에 마감됩니다.",
-  "giveaway_field_entry_cost": "💰 **응모 비용**"
+  "giveaway_field_entry_cost": "💰 **응모 비용**",
+  "rr_err_no_manage_roles_permission": "❌ 이 서버에서 봇에게 **역할 관리** 권한이 없어서 반응 역할을 설정할 수 없습니다.",
+  "rr_err_hierarchy": "❌ 봇의 역할이 `{role}`보다 낮은 위치에 있어서 이 역할을 부여할 수 없습니다. 서버 설정에서 봇 역할을 `{role}`보다 위로 옮긴 뒤 다시 시도해주세요.",
+  "rr_err_invalid_emoji": "❌ 이 이모지로 메시지에 반응을 달 수 없습니다. 다른 이모지를 시도해주세요."
 }

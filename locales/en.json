@@ -223,5 +223,8 @@
   "giveaway_err_duration_range": "❌ Duration must be between {min} and {max} minutes.",
   "giveaway_payout_notice": "⚠️ If you don't receive your prize, please contact a server administrator.",
   "giveaway_admin_success": "✅ Giveaway created! It will conclude <t:{timestamp}:R>.",
-  "giveaway_field_entry_cost": "💰 **Entry Cost**"
+  "giveaway_field_entry_cost": "💰 **Entry Cost**",
+  "rr_err_no_manage_roles_permission": "❌ The bot doesn't have the **Manage Roles** permission on this server, so a reaction role can't be set up.",
+  "rr_err_hierarchy": "❌ The bot's role is positioned below `{role}`, so it can't assign that role. Please move the bot's role above `{role}` in Server Settings and try again.",
+  "rr_err_invalid_emoji": "❌ Couldn't react to that message with this emoji. Please try a different one."
 }
