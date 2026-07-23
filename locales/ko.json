@@ -216,5 +216,12 @@
   "anon_report_btn_reject": "거절",
   "anon_report_btn_block": "이 제보자 익명 차단",
   "anon_unban_success": "✅ {user}님은 이제 다시 익명 제보를 제출할 수 있습니다.",
-  "anon_unban_not_found": "⚠️ {user}님은 익명 제보 차단 목록에 없습니다."
+  "anon_unban_not_found": "⚠️ {user}님은 익명 제보 차단 목록에 없습니다.",
+  "giveaway_err_already_entered": "❌ 이미 이 추첨에 응모하셨습니다.",
+  "giveaway_err_insufficient_points": "❌ 응모에 필요한 포인트가 부족합니다. (현재: `{points}`, 필요: `{cost}`)",
+  "giveaway_err_save_failed": "❌ **응모 실패:** 시스템 오류로 응모가 저장되지 못했습니다. 포인트는 차감되지 않았습니다.",
+  "giveaway_err_duration_range": "❌ 마감 시간은 {min}분에서 {max}분 사이여야 합니다.",
+  "giveaway_payout_notice": "⚠️ 상품을 받지 못하셨다면 서버 관리자에게 문의해주세요.",
+  "giveaway_admin_success": "✅ 추첨이 생성되었습니다! <t:{timestamp}:R>에 마감됩니다.",
+  "giveaway_field_entry_cost": "💰 **응모 비용**"
 }

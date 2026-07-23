@@ -36,6 +36,7 @@ class KyvoBot(commands.Bot):
             'cogs.welcome',
             'cogs.voice',
             'cogs.anonymous_reports',
+            'cogs.giveaway',
         ]
         print(">>> Loading extensions... <<<", flush=True)
         

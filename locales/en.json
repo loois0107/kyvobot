@@ -216,5 +216,12 @@
   "anon_report_btn_reject": "Reject",
   "anon_report_btn_block": "Block Reporter (Anonymous)",
   "anon_unban_success": "✅ {user} can now submit anonymous reports again.",
-  "anon_unban_not_found": "⚠️ {user} was not on the anonymous-report block list."
+  "anon_unban_not_found": "⚠️ {user} was not on the anonymous-report block list.",
+  "giveaway_err_already_entered": "❌ You've already entered this giveaway.",
+  "giveaway_err_insufficient_points": "❌ You don't have enough points to enter. (Current: `{points}`, Required: `{cost}`)",
+  "giveaway_err_save_failed": "❌ **Entry Failed:** Your entry could not be saved due to a database error. Your points were not deducted.",
+  "giveaway_err_duration_range": "❌ Duration must be between {min} and {max} minutes.",
+  "giveaway_payout_notice": "⚠️ If you don't receive your prize, please contact a server administrator.",
+  "giveaway_admin_success": "✅ Giveaway created! It will conclude <t:{timestamp}:R>.",
+  "giveaway_field_entry_cost": "💰 **Entry Cost**"
 }
