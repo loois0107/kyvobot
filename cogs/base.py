@@ -74,6 +74,25 @@ class KyvoBaseCog(commands.Cog):
             return False
 
     # ══════════════════════════════════════════════════════════
+    #  금지어 필터 (automod 채팅 필터 / 익명 제보 필터가 공유하는 단일 소스)
+    # ══════════════════════════════════════════════════════════
+    async def get_forbidden_words(self, guild_id: int) -> list[str]:
+        """settings.automod_settings.forbidden_words를 읽어온다. 모든 Cog가 이 하나의 소스만
+        본다 - 채팅 필터와 익명 제보 필터가 서로 다른 리스트를 보는 일이 없게 한다."""
+        row = await self.get_guild_settings(guild_id)
+        nested_settings = row.get("settings") or {}
+        automod_settings = nested_settings.get("automod_settings") or {}
+        words = automod_settings.get("forbidden_words")
+        return words if isinstance(words, list) else []
+
+    async def check_forbidden_words(self, guild_id: int, content: str) -> str | None:
+        """content에 금지어가 하나라도 포함되면 그 단어를, 없으면 None을 반환한다."""
+        for word in await self.get_forbidden_words(guild_id):
+            if word and word in content:
+                return word
+        return None
+
+    # ══════════════════════════════════════════════════════════
     #  통합 다국어 메시지 치환 로더 (get_msg)
     # ══════════════════════════════════════════════════════════
     async def get_msg(self, guild_id: int, key: str, **kwargs) -> str:

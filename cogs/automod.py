@@ -218,35 +218,32 @@ class AutoMod(KyvoBaseCog):
             return
 
         # 2. 금지어 필터링
-        # 🛡️ [죽은 참조 정리] guild_settings에 forbidden_words/banned_words 컬럼이 없어서(직접 조회로
-        # 확인됨) 대시보드에서 채울 방법이 없다. settings.get()으로 읽는 척하지 않고 빈 리스트를 명시한다 -
-        # 실제 컬럼이 생기면 이 한 줄만 바꾸면 된다.
-        forbidden_words: list[str] = []
+        # 🛡️ [익명 제보 기능과 공유] settings.automod_settings.forbidden_words가 실제 저장 위치다.
+        # KyvoBaseCog.check_forbidden_words()를 거쳐서 익명 제보 필터와 완전히 같은 소스를 본다.
+        word = await self.check_forbidden_words(message.guild.id, message.content)
 
-        for word in forbidden_words:
-            if word in message.content:
-                try:
-                    await message.delete()
-                except discord.NotFound:
-                    pass
-                except discord.Forbidden:
-                    pass
+        if word:
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
 
-                # ⚡ 금지어 사유 및 알림도 부모 클래스의 상속 get_msg로 일원화
-                log_reason = await self.get_msg(message.guild.id, "bad_word_reason", word=word)
-                self.enqueue_log(
-                    guild_id=message.guild.id,
-                    user_id=message.author.id,
-                    action="bad_word_delete",
-                    reason=f"{log_reason} | Channel: #{message.channel.name}"
-                )
+            # ⚡ 금지어 사유 및 알림도 부모 클래스의 상속 get_msg로 일원화
+            log_reason = await self.get_msg(message.guild.id, "bad_word_reason", word=word)
+            self.enqueue_log(
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+                action="bad_word_delete",
+                reason=f"{log_reason} | Channel: #{message.channel.name}"
+            )
 
-                warn_msg = await self.get_msg(message.guild.id, "bad_word_warn", mention=message.author.mention)
-                try:
-                    await message.channel.send(warn_msg, delete_after=3.0)
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-                break
+            warn_msg = await self.get_msg(message.guild.id, "bad_word_warn", mention=message.author.mention)
+            try:
+                await message.channel.send(warn_msg, delete_after=3.0)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     # ══════════════════════════════════════════════════════════
     #  ④ Log Batch Queue Async Engine (AutoMod 고유 자산 유지)
