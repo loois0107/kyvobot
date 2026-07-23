@@ -136,11 +136,26 @@ class KyvoLeveling(KyvoBaseCog):
             target_role_id = role_rewards.get(str(current_level))
             if target_role_id:
                 reward_role = message.guild.get_role(int(target_role_id))
-                if reward_role:
-                    try:
-                        await message.author.add_roles(reward_role, reason=f"[KYVO REWARD]")
-                    except discord.Forbidden:
-                        pass
+                if reward_role is None:
+                    print(f"[LEVEL_REWARD][WARN] Configured reward role {target_role_id} no longer exists "
+                          f"(guild={guild_id}, level={current_level})", flush=True)
+                else:
+                    bot_member = message.guild.me
+                    if bot_member is not None and bot_member.top_role <= reward_role:
+                        print(f"[LEVEL_REWARD][WARN] Role hierarchy: bot's top role '{bot_member.top_role}' "
+                              f"is not above reward role '{reward_role.name}' "
+                              f"(guild={guild_id}, level={current_level})", flush=True)
+                    else:
+                        try:
+                            await message.author.add_roles(reward_role, reason="[KYVO REWARD]")
+                        except discord.Forbidden:
+                            print(f"[LEVEL_REWARD][ERROR] Forbidden while granting reward role "
+                                  f"'{reward_role.name}' to user={user_id} "
+                                  f"(guild={guild_id}, level={current_level})", flush=True)
+                        except discord.HTTPException as e:
+                            print(f"[LEVEL_REWARD][ERROR] HTTPException while granting reward role "
+                                  f"'{reward_role.name}': {type(e).__name__}: {e} "
+                                  f"(guild={guild_id}, level={current_level})", flush=True)
 
     @app_commands.command(name="level", description="Generate your customized server rank card.")
     async def level(self, interaction: discord.Interaction):
@@ -207,8 +222,12 @@ class KyvoLeveling(KyvoBaseCog):
                         if resp.status == 200:
                             bg_data = await resp.read()
                             card = Image.open(io.BytesIO(bg_data)).convert("RGBA").resize((base_w, base_h))
-            except Exception:
-                pass
+                        else:
+                            print(f"[RANK_CARD][WARN] background_url fetch returned status {resp.status}, "
+                                  f"falling back to solid color (guild={guild_id}, user={user_id}, url={background_url})", flush=True)
+            except Exception as e:
+                print(f"[RANK_CARD][WARN] background_url fetch/parse failed, falling back to solid color: "
+                      f"{type(e).__name__}: {e} (guild={guild_id}, user={user_id}, url={background_url})", flush=True)
 
         if card is None:
             card = Image.new("RGBA", (base_w, base_h), color=card_bg_color)
