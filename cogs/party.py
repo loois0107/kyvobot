@@ -259,7 +259,8 @@ class KyvoParty(KyvoBaseCog):
         return None
 
     async def _build_card_embed(self, row: dict, current_count: int, finished: bool = False,
-                                 party_channel: discord.TextChannel | None = None, expired: bool = False) -> discord.Embed:
+                                 party_channel: discord.TextChannel | None = None, expired: bool = False,
+                                 cancelled: bool = False) -> discord.Embed:
         guild_id = int(row["guild_id"])
         title = await self.get_msg(guild_id, "party_card_title", queue_type=row["queue_type"])
         leader_label = await self.get_msg(guild_id, "party_field_leader")
@@ -275,6 +276,9 @@ class KyvoParty(KyvoBaseCog):
         elif expired:
             description = await self.get_msg(guild_id, "party_expired_notice")
             color = discord.Color.greyple()
+        elif cancelled:
+            description = await self.get_msg(guild_id, "party_cancelled_notice")
+            color = discord.Color.red()
         else:
             description = None
             color = discord.Color.blurple()
@@ -285,7 +289,7 @@ class KyvoParty(KyvoBaseCog):
         if row.get("lanes"):
             embed.add_field(name=lanes_label, value=row["lanes"], inline=True)
         embed.add_field(name=count_label, value=f"`{current_count}/{row['needed_count']}`", inline=True)
-        if not finished and not expired:
+        if not finished and not expired and not cancelled:
             ends_at = datetime.fromisoformat(row["expires_at"])
             ts = int(ends_at.timestamp())
             embed.add_field(name=expires_label, value=f"<t:{ts}:R>", inline=True)
@@ -459,33 +463,77 @@ class KyvoParty(KyvoBaseCog):
                   f"{type(e).__name__}: {e}", flush=True)
 
     # ══════════════════════════════════════════════════════════
-    #  /party_close
+    #  /party_close - 두 위치/상태를 모두 처리한다:
+    #  ① 파티 채널 안에서, status=='full'  -> 기존 동작(채널 실제 삭제)
+    #  ② 모집 카드가 있던 채널에서, status=='recruiting' -> 카드 취소(버튼 제거, "취소됨" 표시)
+    #  어느 쪽에도 해당하지 않으면, 왜 안 되는지(위치가 틀렸는지/이미 종료됐는지) 구분해서 안내한다.
     # ══════════════════════════════════════════════════════════
-    @app_commands.command(name="party_close", description="Close your party channel early.")
-    async def party_close(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        guild_id = interaction.guild_id
-        channel_id = str(interaction.channel.id)
+    async def _find_recruitment(self, channel_id: str | None = None, party_channel_id: str | None = None,
+                                 status: str | None = None) -> dict | None:
+        def _query():
+            q = self.bot.supabase.table("party_recruitments").select("*")
+            if channel_id is not None:
+                q = q.eq("channel_id", channel_id)
+            if party_channel_id is not None:
+                q = q.eq("party_channel_id", party_channel_id)
+            if status is not None:
+                q = q.eq("status", status)
+            return q.order("id", desc=True).limit(1).execute()
 
         try:
-            res = await self._db_call(
-                lambda: self.bot.supabase.table("party_recruitments").select("*")
-                        .eq("party_channel_id", channel_id).eq("status", "full").execute()
-            )
-            row = res.data[0] if res.data else None
+            res = await self._db_call(_query)
+            return res.data[0] if res.data else None
         except Exception as e:
-            print(f"[PARTY][ERROR] Failed to look up party for channel {channel_id}: {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ An error occurred.", ephemeral=True)
-            return
+            print(f"[PARTY][ERROR] Failed to look up recruitment (channel_id={channel_id}, "
+                  f"party_channel_id={party_channel_id}, status={status}): {type(e).__name__}: {e}", flush=True)
+            return None
 
-        if not row:
-            msg = await self.get_msg(guild_id, "party_close_not_a_party_channel")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
-
+    def _has_close_permission(self, row: dict, interaction: discord.Interaction) -> bool:
         is_leader = row["leader_id"] == str(interaction.user.id)
         is_admin = interaction.user.guild_permissions.administrator
-        if not (is_leader or is_admin):
+        return is_leader or is_admin
+
+    @app_commands.command(name="party_close", description="Cancel your recruitment, or close your party channel early.")
+    async def party_close(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        channel_id = str(interaction.channel.id)
+
+        full_row = await self._find_recruitment(party_channel_id=channel_id, status="full")
+        if full_row:
+            await self._close_full_party(interaction, full_row)
+            return
+
+        recruiting_row = await self._find_recruitment(channel_id=channel_id, status="recruiting")
+        if recruiting_row:
+            await self._cancel_recruiting_party(interaction, recruiting_row)
+            return
+
+        await self._send_close_not_found_message(interaction, channel_id)
+
+    async def _send_close_not_found_message(self, interaction: discord.Interaction, channel_id: str) -> None:
+        guild_id = interaction.guild_id
+
+        # 더 친절한 안내를 위해 상태 무관하게 다시 조회한다 (왜 못 닫는지 구분).
+        stale_full_row = await self._find_recruitment(party_channel_id=channel_id)
+        stale_card_row = await self._find_recruitment(channel_id=channel_id)
+
+        if stale_full_row:
+            # party_channel_id는 매치되는데 status가 'full'이 아님 -> 이미 종료된 파티 채널
+            msg = await self.get_msg(guild_id, "party_close_already_closed")
+        elif stale_card_row and stale_card_row["status"] == "full":
+            # 카드 채널인데 이미 인원이 다 차서 파티 채널로 넘어감 -> 위치 안내
+            msg = await self.get_msg(guild_id, "party_close_use_party_channel")
+        elif stale_card_row:
+            # 카드 채널인데 이미 취소/만료됨
+            msg = await self.get_msg(guild_id, "party_close_already_closed")
+        else:
+            msg = await self.get_msg(guild_id, "party_close_not_a_party_channel")
+        await interaction.followup.send(msg, ephemeral=True)
+
+    async def _close_full_party(self, interaction: discord.Interaction, row: dict) -> None:
+        guild_id = interaction.guild_id
+
+        if not self._has_close_permission(row, interaction):
             msg = await self.get_msg(guild_id, "party_close_no_permission")
             await interaction.followup.send(msg, ephemeral=True)
             return
@@ -502,7 +550,8 @@ class KyvoParty(KyvoBaseCog):
             return
 
         if not claim_res.data:
-            msg = await self.get_msg(guild_id, "party_close_not_a_party_channel")
+            # 다른 요청(자동 정리 등)이 그 사이 먼저 닫았음
+            msg = await self.get_msg(guild_id, "party_close_already_closed")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -515,6 +564,57 @@ class KyvoParty(KyvoBaseCog):
             pass
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to delete party channel {interaction.channel.id} after /party_close: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+    async def _cancel_recruiting_party(self, interaction: discord.Interaction, row: dict) -> None:
+        guild_id = interaction.guild_id
+
+        if not self._has_close_permission(row, interaction):
+            msg = await self.get_msg(guild_id, "party_close_no_permission")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        try:
+            claim_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_recruitments")
+                        .update({"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()})
+                        .eq("id", row["id"]).eq("status", "recruiting").execute()
+            )
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to cancel recruiting party {row['id']}: {type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred.", ephemeral=True)
+            return
+
+        if not claim_res.data:
+            # 동시에 인원이 다 찼거나(-> full) 이미 만료/취소됐음 - 삭제할 채널은 없으니 그대로 종료.
+            msg = await self.get_msg(guild_id, "party_close_already_closed")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        msg = await self.get_msg(guild_id, "party_close_cancel_success")
+        await interaction.followup.send(msg, ephemeral=True)
+
+        # 카드 갱신 - 버튼 제거, "모집자가 취소함" 표시. 삭제할 채널은 애초에 없다(아직 안 만들어짐).
+        try:
+            count_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants").select("user_id")
+                        .eq("recruitment_id", row["id"]).execute()
+            )
+            current_count = len(count_res.data or [])
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to re-count participants for recruitment {row['id']}: {type(e).__name__}: {e}", flush=True)
+            current_count = 1
+
+        channel = self.bot.get_channel(int(row["channel_id"]))
+        message_id = row.get("message_id")
+        if channel is None or not message_id:
+            return
+        try:
+            message = await channel.fetch_message(int(message_id))
+            embed = await self._build_card_embed(row, current_count=current_count, cancelled=True)
+            await message.edit(embed=embed, view=None)
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to update recruitment card {message_id} after cancellation: "
                   f"{type(e).__name__}: {e}", flush=True)
 
     # ══════════════════════════════════════════════════════════
