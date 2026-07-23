@@ -500,13 +500,15 @@ class KyvoTwitch(KyvoBaseCog):
                   f"permission/hierarchy issue (guild={guild_id})", flush=True)
             return
 
+        # 캐시된 member.roles를 믿고 "이미 상태가 맞으니 스킵"하지 않는다 - 게이트웨이 캐시가
+        # stale하면 실제로는 반대 상태인데 호출 자체를 건너뛸 수 있다. add_roles/remove_roles는
+        # Discord API 상 멱등적(이미 있는 역할을 또 줘도, 없는 역할을 또 지워도 에러 없음)이라
+        # 매번 그냥 호출하는 게 더 안전하다.
         try:
             if grant:
-                if role not in member.roles:
-                    await member.add_roles(role, reason="[KYVO TWITCH] streamer went live")
+                await member.add_roles(role, reason="[KYVO TWITCH] streamer went live")
             else:
-                if role in member.roles:
-                    await member.remove_roles(role, reason="[KYVO TWITCH] streamer went offline")
+                await member.remove_roles(role, reason="[KYVO TWITCH] streamer went offline")
         except discord.Forbidden:
             print(f"[TWITCH][ERROR] Forbidden while {'granting' if grant else 'revoking'} live role "
                   f"'{role.name}' to user={member_id} (guild={guild_id})", flush=True)
