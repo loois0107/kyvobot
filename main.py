@@ -24,8 +24,11 @@ class KyvoBot(commands.Bot):
         print(">>> SETUP_HOOK STARTED <<<", flush=True)
         self.tree.on_error = self.on_app_command_error
 
-        self.loop.create_task(self.keep_alive_server())
-        print(">>> keep_alive task created <<<", flush=True)
+        # 🛡️ 웹앱 객체는 익스텐션 로드 "전"에 미리 만들어 self.web_app으로 노출한다 - 각 코그가
+        # setup() 시점에 자기 라우트(예: 트위치 웹훅)를 등록할 수 있어야 하기 때문이다. 실제로
+        # 포트를 열어 서빙을 시작하는 건 모든 코그가 라우트 등록을 마친 "후"로 미룬다.
+        self.init_web_app()
+        print(">>> web app initialized (routes can now be registered by cogs) <<<", flush=True)
 
         extensions = [
             'cogs.automod',
@@ -40,9 +43,10 @@ class KyvoBot(commands.Bot):
             'cogs.reaction_roles',
             'cogs.party',
             'cogs.tier_verify',
+            'cogs.twitch',
         ]
         print(">>> Loading extensions... <<<", flush=True)
-        
+
         for ext in extensions:
             try:
                 await self.load_extension(ext)
@@ -51,6 +55,9 @@ class KyvoBot(commands.Bot):
                 print(f"[CRITICAL LAYER ERROR] Failure launching extension node {ext}: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
+
+        self.loop.create_task(self.start_web_server())
+        print(">>> web server start task created <<<", flush=True)
 
         try:
             print("[SYSTEM LOG] Syncing application commands globally...", flush=True)
@@ -89,16 +96,18 @@ class KyvoBot(commands.Bot):
             except Exception:
                 pass
 
-    async def keep_alive_server(self):
-        app = web.Application()
-        app.router.add_get('/', lambda request: web.Response(text="KyvoBot AI Engine is Online and Running!"))
-        runner = web.AppRunner(app)
+    def init_web_app(self):
+        self.web_app = web.Application()
+        self.web_app.router.add_get('/', lambda request: web.Response(text="KyvoBot AI Engine is Online and Running!"))
+
+    async def start_web_server(self):
+        runner = web.AppRunner(self.web_app)
         await runner.setup()
-        
+
         port = int(os.environ.get("PORT", 8080))
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
-        print(f"[WEB INFRASTRUCTURE] Dummy health-check server bound to port {port}.", flush=True)
+        print(f"[WEB INFRASTRUCTURE] Web server bound to port {port} ({len(self.web_app.router.routes())} routes).", flush=True)
 
     async def get_guild_settings(self, guild_id: str) -> dict:
         try:

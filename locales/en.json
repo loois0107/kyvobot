@@ -274,5 +274,14 @@
   "tier_verify_success": "✅ Verified `{gameName}#{tagLine}` — **{tier} {rank}** ({lp} LP). You've been given the **{role}** role.",
   "tier_verify_success_no_role_mapped": "✅ Verified `{gameName}#{tagLine}` — **{tier} {rank}** ({lp} LP). No role is mapped to this tier yet; ask an admin to run `/tier_role_set`.",
   "riot_region_set_success": "✅ This server's League of Legends region is now set to `{region}`.",
-  "party_not_configured": "⚠️ Something went wrong setting up this party. Please contact a server administrator."
+  "party_not_configured": "⚠️ Something went wrong setting up this party. Please contact a server administrator.",
+  "twitch_channel_set_success": "✅ `{streamer}` will be announced in {channel} when they go live.",
+  "twitch_channel_set_success_with_role": "✅ `{streamer}` will be announced in {channel}, and {member} will get the **{role}** role while live.",
+  "twitch_channel_remove_success": "✅ `{streamer}` removed from this server's notifications.",
+  "twitch_channel_not_registered": "❌ `{streamer}` isn't registered in this server.",
+  "twitch_err_streamer_not_found": "❌ No Twitch channel found for `{streamer}`. Double-check the spelling.",
+  "twitch_err_subscription_failed": "❌ Failed to set up Twitch notifications right now. Please try again later.",
+  "twitch_err_channel_permission": "❌ The bot doesn't have permission to send messages/embeds in {channel}.",
+  "twitch_err_role_needs_member": "❌ Please specify which member should receive the role.",
+  "twitch_live_announcement_body": "🔴 **{streamer}** just went live on Twitch!{game_suffix}\n{url}"
 }
