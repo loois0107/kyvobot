@@ -44,6 +44,7 @@ class KyvoBot(commands.Bot):
             'cogs.party',
             'cogs.tier_verify',
             'cogs.twitch',
+            'cogs.cs2_flex',
         ]
         print(">>> Loading extensions... <<<", flush=True)
 

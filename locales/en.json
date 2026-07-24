@@ -283,5 +283,14 @@
   "twitch_err_subscription_failed": "❌ Failed to set up Twitch notifications right now. Please try again later.",
   "twitch_err_channel_permission": "❌ The bot doesn't have permission to send messages/embeds in {channel}.",
   "twitch_err_role_needs_member": "❌ Please specify which member should receive the role.",
-  "twitch_live_announcement_body": "🔴 **{streamer}** just went live on Twitch!{game_suffix}\n{url}"
+  "twitch_live_announcement_body": "🔴 **{streamer}** just went live on Twitch!{game_suffix}\n{url}",
+  "cs2_link_success": "✅ Linked to Steam account **{persona}**.",
+  "cs2_err_invalid_steamid": "❌ Couldn't find a Steam account for that ID/URL. Double-check it and try again.",
+  "cs2_err_lookup_failed": "❌ Steam's servers didn't respond properly. Please try again later.",
+  "cs2_err_save_failed": "❌ Failed to save your Steam link right now. Please try again later.",
+  "cs2_err_no_linked_members": "❌ No members in this server have linked a Steam account yet (`/steam_link`).",
+  "cs2_err_no_valid_inventories": "❌ None of the linked accounts could be checked right now (private inventories or Steam errors). Please try again later.",
+  "cs2_flex_title": "🏆 Today's CS2 Flex Champion",
+  "cs2_flex_winner_line": "{member} takes the crown with a score of **{score}** across {count} items!",
+  "cs2_flex_footer_skipped_private": "{count} linked member(s) skipped - private inventory."
 }

@@ -283,5 +283,14 @@
   "twitch_err_subscription_failed": "❌ 지금 트위치 알림 설정에 실패했습니다. 잠시 후 다시 시도해주세요.",
   "twitch_err_channel_permission": "❌ 봇이 {channel}에 메시지/임베드를 보낼 권한이 없습니다.",
   "twitch_err_role_needs_member": "❌ 역할을 받을 멤버를 함께 지정해주세요.",
-  "twitch_live_announcement_body": "🔴 **{streamer}**님이 트위치 방송을 시작했습니다!{game_suffix}\n{url}"
+  "twitch_live_announcement_body": "🔴 **{streamer}**님이 트위치 방송을 시작했습니다!{game_suffix}\n{url}",
+  "cs2_link_success": "✅ 스팀 계정 **{persona}**와 연동되었습니다.",
+  "cs2_err_invalid_steamid": "❌ 해당 ID/URL로 스팀 계정을 찾을 수 없습니다. 다시 확인해주세요.",
+  "cs2_err_lookup_failed": "❌ 스팀 서버 응답에 문제가 있습니다. 잠시 후 다시 시도해주세요.",
+  "cs2_err_save_failed": "❌ 지금 스팀 연동 저장에 실패했습니다. 잠시 후 다시 시도해주세요.",
+  "cs2_err_no_linked_members": "❌ 이 서버엔 아직 스팀 계정을 연동한 멤버가 없습니다 (`/steam_link`).",
+  "cs2_err_no_valid_inventories": "❌ 연동된 계정을 지금은 하나도 조회할 수 없었습니다 (비공개 인벤토리 또는 스팀 오류). 잠시 후 다시 시도해주세요.",
+  "cs2_flex_title": "🏆 오늘의 CS2 인벤토리 부자",
+  "cs2_flex_winner_line": "{member}님이 총 {count}개 아이템, 점수 **{score}**로 1위를 차지했습니다!",
+  "cs2_flex_footer_skipped_private": "연동된 멤버 {count}명은 비공개 인벤토리라 제외되었습니다."
 }
