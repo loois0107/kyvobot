@@ -9,6 +9,35 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 import aiohttp
 
+
+def clean_hex_color(hex_str, fallback):
+    if not hex_str:
+        return fallback
+    clean = str(hex_str).strip()
+    if not clean.startswith('#'):
+        clean = f"#{clean}"
+    return clean if len(clean) in [4, 7, 9] else fallback
+
+
+def resolve_card_settings(leveling_set: dict, user_override: dict | None) -> dict:
+    """서버 기본값(leveling_set)과 개인 대시보드 오버라이드(user_override)를 필드 단위로
+    합친다 - 오버라이드에 값이 있으면(None이 아니면) 그걸 쓰고, 없으면 서버 기본값,
+    그마저 없으면 하드코딩된 최종 폴백. user_override가 None/빈 dict여도 안전하게 동작한다."""
+    user_override = user_override or {}
+    return {
+        "card_color": clean_hex_color(
+            user_override.get("card_color") or leveling_set.get("card_color"), "#5865F2"),
+        "card_bg_color": clean_hex_color(
+            user_override.get("card_bg_color") or leveling_set.get("card_bg_color"), "#1E1F22"),
+        "overlay_opacity": float(
+            user_override.get("overlay_opacity")
+            if user_override.get("overlay_opacity") is not None
+            else leveling_set.get("overlay_opacity", 0.6)),
+        "background_url": str(
+            user_override.get("background_url") or leveling_set.get("background_url", "")).strip(),
+    }
+
+
 class KyvoLeveling(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
@@ -167,16 +196,23 @@ class KyvoLeveling(KyvoBaseCog):
         nested_settings = row.get("settings") or {}
         leveling_set = nested_settings.get("leveling_settings") or {}
 
-        def clean_hex_color(hex_str, fallback):
-            if not hex_str: return fallback
-            clean = str(hex_str).strip()
-            if not clean.startswith('#'): clean = f"#{clean}"
-            return clean if len(clean) in [4, 7, 9] else fallback
+        # 🛡️ 개인 대시보드 오버라이드 - 필드 단위로 서버 기본값보다 우선한다. 행이 없거나
+        # DB 조회가 실패해도(장애 포함) 서버 기본값으로 조용히 폴백하지, 카드 생성 자체를 막지 않는다.
+        user_override = None
+        try:
+            override_res = self.bot.supabase.table("user_card_overrides").select("*") \
+                .eq("guild_id", str(guild_id)).eq("user_id", user_id).execute()
+            if override_res.data:
+                user_override = override_res.data[0]
+        except Exception as e:
+            print(f"[RANK_CARD][WARN] Failed to fetch user_card_overrides (guild={guild_id}, user={user_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
 
-        card_color = clean_hex_color(leveling_set.get("card_color"), "#5865F2")
-        card_bg_color = clean_hex_color(leveling_set.get("card_bg_color"), "#1E1F22")
-        overlay_opacity = float(leveling_set.get("overlay_opacity", 0.6))
-        background_url = str(leveling_set.get("background_url", "")).strip()
+        card_settings = resolve_card_settings(leveling_set, user_override)
+        card_color = card_settings["card_color"]
+        card_bg_color = card_settings["card_bg_color"]
+        overlay_opacity = card_settings["overlay_opacity"]
+        background_url = card_settings["background_url"]
 
         user_data = await self.bot.get_user_data(user_id, str(guild_id))
         current_xp = user_data.get("xp", 0)
