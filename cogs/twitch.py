@@ -36,6 +36,11 @@ for _name, _val in (
             "https://kyvobot.onrender.com/webhooks/twitch)."
         )
 
+# 🛡️ 대시보드 트위치 관리 페이지가 스트리머 삭제를 이 봇에게 위임할 때 쓰는 내부 전용 시크릿.
+# party.py의 tier-role 정리 웹훅과 동일한 패턴 - 없어도 이 코그 자체는 정상 동작하고
+# (슬래시 커맨드는 이 시크릿과 무관), 대시보드發 삭제 요청 라우트만 등록을 건너뛴다.
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
+
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_HELIX_BASE = "https://api.twitch.tv/helix"
 TWITCH_POLL_INTERVAL_MINUTES = 5
@@ -104,6 +109,13 @@ class KyvoTwitch(KyvoBaseCog):
     async def cog_load(self):
         self.bot.web_app.router.add_post(TWITCH_WEBHOOK_PATH, self.handle_webhook)
         print(f"[⚡ TWITCH] Webhook route registered at {TWITCH_WEBHOOK_PATH}.", flush=True)
+
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/twitch/remove", self.handle_remove_webhook)
+            print("[⚡ TWITCH] Internal streamer-removal route registered at /internal/twitch/remove.", flush=True)
+        else:
+            print("[TWITCH][WARN] INTERNAL_API_SECRET not set - dashboard-triggered streamer removal "
+                  "is disabled (the /twitch_channel_remove command still works).", flush=True)
 
     async def cog_unload(self):
         self.reconcile_streams.cancel()
@@ -358,6 +370,21 @@ class KyvoTwitch(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
+        result = await self._remove_streamer_for_guild(guild_id, streamer_row)
+        if not result["removed"]:
+            msg = await self.get_msg(guild_id, "twitch_channel_not_registered", streamer=streamer)
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        msg = await self.get_msg(guild_id, "twitch_channel_remove_success", streamer=streamer)
+        await interaction.followup.send(msg, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════
+    #  스트리머 삭제 - /twitch_channel_remove 커맨드와 대시보드(내부 웹훅) 둘 다 이 함수 하나를
+    #  공유한다. 작업량이 항상 작고 유계(행 삭제 몇 개 + 구독 취소 최대 2개)라 tier-role 정리와
+    #  달리 백그라운드로 뺄 필요 없이 그 자리에서 끝내고 정확한 결과를 반환한다.
+    # ══════════════════════════════════════════════════════════
+    async def _remove_streamer_for_guild(self, guild_id: int, streamer_row: dict) -> dict:
         broadcaster_id = streamer_row["broadcaster_id"]
 
         try:
@@ -368,18 +395,13 @@ class KyvoTwitch(KyvoBaseCog):
         except Exception as e:
             print(f"[TWITCH][ERROR] Failed to delete guild config (guild={guild_id}, broadcaster={broadcaster_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ An error occurred.", ephemeral=True)
-            return
+            return {"removed": False, "subscriptions_also_removed": False}
 
         if not del_res.data:
-            msg = await self.get_msg(guild_id, "twitch_channel_not_registered", streamer=streamer)
-            await interaction.followup.send(msg, ephemeral=True)
-            return
-
-        msg = await self.get_msg(guild_id, "twitch_channel_remove_success", streamer=streamer)
-        await interaction.followup.send(msg, ephemeral=True)
+            return {"removed": False, "subscriptions_also_removed": False}
 
         # 이 스트리머를 참조하는 길드가 더 없으면 구독 자체를 정리 (안 쓰는 구독 방치 방지).
+        subscriptions_also_removed = False
         try:
             remaining = await self._db_call(
                 lambda: self.bot.supabase.table("twitch_guild_configs").select("guild_id").eq("broadcaster_id", broadcaster_id).execute()
@@ -395,8 +417,45 @@ class KyvoTwitch(KyvoBaseCog):
                 await self._db_call(
                     lambda: self.bot.supabase.table("twitch_streamers").delete().eq("broadcaster_id", broadcaster_id).execute()
                 )
+                subscriptions_also_removed = True
         except Exception as e:
             print(f"[TWITCH][ERROR] Failed to clean up unused streamer {broadcaster_id}: {type(e).__name__}: {e}", flush=True)
+
+        return {"removed": True, "subscriptions_also_removed": subscriptions_also_removed}
+
+    async def handle_remove_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[TWITCH][WARN] Rejected streamer-removal request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        broadcaster_id = body.get("broadcaster_id")
+        if not guild_id or not broadcaster_id:
+            return web.Response(status=400, text="guild_id and broadcaster_id are required")
+
+        try:
+            srow = await self._db_call(
+                lambda: self.bot.supabase.table("twitch_streamers").select("*").eq("broadcaster_id", broadcaster_id).execute()
+            )
+            streamer_row = srow.data[0] if srow.data else None
+        except Exception as e:
+            print(f"[TWITCH][ERROR] Failed to look up streamer {broadcaster_id} for removal: {type(e).__name__}: {e}", flush=True)
+            return web.Response(status=500)
+
+        if streamer_row is None:
+            return web.Response(status=404, text="streamer not found")
+
+        result = await self._remove_streamer_for_guild(int(guild_id), streamer_row)
+        if not result["removed"]:
+            return web.Response(status=404, text="not registered for this guild")
+
+        return web.json_response(result)
 
     # ══════════════════════════════════════════════════════════
     #  전이(claim) 처리 - 원자적 조건부 UPDATE로 중복 웹훅/폴링 레이스를 흡수한다
