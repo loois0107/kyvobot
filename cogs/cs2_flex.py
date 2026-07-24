@@ -151,8 +151,10 @@ class KyvoCS2Flex(KyvoBaseCog):
             async with session.get(url, params={"l": "english", "count": 5000}, headers=STEAM_BROWSER_HEADERS,
                                     timeout=aiohttp.ClientTimeout(total=CS2_HTTP_TIMEOUT_SECONDS)) as resp:
                 if resp.status == 403:
+                    print(f"[CS2][WARN] Inventory fetch for {steam_id64} returned 403 (private inventory)", flush=True)
                     return {"status": "private"}
                 if resp.status == 429:
+                    print(f"[CS2][WARN] Inventory fetch for {steam_id64} rate limited (429) by Steam", flush=True)
                     return {"status": "rate_limited"}
                 if resp.status != 200:
                     print(f"[CS2][WARN] Inventory fetch for {steam_id64} returned status {resp.status}", flush=True)
@@ -167,10 +169,13 @@ class KyvoCS2Flex(KyvoBaseCog):
 
         if not data or data.get("success") != 1:
             # 비공개 인벤토리는 403이 아니라 200+success!=1로 오는 경우도 실측으로 확인됨.
+            print(f"[CS2][WARN] Inventory fetch for {steam_id64} returned 200 but success!={data.get('success') if data else None} "
+                  f"(treated as private)", flush=True)
             return {"status": "private"}
 
         assets = data.get("assets") or []
         if not assets:
+            print(f"[CS2][INFO] Inventory fetch for {steam_id64} succeeded but has no CS2 items (empty)", flush=True)
             return {"status": "empty"}
 
         return {"status": "ok", "descriptions": data.get("descriptions") or [], "assets": assets}
