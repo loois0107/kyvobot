@@ -15,9 +15,17 @@ INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 
 PARTY_MIN_NEEDED_COUNT = 2
 PARTY_MAX_NEEDED_COUNT = 10
+# 대시보드에서 party_settings를 설정 안 한 길드를 위한 기본값(폴백) - 상수 자체는 안 지운다.
 PARTY_CARD_LIFETIME_MINUTES = 60
 PARTY_CHANNEL_LIFETIME_HOURS = 6
 PARTY_CHECK_INTERVAL_SECONDS = 30
+
+# 대시보드 party-settings 페이지가 저장을 거부해야 하는 범위 - giveaway.py의
+# GIVEAWAY_MIN/MAX_DURATION_MINUTES와 동일한 정신(너무 짧으면 기능이 무의미, 너무 길면 좀비 방치).
+PARTY_CARD_LIFETIME_MIN_MINUTES = 5
+PARTY_CARD_LIFETIME_MAX_MINUTES = 1440  # 24시간
+PARTY_CHANNEL_LIFETIME_MIN_HOURS = 1
+PARTY_CHANNEL_LIFETIME_MAX_HOURS = 48
 
 # 참여 버튼의 custom_id - 재시작 후에도 discord.py가 이 문자열만으로 콜백을 다시 찾아
 # 연결할 수 있어야 하므로 고정 문자열이어야 한다 (recruitment_id는 여기 넣지 않는다 -
@@ -41,6 +49,50 @@ DANGEROUS_ROLE_PERMISSIONS = (
 def _get_dangerous_permissions(role: discord.Role) -> list[str]:
     perms = role.permissions
     return [name for name in DANGEROUS_ROLE_PERMISSIONS if getattr(perms, name, False)]
+
+
+def clean_hex_color(hex_str, fallback: str) -> str:
+    """leveling.py의 동명 함수와 동일한 안전 파싱 - 형식이 이상하면(길이가 안 맞는 등) 조용히
+    폴백값을 쓴다. 여기서도 복제해서 쓰는 이유는 각 코그가 자기 완결적이어야 한다는 이번 세션의
+    관례를 따르기 위함이다."""
+    if not hex_str:
+        return fallback
+    clean = str(hex_str).strip()
+    if not clean.startswith('#'):
+        clean = f"#{clean}"
+    return clean if len(clean) in (4, 7, 9) else fallback
+
+
+def resolve_party_settings(party_settings: dict | None) -> dict:
+    """대시보드가 저장한 party_settings를 안전하게 정규화한다 - 값이 없거나(미설정 길드),
+    형식이 이상해도(수동 DB 편집 등) 항상 안전한 기본값으로 폴백하고 절대 크래시하지 않는다.
+    범위를 벗어난 숫자값도 여기서 조용히 기본값으로 되돌린다 - 실제 저장 시점 검증(대시보드
+    API)이 이 범위를 이미 강제하므로, 여기서 걸리는 건 그 검증을 우회한 비정상 데이터뿐이다."""
+    party_settings = party_settings or {}
+
+    card_color = clean_hex_color(party_settings.get("card_color"), "#5865F2")
+    card_description = str(party_settings.get("card_description") or "").strip()
+
+    try:
+        card_lifetime_minutes = int(party_settings.get("card_lifetime_minutes"))
+    except (TypeError, ValueError):
+        card_lifetime_minutes = PARTY_CARD_LIFETIME_MINUTES
+    if not (PARTY_CARD_LIFETIME_MIN_MINUTES <= card_lifetime_minutes <= PARTY_CARD_LIFETIME_MAX_MINUTES):
+        card_lifetime_minutes = PARTY_CARD_LIFETIME_MINUTES
+
+    try:
+        channel_lifetime_hours = int(party_settings.get("channel_lifetime_hours"))
+    except (TypeError, ValueError):
+        channel_lifetime_hours = PARTY_CHANNEL_LIFETIME_HOURS
+    if not (PARTY_CHANNEL_LIFETIME_MIN_HOURS <= channel_lifetime_hours <= PARTY_CHANNEL_LIFETIME_MAX_HOURS):
+        channel_lifetime_hours = PARTY_CHANNEL_LIFETIME_HOURS
+
+    return {
+        "card_color": card_color,
+        "card_description": card_description,
+        "card_lifetime_minutes": card_lifetime_minutes,
+        "channel_lifetime_hours": channel_lifetime_hours,
+    }
 
 
 class RoleWarningConfirmView(discord.ui.View):
@@ -239,7 +291,11 @@ class KyvoParty(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=PARTY_CARD_LIFETIME_MINUTES)
+        # 🛡️ 대시보드에서 설정한 마감시간을 쓴다 - 여기서 계산한 절대시각이 그대로 DB에 저장되므로,
+        # 나중에 관리자가 설정을 바꿔도 이미 만들어진 이 모집엔 소급 적용되지 않는다(의도된 동작).
+        guild_settings_row = await self.get_guild_settings(guild_id)
+        party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=party_settings["card_lifetime_minutes"])
 
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         try:
@@ -359,8 +415,11 @@ class KyvoParty(KyvoBaseCog):
             description = await self.get_msg(guild_id, "party_cancelled_notice")
             color = discord.Color.red()
         else:
-            description = None
-            color = discord.Color.blurple()
+            # 🛡️ "모집 중" 상태만 대시보드 커스터마이징 대상 - 마감/꽉참/취소 색상은 그대로 고정.
+            guild_settings_row = await self.get_guild_settings(guild_id)
+            party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
+            description = party_settings["card_description"] or None
+            color = discord.Colour.from_str(party_settings["card_color"])
 
         embed = discord.Embed(title=title, description=description, color=color)
         embed.add_field(name=leader_label, value=f"<@{row['leader_id']}>", inline=True)
@@ -515,7 +574,9 @@ class KyvoParty(KyvoBaseCog):
                   f"{type(e).__name__}: {e}", flush=True)
             return
 
-        channel_expires_at = datetime.now(timezone.utc) + timedelta(hours=PARTY_CHANNEL_LIFETIME_HOURS)
+        guild_settings_row = await self.get_guild_settings(guild_id)
+        party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
+        channel_expires_at = datetime.now(timezone.utc) + timedelta(hours=party_settings["channel_lifetime_hours"])
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_recruitments").update({
