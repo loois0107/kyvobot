@@ -3,7 +3,15 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from cogs.base import KyvoBaseCog
 import asyncio
+import os
+import hmac
 from datetime import datetime, timezone, timedelta
+from aiohttp import web
+
+# 🛡️ 대시보드 tier-roles 일괄 편집기가 재매핑 시 "이전 역할 보유자 정리"를 이 봇에게 위임할 때
+# 쓰는 내부 전용 시크릿. 없어도 party 코그 자체는 정상 동작한다(슬래시 커맨드 쪽 정리는 이 시크릿과
+# 무관하게 항상 작동) - 대시보드發 정리 요청 라우트만 등록을 건너뛴다.
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 
 PARTY_MIN_NEEDED_COUNT = 2
 PARTY_MAX_NEEDED_COUNT = 10
@@ -124,6 +132,14 @@ class KyvoParty(KyvoBaseCog):
         super().__init__(bot)
         self.check_party_timers.start()
 
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/tier-roles/cleanup", self.handle_tier_cleanup_webhook)
+            print("[⚡ PARTY] Internal tier-role cleanup route registered at /internal/tier-roles/cleanup.", flush=True)
+        else:
+            print("[PARTY][WARN] INTERNAL_API_SECRET not set - dashboard-triggered stale tier-role "
+                  "cleanup is disabled (the /tier_role_set command's own cleanup still works).", flush=True)
+
     async def cog_unload(self):
         self.check_party_timers.cancel()
 
@@ -131,6 +147,69 @@ class KyvoParty(KyvoBaseCog):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, fn)
+
+    # ══════════════════════════════════════════════════════════
+    #  재매핑 시 이전 역할 정리 - /tier_role_set과 대시보드(내부 웹훅) 둘 다 이 함수 하나를 공유한다.
+    #  절대 응답을 블로킹하지 않도록 항상 asyncio.create_task로 백그라운드 실행하는 걸 전제로 짰다
+    #  (멤버가 수백 명이면 개별 remove_roles 호출이 rate limit에 걸려 수 초~수십 초 걸릴 수 있음).
+    #  개별 멤버 실패는 로그만 남기고 나머지 멤버 정리를 계속 진행한다.
+    # ══════════════════════════════════════════════════════════
+    async def _cleanup_stale_tier_role(self, guild: discord.Guild, old_role_id: int, tier: str) -> None:
+        old_role = guild.get_role(old_role_id)
+        if old_role is None:
+            print(f"[PARTY][WARN] Stale '{tier}' role {old_role_id} no longer exists, nothing to clean up "
+                  f"(guild={guild.id})", flush=True)
+            return
+
+        members_with_role = list(old_role.members)
+        if not members_with_role:
+            return
+
+        print(f"[PARTY] Cleaning up stale '{tier}' role '{old_role.name}' from {len(members_with_role)} "
+              f"member(s) (guild={guild.id})", flush=True)
+
+        success_count = 0
+        fail_count = 0
+        for member in members_with_role:
+            try:
+                await member.remove_roles(old_role, reason=f"[KYVO TIER REMAP] '{tier}' tier role changed, removing stale assignment")
+                success_count += 1
+            except discord.Forbidden:
+                fail_count += 1
+                print(f"[PARTY][ERROR] Forbidden while removing stale '{tier}' role from user={member.id} "
+                      f"(guild={guild.id})", flush=True)
+            except discord.HTTPException as e:
+                fail_count += 1
+                print(f"[PARTY][ERROR] HTTPException while removing stale '{tier}' role from user={member.id}: "
+                      f"{type(e).__name__}: {e} (guild={guild.id})", flush=True)
+
+        print(f"[PARTY] Stale '{tier}' role cleanup complete (guild={guild.id}): "
+              f"{success_count} removed, {fail_count} failed", flush=True)
+
+    async def handle_tier_cleanup_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[PARTY][WARN] Rejected tier-role cleanup request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        tier = body.get("tier")
+        old_role_id = body.get("old_role_id")
+        if not guild_id or not tier or not old_role_id:
+            return web.Response(status=400, text="guild_id, tier, old_role_id are required")
+
+        guild = self.bot.get_guild(int(guild_id))
+        if guild is None:
+            print(f"[PARTY][WARN] Tier-role cleanup requested for guild {guild_id} but bot isn't in it (or cache empty)", flush=True)
+            return web.Response(status=404)
+
+        asyncio.create_task(self._cleanup_stale_tier_role(guild, int(old_role_id), str(tier)))
+        return web.Response(status=202)
 
     # ══════════════════════════════════════════════════════════
     #  /party_recruit
@@ -755,6 +834,18 @@ class KyvoParty(KyvoBaseCog):
             if not confirmed:
                 return  # 뷰 안에서 취소/타임아웃 메시지 이미 전송함
 
+        # 🛡️ 재매핑(이미 이 티어에 다른 역할이 매핑돼 있던 경우) 감지 - upsert 전에 이전 값을
+        # 미리 알아둬야, 저장 후 그 이전 역할을 실제로 갖고 있는 멤버들을 정리할 수 있다.
+        try:
+            existing_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_tier_roles").select("role_id")
+                        .eq("guild_id", str(guild_id)).eq("tier", tier.value).execute()
+            )
+            old_role_id = existing_res.data[0]["role_id"] if existing_res.data else None
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to check existing tier role mapping before upsert: {type(e).__name__}: {e}", flush=True)
+            old_role_id = None
+
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_tier_roles").upsert({
@@ -768,6 +859,9 @@ class KyvoParty(KyvoBaseCog):
 
         msg = await self.get_msg(guild_id, "party_tier_role_saved", tier=tier.value, role=role.name)
         await interaction.followup.send(msg, ephemeral=True)
+
+        if old_role_id and old_role_id != str(role.id):
+            asyncio.create_task(self._cleanup_stale_tier_role(interaction.guild, int(old_role_id), tier.value))
 
     async def _confirm_dangerous_role(self, interaction: discord.Interaction, role: discord.Role, dangerous: list[str]) -> bool:
         guild_id = interaction.guild_id
