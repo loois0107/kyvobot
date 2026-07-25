@@ -130,6 +130,36 @@ def select_party_card_design(base_party_settings: dict, preset_row: dict | None)
     }
 
 
+PARTY_MIN_TIER_ANY_VALUE = "Any"  # /party_recruit의 min_tier 드롭다운 전용 선택지 - TIER_CHOICES엔 없음
+PARTY_LOOKING_FOR_ROLE_MAX_LENGTH = 100  # lanes 필드와 동일한 자유 텍스트 길이 상한
+
+
+def normalize_min_tier(min_tier: str | None) -> str | None:
+    """"Any"나 빈 값, TIER_CHOICES에 없는 값(수동 DB 편집 등)은 전부 None(조건 없음)으로
+    정규화한다 - 강제 검증은 안 하지만, 나중에 실제 검증을 얹을 때 riot_verifications.tier와
+    바로 비교 가능하도록 저장값 자체는 TIER_CHOICES와 정확히 일치하는 문자열이거나 None만
+    허용한다."""
+    if not min_tier:
+        return None
+    cleaned = str(min_tier).strip()
+    if cleaned == PARTY_MIN_TIER_ANY_VALUE or cleaned not in TIER_CHOICES:
+        return None
+    return cleaned
+
+
+def resolve_looking_for_line(min_tier: str | None, looking_for_role: str | None) -> str:
+    """카드에 보여줄 "Looking For" 한 줄을 만든다. 둘 다 없으면 빈 문자열을 반환하고,
+    호출부는 이걸 "필드 자체를 생략하라"는 신호로 쓴다(순수 정보 표시일 뿐 강제 검증은 없다)."""
+    parts = []
+    tier = normalize_min_tier(min_tier)
+    if tier:
+        parts.append(f"{tier}+")
+    role = str(looking_for_role or "").strip()[:PARTY_LOOKING_FOR_ROLE_MAX_LENGTH]
+    if role:
+        parts.append(role)
+    return " · ".join(parts)
+
+
 class RoleWarningConfirmView(discord.ui.View):
     """위험 권한 역할을 티어 역할로 등록하기 전 마지막 확인. custom_commands.py/reaction_roles.py의
     동명 View와 동일한 패턴(각 cog가 자기 완결적이도록 복제)."""
@@ -179,20 +209,26 @@ class PartyRecruitmentModal(discord.ui.Modal):
     추가하는 확장 경로로 남겨둔다)."""
 
     def __init__(self, cog: "KyvoParty", title: str, queue_label: str, lanes_label: str, count_label: str,
-                 selected_game: str | None = None):
+                 looking_for_role_label: str, selected_game: str | None = None, min_tier: str | None = None):
         super().__init__(title=title[:45])
         self.cog = cog
         self.selected_game = selected_game
+        self.min_tier = min_tier
         self.queue_input = discord.ui.TextInput(label=queue_label[:45], max_length=50, required=True)
         self.lanes_input = discord.ui.TextInput(label=lanes_label[:45], max_length=100, required=False)
         self.count_input = discord.ui.TextInput(label=count_label[:45], max_length=3, required=True)
+        self.looking_for_role_input = discord.ui.TextInput(
+            label=looking_for_role_label[:45], max_length=PARTY_LOOKING_FOR_ROLE_MAX_LENGTH, required=False,
+        )
         self.add_item(self.queue_input)
         self.add_item(self.lanes_input)
         self.add_item(self.count_input)
+        self.add_item(self.looking_for_role_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         await self.cog.handle_recruitment_submit(interaction, self.queue_input.value, self.lanes_input.value,
-                                                   self.count_input.value, self.selected_game)
+                                                   self.count_input.value, self.selected_game,
+                                                   self.min_tier, self.looking_for_role_input.value)
 
 
 class PartyCardView(discord.ui.View):
@@ -415,9 +451,14 @@ class KyvoParty(KyvoBaseCog):
     #  /party_recruit
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="party_recruit", description="Open a party recruitment post.")
-    @app_commands.describe(game="Optional - pick a saved game preset for this recruitment card's look")
+    @app_commands.describe(
+        game="Optional - pick a saved game preset for this recruitment card's look",
+        min_tier="Optional - shown on the card as an informational preference, never enforced",
+    )
     @app_commands.autocomplete(game=_game_preset_autocomplete)
-    async def party_recruit(self, interaction: discord.Interaction, game: str = None):
+    @app_commands.choices(min_tier=[app_commands.Choice(name=t, value=t) for t in TIER_CHOICES]
+                           + [app_commands.Choice(name=PARTY_MIN_TIER_ANY_VALUE, value=PARTY_MIN_TIER_ANY_VALUE)])
+    async def party_recruit(self, interaction: discord.Interaction, game: str = None, min_tier: str = None):
         guild_id = interaction.guild_id
 
         # 자동완성은 후보만 제안할 뿐 강제하지 않는다 - 존재하지 않는 값이면 모달을 열기 전에
@@ -433,11 +474,14 @@ class KyvoParty(KyvoBaseCog):
         queue_label = await self.get_msg(guild_id, "party_modal_queue_label")
         lanes_label = await self.get_msg(guild_id, "party_modal_lanes_label")
         count_label = await self.get_msg(guild_id, "party_modal_needed_count_label")
-        modal = PartyRecruitmentModal(self, title, queue_label, lanes_label, count_label, selected_game=game)
+        looking_for_role_label = await self.get_msg(guild_id, "party_modal_looking_for_role_label")
+        modal = PartyRecruitmentModal(self, title, queue_label, lanes_label, count_label, looking_for_role_label,
+                                       selected_game=game, min_tier=min_tier)
         await interaction.response.send_modal(modal)
 
     async def handle_recruitment_submit(self, interaction: discord.Interaction, queue_type: str, lanes: str,
-                                         count_str: str, selected_game: str | None = None) -> None:
+                                         count_str: str, selected_game: str | None = None,
+                                         min_tier: str | None = None, looking_for_role: str | None = None) -> None:
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
 
@@ -470,6 +514,8 @@ class KyvoParty(KyvoBaseCog):
                     "needed_count": needed_count,
                     "expires_at": expires_at.isoformat(),
                     "selected_game": selected_game or None,
+                    "min_tier": normalize_min_tier(min_tier),
+                    "looking_for_role": (looking_for_role or "").strip()[:PARTY_LOOKING_FOR_ROLE_MAX_LENGTH] or None,
                 }).execute()
             )
             recruitment_row = insert_res.data[0] if insert_res.data else None
@@ -574,6 +620,7 @@ class KyvoParty(KyvoBaseCog):
         queue_label = await self.get_msg(guild_id, "party_field_queue_type")
         count_label = await self.get_msg(guild_id, "party_field_count")
         expires_label = await self.get_msg(guild_id, "party_field_expires")
+        looking_for_label = await self.get_msg(guild_id, "party_field_looking_for")
 
         game_name = ""
         card_thumbnail_url = ""
@@ -629,6 +676,13 @@ class KyvoParty(KyvoBaseCog):
         if row.get("lanes"):
             queue_value = f"{queue_value} · {row['lanes']}"
         embed.add_field(name=queue_label, value=queue_value, inline=True)
+
+        # 🛡️ 순수 정보 표시용 - 참여 버튼은 이 값과 무관하게 항상 클릭 가능하다(강제 검증 없음).
+        # 둘 다 없으면 필드 자체를 생략해서, 안 쓰는 모집은 지금까지와 완전히 같은 카드로 보인다.
+        looking_for_line = resolve_looking_for_line(row.get("min_tier"), row.get("looking_for_role"))
+        if looking_for_line:
+            embed.add_field(name=looking_for_label, value=looking_for_line, inline=True)
+
         embed.add_field(name=count_label, value=f"`{current_count}/{row['needed_count']}`", inline=True)
         if not finished and not expired and not cancelled:
             ends_at = datetime.fromisoformat(row["expires_at"])
