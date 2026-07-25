@@ -1009,10 +1009,20 @@ class KyvoEconomy(KyvoBaseCog):
             color=0x5865f2,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
+        # 🛡️ [방어적 읽기] 필드명이 안 맞는 항목(예: 예전 대시보드 버그가 남긴 'title' 키 등) 하나
+        # 때문에 상점 목록 전체가 KeyError로 죽으면 안 된다 - 로그만 남기고 안전한 기본값으로 표시한다.
         for item in shop_items:
+            if not isinstance(item, dict):
+                print(f"[SHOP][WARN] Skipping non-dict shop item (guild={interaction.guild_id}): {item!r}", flush=True)
+                continue
+            if "name" not in item:
+                print(f"[SHOP][WARN] Shop item missing 'name' key (guild={interaction.guild_id}): {item!r}", flush=True)
+            item_name = item.get("name", "Unknown Item")
+            item_price = item.get("price", 0)
+            item_desc = item.get("description", "")
             embed.add_field(
-                name=f"📦 {item['name']}",
-                value=f"💵 Price: **{item['price']:,}** {currency_name}\n📝 *{item['description']}*",
+                name=f"📦 {item_name}",
+                value=f"💵 Price: **{item_price:,}** {currency_name}\n📝 *{item_desc}*",
                 inline=False
             )
         embed.set_footer(text="KyvoBot Custom Guild Commerce Layer")
@@ -1041,7 +1051,7 @@ class KyvoEconomy(KyvoBaseCog):
         economy_set = nested_settings.get("economy_settings") or {}
         shop_items = economy_set.get("shop_items", [])
 
-        if any(item['name'].lower() == name.lower() for item in shop_items):
+        if any(isinstance(item, dict) and item.get('name', '').lower() == name.lower() for item in shop_items):
             await interaction.followup.send("❌ Duplicate Item Identifier! An item with that configuration metadata already exists.", ephemeral=True)
             return
 
@@ -1078,14 +1088,28 @@ class KyvoEconomy(KyvoBaseCog):
             currency_name = economy_set.get("currency_name", "Points")
             shop_items = economy_set.get("shop_items", [])
 
-            target_item = next((item for item in shop_items if item['name'].lower() == item_name.lower()), None)
+            # 🛡️ [방어적 읽기] 필드명이 안 맞는 항목이 섞여 있어도 검색/구매 전체가 죽지 않게 한다.
+            target_item = next(
+                (item for item in shop_items if isinstance(item, dict) and item.get('name', '').lower() == item_name.lower()),
+                None,
+            )
             if not target_item:
                 await interaction.followup.send(f"❌ Asset lookup failure: '**{item_name}**' does not exist inside the shop index.")
                 return
 
+            item_price = target_item.get("price")
+            if not isinstance(item_price, (int, float)) or item_price <= 0:
+                # 🛡️ 가격이 없거나 이상한 값이면 0원 구매를 허용하는 대신 명확히 막는다 - 재화가
+                # 걸린 로직은 조용히 기본값으로 넘어가면 안 된다.
+                print(f"[SHOP][ERROR] Item '{item_name}' has an invalid/missing price (guild={interaction.guild_id}): {target_item!r}", flush=True)
+                await interaction.followup.send(
+                    "❌ This item is misconfigured (invalid price) and can't be purchased right now. Please contact a server admin.",
+                    ephemeral=True,
+                )
+                return
+
             user_data = await self.bot.get_user_data(user_id, str(interaction.guild_id))
             current_points = user_data.get("points", 0)
-            item_price = target_item["price"]
 
             if current_points < item_price:
                 await interaction.followup.send(f"❌ Settle Order Denied: You require **{item_price:,}** {currency_name}, but only hold **{current_points:,}**.")
@@ -1094,11 +1118,14 @@ class KyvoEconomy(KyvoBaseCog):
             user_data["points"] = current_points - item_price
             inventory = user_data.get("inventory", [])
 
-            inv_item = next((item for item in inventory if item['name'].lower() == item_name.lower()), None)
+            inv_item = next(
+                (item for item in inventory if isinstance(item, dict) and item.get('name', '').lower() == item_name.lower()),
+                None,
+            )
             if inv_item:
                 inv_item["quantity"] = inv_item.get("quantity", 1) + 1
             else:
-                inventory.append({"name": target_item["name"], "quantity": 1})
+                inventory.append({"name": target_item.get("name", item_name), "quantity": 1})
 
             user_data["inventory"] = inventory
             # 🛡️ points 차감과 inventory 지급은 이 한 번의 save_user_data 호출로 같이 저장된다(별도 쓰기
@@ -1112,7 +1139,7 @@ class KyvoEconomy(KyvoBaseCog):
                 )
                 return
 
-            await interaction.followup.send(f"🛍️ **Transaction Complete!** Purchased asset **{target_item['name']}** for **{item_price:,}** {currency_name}!")
+            await interaction.followup.send(f"🛍️ **Transaction Complete!** Purchased asset **{target_item.get('name', item_name)}** for **{item_price:,}** {currency_name}!")
         finally:
             self.active_transactions.discard(user_id)
 
