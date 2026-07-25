@@ -30,21 +30,35 @@ class KyvoVoice(KyvoBaseCog):
     def _redis_key(self, guild_id: int) -> str:
         return f"kyvo:temp_voice:{guild_id}"
 
-    async def _track_channel(self, guild_id: int, channel_id: int) -> None:
-        self.tracked_channels[channel_id] = guild_id
+    # ══════════════════════════════════════════════════════════
+    #  공용 임시 음성 채널 수명주기 엔진 - Join to Create 전용이 아니다. 다른 cog(예: party.py의
+    #  파티 음성 채널)가 자기 소유 redis_key/tracked_dict를 넘겨서 이 메커니즘(추적/유예삭제/
+    #  콜드스타트 복구)을 그대로 재사용할 수 있도록 일반화했다 - 소유권(어떤 채널을 왜 만들었는지)은
+    #  각 cog가 자기 네임스페이스로 분리해서 갖고, "비면 유예 후 삭제"라는 메커니즘 코드만 공유한다.
+    #  언더스코어 없는 이름은 cross-cog 호출을 위한 의도적 공개 API다(custom_commands.py의
+    #  enqueue_log와 동일한 컨벤션).
+    # ══════════════════════════════════════════════════════════
+    async def track_channel(self, redis_key: str, guild_id: int, channel_id: int, tracked_dict: dict) -> None:
+        tracked_dict[channel_id] = guild_id
         try:
-            await self.redis.sadd(self._redis_key(guild_id), str(channel_id))
+            await self.redis.sadd(redis_key, str(channel_id))
         except Exception as e:
-            print(f"[VOICE][WARN] Redis SADD failed for temp channel {channel_id} "
-                  f"(guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            print(f"[VOICE][WARN] Redis SADD failed for channel {channel_id} "
+                  f"(key={redis_key}): {type(e).__name__}: {e}", flush=True)
+
+    async def untrack_channel(self, redis_key: str, guild_id: int, channel_id: int, tracked_dict: dict) -> None:
+        tracked_dict.pop(channel_id, None)
+        try:
+            await self.redis.srem(redis_key, str(channel_id))
+        except Exception as e:
+            print(f"[VOICE][WARN] Redis SREM failed for channel {channel_id} "
+                  f"(key={redis_key}): {type(e).__name__}: {e}", flush=True)
+
+    async def _track_channel(self, guild_id: int, channel_id: int) -> None:
+        await self.track_channel(self._redis_key(guild_id), guild_id, channel_id, self.tracked_channels)
 
     async def _untrack_channel(self, guild_id: int, channel_id: int) -> None:
-        self.tracked_channels.pop(channel_id, None)
-        try:
-            await self.redis.srem(self._redis_key(guild_id), str(channel_id))
-        except Exception as e:
-            print(f"[VOICE][WARN] Redis SREM failed for temp channel {channel_id} "
-                  f"(guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+        await self.untrack_channel(self._redis_key(guild_id), guild_id, channel_id, self.tracked_channels)
 
     # ══════════════════════════════════════════════════════════
     #  원자적 클레임 (automod의 try_claim_punishment와 동일한 패턴 재사용)
@@ -159,38 +173,43 @@ class KyvoVoice(KyvoBaseCog):
 
         await self._track_channel(guild.id, new_channel.id)
 
-    async def _schedule_deletion(self, channel: discord.VoiceChannel) -> None:
+    async def schedule_deletion(self, channel: discord.VoiceChannel, redis_key: str, tracked_dict: dict,
+                                 reason: str = "[KYVO JOIN-TO-CREATE] empty temp channel cleanup") -> None:
         """10초 유예 후 재확인. 그 사이 여러 유예 태스크가 동시에 걸릴 수 있으므로(사람이 빠르게
         들어왔다 나가는 경우 등), 이미 다른 태스크가 먼저 지운 채널을 다시 지우려는 시도는
-        discord.NotFound로 안전하게 흡수한다 - 이건 정상적인 경쟁이지 에러가 아니다."""
+        discord.NotFound로 안전하게 흡수한다 - 이건 정상적인 경쟁이지 에러가 아니다.
+        redis_key/tracked_dict를 파라미터로 받아 다른 cog의 네임스페이스에도 그대로 쓸 수 있다."""
         await asyncio.sleep(GRACE_PERIOD_SECONDS)
 
         guild = channel.guild
         current = guild.get_channel(channel.id)
         if current is None:
             # 이미 다른 유예 태스크나 수동 조작으로 사라짐 - 추적 정리만 하고 종료
-            await self._untrack_channel(guild.id, channel.id)
+            await self.untrack_channel(redis_key, guild.id, channel.id, tracked_dict)
             return
 
         if len(current.members) > 0:
-            return  # 유예 기간 중 누가 다시 들어옴 - 아무것도 안 함
+            return  # 유예 기간 중 누가 다시 들어옴(또는 애초에 아무도 안 들어왔다가 지금 들어옴) - 아무것도 안 함
 
         try:
-            await current.delete(reason="[KYVO JOIN-TO-CREATE] empty temp channel cleanup")
+            await current.delete(reason=reason)
         except discord.NotFound:
             # 동시에 걸린 다른 유예 태스크가 먼저 지웠음 - 정상적인 경쟁, 에러 아님
-            print(f"[VOICE][INFO] Temp channel {channel.id} already deleted by a concurrent "
+            print(f"[VOICE][INFO] Channel {channel.id} already deleted by a concurrent "
                   f"cleanup task (guild={guild.id})", flush=True)
         except discord.Forbidden:
-            print(f"[VOICE][WARN] Missing permission to delete temp channel {channel.id} "
+            print(f"[VOICE][WARN] Missing permission to delete channel {channel.id} "
                   f"(guild={guild.id})", flush=True)
             return  # 권한 문제면 추적을 유지해야 다음 기회에 재시도될 수 있다
         except discord.HTTPException as e:
-            print(f"[VOICE][ERROR] Failed to delete temp channel {channel.id} "
+            print(f"[VOICE][ERROR] Failed to delete channel {channel.id} "
                   f"(guild={guild.id}): {type(e).__name__}: {e}", flush=True)
             return
 
-        await self._untrack_channel(guild.id, channel.id)
+        await self.untrack_channel(redis_key, guild.id, channel.id, tracked_dict)
+
+    async def _schedule_deletion(self, channel: discord.VoiceChannel) -> None:
+        await self.schedule_deletion(channel, self._redis_key(channel.guild.id), self.tracked_channels)
 
 
 async def setup(bot):

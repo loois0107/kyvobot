@@ -191,6 +191,10 @@ class KyvoParty(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
         self.check_party_timers.start()
+        # 파티 음성 채널 추적 - voice.py의 Join to Create 메커니즘(track/untrack/schedule_deletion)을
+        # 재사용하되, redis_key/tracked_dict는 별도 네임스페이스(kyvo:party_voice:*)로 분리한다.
+        self.tracked_party_voice_channels: dict[int, int] = {}
+        self._voice_recovered = False
 
     async def cog_load(self):
         if INTERNAL_API_SECRET:
@@ -202,6 +206,78 @@ class KyvoParty(KyvoBaseCog):
 
     async def cog_unload(self):
         self.check_party_timers.cancel()
+
+    # ══════════════════════════════════════════════════════════
+    #  파티 음성 채널 수명주기 - voice.py의 Join to Create 메커니즘을 공유하되, 소유권은
+    #  분리한다(redis_key = kyvo:party_voice:{guild_id}, 이 cog 자신의 tracked dict).
+    # ══════════════════════════════════════════════════════════
+    def _party_voice_redis_key(self, guild_id: int) -> str:
+        return f"kyvo:party_voice:{guild_id}"
+
+    def _get_voice_cog(self):
+        voice_cog = self.bot.get_cog("KyvoVoice")
+        if voice_cog is None:
+            print("[PARTY][WARN] KyvoVoice cog not loaded - party voice channel tracking/cleanup unavailable", flush=True)
+        return voice_cog
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        if before.channel is None or before.channel.id not in self.tracked_party_voice_channels:
+            return
+        if len(before.channel.members) != 0:
+            return
+        voice_cog = self._get_voice_cog()
+        if voice_cog is None:
+            return
+        guild_id = self.tracked_party_voice_channels.get(before.channel.id, before.channel.guild.id)
+        asyncio.create_task(voice_cog.schedule_deletion(
+            before.channel, self._party_voice_redis_key(guild_id), self.tracked_party_voice_channels,
+            reason="[KYVO PARTY] empty voice channel cleanup",
+        ))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # on_ready는 재연결마다 다시 불릴 수 있어, 프로세스 생애주기당 한 번만 복구를 수행한다
+        # (voice.py의 콜드 스타트 복구와 동일한 패턴, 네임스페이스만 분리).
+        if self._voice_recovered:
+            return
+        self._voice_recovered = True
+
+        voice_cog = self._get_voice_cog()
+        if voice_cog is None:
+            return
+
+        for guild in self.bot.guilds:
+            redis_key = self._party_voice_redis_key(guild.id)
+            try:
+                channel_ids = await self.redis.smembers(redis_key)
+            except Exception as e:
+                print(f"[PARTY][WARN] Redis SMEMBERS failed during party-voice cold-start recovery "
+                      f"(guild={guild.id}): {type(e).__name__}: {e}", flush=True)
+                continue
+
+            for cid_str in channel_ids:
+                try:
+                    channel_id = int(cid_str)
+                except (TypeError, ValueError):
+                    continue
+
+                channel = guild.get_channel(channel_id)
+                if channel is None:
+                    await voice_cog.untrack_channel(redis_key, guild.id, channel_id, self.tracked_party_voice_channels)
+                    print(f"[PARTY][RECOVERY] Stale party-voice tracking entry for missing channel "
+                          f"{channel_id} cleaned up (guild={guild.id})", flush=True)
+                    continue
+
+                self.tracked_party_voice_channels[channel_id] = guild.id
+                print(f"[PARTY][RECOVERY] Reattached tracking for party voice channel {channel_id} "
+                      f"(guild={guild.id}, members={len(channel.members)})", flush=True)
+
+                if len(channel.members) == 0:
+                    asyncio.create_task(voice_cog.schedule_deletion(
+                        channel, redis_key, self.tracked_party_voice_channels,
+                        reason="[KYVO PARTY] empty voice channel cleanup",
+                    ))
 
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
@@ -635,6 +711,41 @@ class KyvoParty(KyvoBaseCog):
             print(f"[PARTY][ERROR] Failed to record party_channel_id for recruitment {recruitment_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
 
+        # 🛡️ 음성 채널은 부가 기능이다 - 생성이 실패해도(권한/채널 한도 등) 텍스트 채널과 파티
+        # 성사 흐름 자체는 그대로 진행한다. 텍스트와 달리 시간 기반이 아니라 voice.py의 Join to
+        # Create 수명주기(비면 유예 후 삭제)를 재사용한다 - 단, 네임스페이스는 분리(kyvo:party_voice:*).
+        try:
+            party_voice_channel = await guild.create_voice_channel(
+                f"🔊 {channel_name}", overwrites=overwrites, reason="[KYVO PARTY]"
+            )
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to create party voice channel for recruitment {recruitment_id}, "
+                  f"continuing without one: {type(e).__name__}: {e}", flush=True)
+            party_voice_channel = None
+
+        if party_voice_channel is not None:
+            try:
+                await self._db_call(
+                    lambda: self.bot.supabase.table("party_recruitments").update({
+                        "party_voice_channel_id": str(party_voice_channel.id),
+                    }).eq("id", recruitment_id).execute()
+                )
+            except Exception as e:
+                print(f"[PARTY][ERROR] Failed to record party_voice_channel_id for recruitment "
+                      f"{recruitment_id}: {type(e).__name__}: {e}", flush=True)
+
+            voice_cog = self._get_voice_cog()
+            if voice_cog is not None:
+                redis_key = self._party_voice_redis_key(guild_id)
+                await voice_cog.track_channel(redis_key, guild_id, party_voice_channel.id, self.tracked_party_voice_channels)
+                # 아무도 안 들어오면 "비었다가 됨" 이벤트 자체가 영영 안 일어나 평생 안 지워지는
+                # 갭을 막기 위해, 생성 직후 바로 한 번 유예 체크를 걸어둔다(그 사이 누가 들어오면
+                # schedule_deletion이 알아서 취소한다).
+                asyncio.create_task(voice_cog.schedule_deletion(
+                    party_voice_channel, redis_key, self.tracked_party_voice_channels,
+                    reason="[KYVO PARTY] empty voice channel cleanup",
+                ))
+
         welcome = await self.get_msg(guild_id, "party_channel_welcome", mentions=" ".join(mentions))
         try:
             await party_channel.send(welcome)
@@ -745,6 +856,7 @@ class KyvoParty(KyvoBaseCog):
         msg = await self.get_msg(guild_id, "party_close_success")
         await interaction.followup.send(msg, ephemeral=True)
 
+        # 텍스트/음성 각각 독립된 try/except - 하나가 실패해도 나머지 정리는 계속 진행된다.
         try:
             await interaction.channel.delete(reason=f"[KYVO PARTY] closed by {interaction.user}")
         except discord.NotFound:
@@ -752,6 +864,24 @@ class KyvoParty(KyvoBaseCog):
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to delete party channel {interaction.channel.id} after /party_close: "
                   f"{type(e).__name__}: {e}", flush=True)
+
+        voice_channel_id = row.get("party_voice_channel_id")
+        if voice_channel_id:
+            voice_channel = interaction.guild.get_channel(int(voice_channel_id))
+            if voice_channel is not None:
+                try:
+                    await voice_channel.delete(reason=f"[KYVO PARTY] closed by {interaction.user}")
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    print(f"[PARTY][ERROR] Failed to delete party voice channel {voice_channel_id} after "
+                          f"/party_close: {type(e).__name__}: {e}", flush=True)
+            voice_cog = self._get_voice_cog()
+            if voice_cog is not None:
+                await voice_cog.untrack_channel(
+                    self._party_voice_redis_key(guild_id), guild_id, int(voice_channel_id),
+                    self.tracked_party_voice_channels,
+                )
 
     async def _cancel_recruiting_party(self, interaction: discord.Interaction, row: dict) -> None:
         guild_id = interaction.guild_id
@@ -895,19 +1025,45 @@ class KyvoParty(KyvoBaseCog):
 
     async def _delete_party_channel(self, row: dict) -> None:
         channel_id = row.get("party_channel_id")
-        if not channel_id:
-            return
-        channel = self.bot.get_channel(int(channel_id))
-        if channel is None:
-            print(f"[PARTY][WARN] Party channel {channel_id} not in cache, cannot auto-delete "
-                  f"(recruitment={row['id']})", flush=True)
-            return
-        try:
-            await channel.delete(reason="[KYVO PARTY] auto-cleanup after lifetime expired")
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            print(f"[PARTY][ERROR] Failed to auto-delete party channel {channel_id}: {type(e).__name__}: {e}", flush=True)
+        if channel_id:
+            channel = self.bot.get_channel(int(channel_id))
+            if channel is None:
+                print(f"[PARTY][WARN] Party channel {channel_id} not in cache, cannot auto-delete "
+                      f"(recruitment={row['id']})", flush=True)
+            else:
+                try:
+                    await channel.delete(reason="[KYVO PARTY] auto-cleanup after lifetime expired")
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    print(f"[PARTY][ERROR] Failed to auto-delete party channel {channel_id}: "
+                          f"{type(e).__name__}: {e}", flush=True)
+
+        # 음성 채널은 점유 여부와 무관하게 강제 종료한다(텍스트와 동일한 하드컷) - 파티 수명이
+        # 다했으면 이벤트 기반 유예 삭제가 어떤 이유로든 안 걸렸더라도 결국 여기서 정리된다.
+        voice_channel_id = row.get("party_voice_channel_id")
+        if voice_channel_id:
+            guild_id = int(row["guild_id"])
+            voice_channel = self.bot.get_channel(int(voice_channel_id))
+            if voice_channel is None:
+                print(f"[PARTY][WARN] Party voice channel {voice_channel_id} not in cache, cannot "
+                      f"auto-delete (recruitment={row['id']})", flush=True)
+            else:
+                try:
+                    await voice_channel.delete(
+                        reason="[KYVO PARTY] auto-cleanup after lifetime expired (occupancy ignored)"
+                    )
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    print(f"[PARTY][ERROR] Failed to auto-delete party voice channel {voice_channel_id}: "
+                          f"{type(e).__name__}: {e}", flush=True)
+            voice_cog = self._get_voice_cog()
+            if voice_cog is not None:
+                await voice_cog.untrack_channel(
+                    self._party_voice_redis_key(guild_id), guild_id, int(voice_channel_id),
+                    self.tracked_party_voice_channels,
+                )
 
     # ══════════════════════════════════════════════════════════
     #  /tier_role_set - 관리자 전용, 티어 <-> 역할 매핑 등록
