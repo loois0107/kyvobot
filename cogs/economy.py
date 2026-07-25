@@ -5,6 +5,11 @@ from cogs.base import KyvoBaseCog
 import random
 import time
 import datetime
+import os
+import hmac
+from aiohttp import web
+
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 
 # ══════════════════════════════════════════════════════════
 #  🃏 Blackjack Core Rules (Cog 상태와 무관한 순수 함수들)
@@ -386,6 +391,14 @@ class KyvoEconomy(KyvoBaseCog):
         self.cooldowns = {}
         # 🔒 TRANSACTION LOCK MATRIX: Tracks active monetary calculations to eliminate double-spending exploits
         self.active_transactions = set()
+
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/economy/shop-buy", self.handle_shop_buy_webhook)
+            print("[⚡ ECONOMY] Internal shop-buy route registered at /internal/economy/shop-buy.", flush=True)
+        else:
+            print("[ECONOMY][WARN] INTERNAL_API_SECRET not set - dashboard-triggered purchases are disabled "
+                  "(the /shop buy command still works).", flush=True)
 
     async def _get_economy_settings(self, guild_id) -> dict:
         """economy_settings를 Redis Cache-Aside(KyvoBaseCog.get_guild_settings)로 읽어온다.
@@ -1070,21 +1083,17 @@ class KyvoEconomy(KyvoBaseCog):
 
         await interaction.followup.send(f"✅ Successfully appended asset **{name}** to shop registry for **{price:,}** units.", ephemeral=True)
 
-    @shop_group.command(name="buy", description="Purchase an item from the server shop.")
-    @app_commands.describe(item_name="The exact name of the item you want to purchase.")
-    async def buy_item(self, interaction: discord.Interaction, item_name: str):
-        """Handles cross-validation between user points and guild shop metadata arrays."""
-        await interaction.response.defer()
-        user_id = str(interaction.user.id)
-
-        # Concurrency Guard to lock user checkout execution thread
+    async def _process_purchase(self, user_id: str, guild_id, item_name: str) -> dict:
+        """구매 처리 공통 로직 - /shop buy 커맨드와 대시보드발 내부 웹훅이 둘 다 이 메서드를 거친다.
+        active_transactions 락이 user_id 단위이기 때문에, 같은 유저가 명령어와 대시보드로 거의
+        동시에 구매를 시도해도(더블클릭 포함) 이 안에서 자연스럽게 직렬화된다 - 두 경로가 같은
+        프로세스의 같은 set을 공유하므로 별도 Redis 락이 필요 없다."""
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Processing Blocked:** Active purchase order pending on this account context. Hold on.", ephemeral=True)
-            return
+            return {"status": "locked"}
 
         self.active_transactions.add(user_id)
         try:
-            economy_set = await self._get_economy_settings(interaction.guild_id)
+            economy_set = await self._get_economy_settings(guild_id)
             currency_name = economy_set.get("currency_name", "Points")
             shop_items = economy_set.get("shop_items", [])
 
@@ -1094,26 +1103,24 @@ class KyvoEconomy(KyvoBaseCog):
                 None,
             )
             if not target_item:
-                await interaction.followup.send(f"❌ Asset lookup failure: '**{item_name}**' does not exist inside the shop index.")
-                return
+                return {"status": "item_not_found", "item_name": item_name}
 
             item_price = target_item.get("price")
             if not isinstance(item_price, (int, float)) or item_price <= 0:
                 # 🛡️ 가격이 없거나 이상한 값이면 0원 구매를 허용하는 대신 명확히 막는다 - 재화가
                 # 걸린 로직은 조용히 기본값으로 넘어가면 안 된다.
-                print(f"[SHOP][ERROR] Item '{item_name}' has an invalid/missing price (guild={interaction.guild_id}): {target_item!r}", flush=True)
-                await interaction.followup.send(
-                    "❌ This item is misconfigured (invalid price) and can't be purchased right now. Please contact a server admin.",
-                    ephemeral=True,
-                )
-                return
+                print(f"[SHOP][ERROR] Item '{item_name}' has an invalid/missing price (guild={guild_id}): {target_item!r}", flush=True)
+                return {"status": "item_misconfigured", "item_name": item_name}
 
-            user_data = await self.bot.get_user_data(user_id, str(interaction.guild_id))
+            user_data = await self.bot.get_user_data(user_id, str(guild_id))
             current_points = user_data.get("points", 0)
 
             if current_points < item_price:
-                await interaction.followup.send(f"❌ Settle Order Denied: You require **{item_price:,}** {currency_name}, but only hold **{current_points:,}**.")
-                return
+                return {
+                    "status": "insufficient_points", "item_name": item_name,
+                    "current_points": current_points, "required_points": item_price,
+                    "currency_name": currency_name,
+                }
 
             user_data["points"] = current_points - item_price
             inventory = user_data.get("inventory", [])
@@ -1130,18 +1137,82 @@ class KyvoEconomy(KyvoBaseCog):
             user_data["inventory"] = inventory
             # 🛡️ points 차감과 inventory 지급은 이 한 번의 save_user_data 호출로 같이 저장된다(별도 쓰기
             # 두 번이 아님) - 그래서 "포인트만 빠지고 아이템은 안 들어감" 같은 부분 실패는 구조적으로
-            # 불가능하다. 다만 이 저장 자체가 실패하면 여태 무조건 성공 메시지를 보내고 있었다.
-            save_ok = await self.bot.save_user_data(user_id, str(interaction.guild_id), user_data)
+            # 불가능하다.
+            save_ok = await self.bot.save_user_data(user_id, str(guild_id), user_data)
             if not save_ok:
-                await interaction.followup.send(
-                    "❌ **Ledger Write Failed:** Your purchase could not be saved due to a database error. No points were deducted.",
-                    ephemeral=True
-                )
-                return
+                return {"status": "save_failed", "item_name": item_name}
 
-            await interaction.followup.send(f"🛍️ **Transaction Complete!** Purchased asset **{target_item.get('name', item_name)}** for **{item_price:,}** {currency_name}!")
+            return {
+                "status": "ok",
+                "item_name": target_item.get("name", item_name),
+                "price": item_price,
+                "currency_name": currency_name,
+                "remaining_points": user_data["points"],
+            }
         finally:
             self.active_transactions.discard(user_id)
+
+    @shop_group.command(name="buy", description="Purchase an item from the server shop.")
+    @app_commands.describe(item_name="The exact name of the item you want to purchase.")
+    async def buy_item(self, interaction: discord.Interaction, item_name: str):
+        """Handles cross-validation between user points and guild shop metadata arrays."""
+        await interaction.response.defer()
+        user_id = str(interaction.user.id)
+
+        result = await self._process_purchase(user_id, interaction.guild_id, item_name)
+        status = result["status"]
+
+        if status == "locked":
+            await interaction.followup.send("⚠️ **Processing Blocked:** Active purchase order pending on this account context. Hold on.", ephemeral=True)
+        elif status == "item_not_found":
+            await interaction.followup.send(f"❌ Asset lookup failure: '**{item_name}**' does not exist inside the shop index.")
+        elif status == "item_misconfigured":
+            await interaction.followup.send(
+                "❌ This item is misconfigured (invalid price) and can't be purchased right now. Please contact a server admin.",
+                ephemeral=True,
+            )
+        elif status == "insufficient_points":
+            await interaction.followup.send(
+                f"❌ Settle Order Denied: You require **{result['required_points']:,}** {result['currency_name']}, "
+                f"but only hold **{result['current_points']:,}**."
+            )
+        elif status == "save_failed":
+            await interaction.followup.send(
+                "❌ **Ledger Write Failed:** Your purchase could not be saved due to a database error. No points were deducted.",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"🛍️ **Transaction Complete!** Purchased asset **{result['item_name']}** for **{result['price']:,}** {result['currency_name']}!"
+            )
+
+    async def handle_shop_buy_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[SHOP][WARN] Rejected shop-buy request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        user_id = body.get("user_id")
+        item_name = body.get("item_name")
+        if not all([guild_id, user_id, item_name]):
+            return web.Response(status=400, text="guild_id, user_id, item_name are all required")
+
+        result = await self._process_purchase(str(user_id), str(guild_id), str(item_name))
+
+        status_to_http = {
+            "locked": 409, "item_not_found": 404, "item_misconfigured": 400,
+            "insufficient_points": 400, "save_failed": 500,
+        }
+        if result["status"] != "ok":
+            return web.json_response(result, status=status_to_http.get(result["status"], 400))
+
+        return web.json_response(result)
 
     @app_commands.command(name="inventory", description="View all items currently stored in your personal vault.")
     async def inventory_view(self, interaction: discord.Interaction):
