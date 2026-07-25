@@ -149,7 +149,8 @@ def normalize_min_tier(min_tier: str | None) -> str | None:
 
 def resolve_looking_for_line(min_tier: str | None, looking_for_role: str | None) -> str:
     """카드에 보여줄 "Looking For" 한 줄을 만든다. 둘 다 없으면 빈 문자열을 반환하고,
-    호출부는 이걸 "필드 자체를 생략하라"는 신호로 쓴다(순수 정보 표시일 뿐 강제 검증은 없다)."""
+    호출부는 이걸 "필드 자체를 생략하라"는 신호로 쓴다. looking_for_role은 여전히 정보 표시일
+    뿐이지만, min_tier는 handle_join에서 실제로 강제 검증된다(meets_min_tier_requirement 참고)."""
     parts = []
     tier = normalize_min_tier(min_tier)
     if tier:
@@ -158,6 +159,31 @@ def resolve_looking_for_line(min_tier: str | None, looking_for_role: str | None)
     if role:
         parts.append(role)
     return " · ".join(parts)
+
+
+def _tier_rank(tier: str | None) -> int | None:
+    """TIER_CHOICES 상의 서수 위치를 반환한다. 리스트에 없거나(미인증/손상 데이터) None이면
+    None을 반환한다 - 절대 크래시하지 않는다."""
+    if not tier:
+        return None
+    try:
+        return TIER_CHOICES.index(tier)
+    except ValueError:
+        return None
+
+
+def meets_min_tier_requirement(min_tier: str | None, verified_tier: str | None) -> bool:
+    """min_tier가 없으면(무관 모집) 항상 True. 있으면 verified_tier의 서수가 min_tier 이상이어야
+    True - verified_tier가 없거나(미인증) TIER_CHOICES에 없는 손상 값이면 조건 미충족으로 취급."""
+    required_rank = _tier_rank(min_tier)
+    if required_rank is None:
+        return True
+
+    actual_rank = _tier_rank(verified_tier)
+    if actual_rank is None:
+        return False
+
+    return actual_rank >= required_rank
 
 
 class RoleWarningConfirmView(discord.ui.View):
@@ -740,6 +766,35 @@ class KyvoParty(KyvoBaseCog):
         except Exception as e:
             print(f"[PARTY][WARN] Pre-check for existing participant failed (recruitment={recruitment_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
+
+        # 🛡️ min_tier 강제 검증 - looking_for_role과 달리 이건 정보 표시가 아니라 실제 참여 차단이다.
+        # 관리자 예외 없음(서버 관리 권한과 무관한, 모집자 개인의 실력 조건 선호). 리더 본인은
+        # handle_recruitment_submit에서 party_participants에 직접 INSERT되어 여기(handle_join)를
+        # 아예 거치지 않으므로 별도 예외 처리가 필요 없다. DB 조회 실패 시에는 열어주지 않고
+        # 막는다(fail-closed) - 조건을 실제로 확인 못 했는데 통과시키면 강제 검증의 의미가 없다.
+        if row.get("min_tier"):
+            try:
+                verif_res = await self._db_call(
+                    lambda: self.bot.supabase.table("riot_verifications").select("tier")
+                            .eq("guild_id", str(guild_id)).eq("user_id", str(user_id)).execute()
+                )
+                verified_row = verif_res.data[0] if verif_res.data else None
+            except Exception as e:
+                print(f"[PARTY][ERROR] Tier verification lookup failed for user={user_id} (guild={guild_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+                await interaction.followup.send("❌ An error occurred while checking your verified tier.", ephemeral=True)
+                return
+
+            verified_tier = verified_row["tier"] if verified_row else None
+
+            if not meets_min_tier_requirement(row["min_tier"], verified_tier):
+                if verified_tier is None:
+                    msg = await self.get_msg(guild_id, "party_err_tier_not_verified", min_tier=row["min_tier"])
+                else:
+                    msg = await self.get_msg(guild_id, "party_err_tier_too_low",
+                                              current_tier=verified_tier, min_tier=row["min_tier"])
+                await interaction.followup.send(msg, ephemeral=True)
+                return
 
         try:
             await self._db_call(

@@ -246,6 +246,8 @@
   "party_create_success": "✅ Your party recruitment post is live!",
   "party_join_success": "✅ You joined the party!",
   "party_err_already_joined": "❌ You've already joined this party.",
+  "party_err_tier_too_low": "❌ Your verified tier is **{current_tier}**, but this party requires **{min_tier}+**.",
+  "party_err_tier_not_verified": "❌ This party requires **{min_tier}+**, but you haven't verified your tier yet. Run `/tier_verify` first.",
   "party_err_full": "❌ This party is already full.",
   "party_err_expired": "❌ This recruitment post has closed.",
   "party_err_save_failed": "❌ **Failed to join:** A database error occurred. You haven't been added to the party.",

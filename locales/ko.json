@@ -246,6 +246,8 @@
   "party_create_success": "✅ 파티 모집글이 게시되었습니다!",
   "party_join_success": "✅ 파티에 참여했습니다!",
   "party_err_already_joined": "❌ 이미 이 파티에 참여하셨습니다.",
+  "party_err_tier_too_low": "❌ 인증된 티어는 **{current_tier}**인데, 이 파티는 **{min_tier} 이상**이 필요합니다.",
+  "party_err_tier_not_verified": "❌ 이 파티는 **{min_tier} 이상**이 필요한데, 아직 티어 인증을 안 하셨습니다. 먼저 `/tier_verify`를 해주세요.",
   "party_err_full": "❌ 이미 인원이 다 찬 파티입니다.",
   "party_err_expired": "❌ 마감된 모집글입니다.",
   "party_err_save_failed": "❌ **참여 실패:** 데이터베이스 오류가 발생했습니다. 파티에 추가되지 않았습니다.",
