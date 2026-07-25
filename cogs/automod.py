@@ -31,6 +31,58 @@ end
 return {count, 0}
 """
 
+# 🛡️ 대시보드에서 설정 가능한 범위 - lib/automodSettings.ts와 반드시 값이 일치해야 한다
+# (party_settings 상수들과 동일한 관례). 여기서 벗어난 값은 조용히 기본값으로 되돌린다.
+AUTOMOD_SPAM_LIMIT_MIN = 3
+AUTOMOD_SPAM_LIMIT_MAX = 20
+AUTOMOD_SPAM_LIMIT_DEFAULT = 5
+
+AUTOMOD_SPAM_INTERVAL_MIN_SECONDS = 5
+AUTOMOD_SPAM_INTERVAL_MAX_SECONDS = 60
+AUTOMOD_SPAM_INTERVAL_DEFAULT_SECONDS = 10
+
+AUTOMOD_TIMEOUT_MIN_SECONDS = 60
+AUTOMOD_TIMEOUT_MAX_SECONDS = 3600
+AUTOMOD_TIMEOUT_DEFAULT_SECONDS = 600  # 기존 하드코딩값과 동일 - 설정 안 한 길드는 지금과 동작이 똑같다
+
+AUTOMOD_FORBIDDEN_WORD_MAX_LENGTH = 50
+AUTOMOD_FORBIDDEN_WORDS_MAX_COUNT = 200
+
+
+def resolve_automod_settings(automod_settings: dict | None) -> dict:
+    """대시보드가 저장한 automod_settings를 안전하게 정규화한다 - 값이 없거나(미설정 길드),
+    형식이 이상해도(수동 DB 편집 등) 항상 안전한 기본값(기존 하드코딩값과 동일)으로 폴백하고
+    절대 크래시하지 않는다. resolve_party_settings와 동일한 방침."""
+    automod_settings = automod_settings or {}
+
+    try:
+        spam_limit = int(automod_settings.get("spam_limit"))
+    except (TypeError, ValueError):
+        spam_limit = AUTOMOD_SPAM_LIMIT_DEFAULT
+    if not (AUTOMOD_SPAM_LIMIT_MIN <= spam_limit <= AUTOMOD_SPAM_LIMIT_MAX):
+        spam_limit = AUTOMOD_SPAM_LIMIT_DEFAULT
+
+    try:
+        spam_interval_seconds = int(automod_settings.get("spam_interval_seconds"))
+    except (TypeError, ValueError):
+        spam_interval_seconds = AUTOMOD_SPAM_INTERVAL_DEFAULT_SECONDS
+    if not (AUTOMOD_SPAM_INTERVAL_MIN_SECONDS <= spam_interval_seconds <= AUTOMOD_SPAM_INTERVAL_MAX_SECONDS):
+        spam_interval_seconds = AUTOMOD_SPAM_INTERVAL_DEFAULT_SECONDS
+
+    try:
+        timeout_seconds = int(automod_settings.get("timeout_seconds"))
+    except (TypeError, ValueError):
+        timeout_seconds = AUTOMOD_TIMEOUT_DEFAULT_SECONDS
+    if not (AUTOMOD_TIMEOUT_MIN_SECONDS <= timeout_seconds <= AUTOMOD_TIMEOUT_MAX_SECONDS):
+        timeout_seconds = AUTOMOD_TIMEOUT_DEFAULT_SECONDS
+
+    return {
+        "spam_limit": spam_limit,
+        "spam_interval_seconds": spam_interval_seconds,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
 class AutoMod(KyvoBaseCog):
     """
     KyvoBaseCog를 상속받아 무거운 캐시 및 다국어 헬퍼(get_msg)를 상속받고,
@@ -151,11 +203,14 @@ class AutoMod(KyvoBaseCog):
         if not settings:
             return
 
-        # 🛡️ [죽은 참조 정리] automod_enabled/spam_limit/spam_interval은 guild_settings에 대응하는
-        # 컬럼이 실제로 존재하지 않아 대시보드로 설정할 방법이 없다(직접 조회로 확인됨). settings.get()으로
-        # 읽는 척하지 않고, 설정 UI가 실제로 생기기 전까지는 고정값을 명시적으로 쓴다.
-        limit = 5
-        window = 10
+        # 🛡️ settings.automod_settings에서 실제로 읽는다 - 대시보드 UI가 생겨서 더는 하드코딩할
+        # 필요가 없다. 미설정 길드는 resolve_automod_settings의 기본값(기존 하드코딩값과 동일)으로
+        # 폴백하므로 동작이 그대로 유지된다.
+        nested_settings = settings.get("settings") or {}
+        automod_settings = resolve_automod_settings(nested_settings.get("automod_settings"))
+        limit = automod_settings["spam_limit"]
+        window = automod_settings["spam_interval_seconds"]
+        timeout_seconds = automod_settings["timeout_seconds"]
 
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
@@ -178,8 +233,8 @@ class AutoMod(KyvoBaseCog):
             # 다시 발동했었다. GET으로 먼저 확인하고 나중에 SET하는 방식은 그 사이 시간차 때문에
             # 여전히 중복이 발생했다(1초 안에 로그 2건) - SET NX로 확인+선점을 원자적으로 한 번에
             # 처리해서 동시에 도착해도 정확히 하나만 통과하도록 바꾼다. 메시지 삭제는 이 체크와
-            # 무관하게 항상 실행된다.
-            timeout_seconds = 600  # 10분 - 처벌 지속시간과 플래그 TTL을 반드시 일치시켜야 한다
+            # 무관하게 항상 실행된다. timeout_seconds는 위에서 이미 automod_settings로부터 계산됨
+            # (처벌 지속시간과 플래그 TTL을 반드시 일치시켜야 한다).
             claimed = await self.try_claim_punishment(message.guild.id, message.author.id, timeout_seconds)
 
             if claimed:
