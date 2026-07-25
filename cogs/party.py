@@ -88,10 +88,7 @@ def resolve_party_settings(party_settings: dict | None) -> dict:
         channel_lifetime_hours = PARTY_CHANNEL_LIFETIME_HOURS
 
     game_name = str(party_settings.get("game_name") or "").strip()[:256]  # 디스코드 author name 256자 제한
-
-    card_thumbnail_url = str(party_settings.get("card_thumbnail_url") or "").strip()
-    if not card_thumbnail_url.startswith(("http://", "https://")):
-        card_thumbnail_url = ""
+    card_thumbnail_url = clean_thumbnail_url(party_settings.get("card_thumbnail_url"))
 
     return {
         "card_color": card_color,
@@ -100,6 +97,36 @@ def resolve_party_settings(party_settings: dict | None) -> dict:
         "channel_lifetime_hours": channel_lifetime_hours,
         "game_name": game_name,
         "card_thumbnail_url": card_thumbnail_url,
+    }
+
+
+def clean_thumbnail_url(raw) -> str:
+    """형식이 http(s)로 시작하지 않으면(수동 DB 편집, javascript: 등) 조용히 빈 문자열로 되돌린다 -
+    resolve_party_settings와 게임 프리셋 둘 다 이 검증을 공유한다."""
+    url = str(raw or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return ""
+    return url
+
+
+def select_party_card_design(base_party_settings: dict, preset_row: dict | None) -> dict:
+    """/party_recruit에서 게임 프리셋을 골랐으면(row.selected_game이 있고 실제로 조회에 성공하면)
+    그 프리셋의 디자인 필드를 쓰고, 아니면(선택 안 함/프리셋이 그 사이 삭제/수정됨) 길드 기본값
+    (base_party_settings)으로 안전하게 폴백한다. 타이머(card_lifetime_minutes 등)는 프리셋과
+    무관하게 항상 길드 공통값이라 이 함수의 반환값에 포함하지 않는다."""
+    if preset_row is None:
+        return {
+            "card_color": base_party_settings["card_color"],
+            "card_description": base_party_settings["card_description"],
+            "card_thumbnail_url": base_party_settings["card_thumbnail_url"],
+            "game_name": base_party_settings["game_name"],
+        }
+
+    return {
+        "card_color": clean_hex_color(preset_row.get("card_color"), base_party_settings["card_color"]),
+        "card_description": str(preset_row.get("card_description") or "").strip(),
+        "card_thumbnail_url": clean_thumbnail_url(preset_row.get("card_thumbnail_url")),
+        "game_name": str(preset_row.get("game_name") or "").strip()[:256],
     }
 
 
@@ -151,9 +178,11 @@ class PartyRecruitmentModal(discord.ui.Modal):
     라인 선택도 자유 텍스트로 받는다 (다중선택 UI가 꼭 필요해지면 모달 뒤에 별도 Select 단계를
     추가하는 확장 경로로 남겨둔다)."""
 
-    def __init__(self, cog: "KyvoParty", title: str, queue_label: str, lanes_label: str, count_label: str):
+    def __init__(self, cog: "KyvoParty", title: str, queue_label: str, lanes_label: str, count_label: str,
+                 selected_game: str | None = None):
         super().__init__(title=title[:45])
         self.cog = cog
+        self.selected_game = selected_game
         self.queue_input = discord.ui.TextInput(label=queue_label[:45], max_length=50, required=True)
         self.lanes_input = discord.ui.TextInput(label=lanes_label[:45], max_length=100, required=False)
         self.count_input = discord.ui.TextInput(label=count_label[:45], max_length=3, required=True)
@@ -162,7 +191,8 @@ class PartyRecruitmentModal(discord.ui.Modal):
         self.add_item(self.count_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.handle_recruitment_submit(interaction, self.queue_input.value, self.lanes_input.value, self.count_input.value)
+        await self.cog.handle_recruitment_submit(interaction, self.queue_input.value, self.lanes_input.value,
+                                                   self.count_input.value, self.selected_game)
 
 
 class PartyCardView(discord.ui.View):
@@ -348,19 +378,66 @@ class KyvoParty(KyvoBaseCog):
         return web.Response(status=202)
 
     # ══════════════════════════════════════════════════════════
+    #  게임별 디자인 프리셋 (party_game_presets) - 대시보드가 관리(추가/수정/삭제)하고,
+    #  봇은 /party_recruit의 자동완성 + 카드 렌더링 시점 조회에만 쓴다. party_tier_roles와
+    #  동일한 패턴: 길드당 여러 행, 자연키(guild_id, game_name)에 unique 제약.
+    # ══════════════════════════════════════════════════════════
+    async def _get_game_presets(self, guild_id: int) -> list[dict]:
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("party_game_presets").select("*")
+                        .eq("guild_id", str(guild_id)).execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch game presets (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            return []
+
+    async def _get_game_preset(self, guild_id: int, game_name: str) -> dict | None:
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("party_game_presets").select("*")
+                        .eq("guild_id", str(guild_id)).eq("game_name", game_name).limit(1).execute()
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch game preset '{game_name}' (guild={guild_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return None
+
+    async def _game_preset_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        presets = await self._get_game_presets(interaction.guild_id)
+        current_lower = current.lower()
+        matches = [p["game_name"] for p in presets if current_lower in p["game_name"].lower()]
+        return [app_commands.Choice(name=name, value=name) for name in matches[:25]]  # 디스코드 자동완성 응답 상한
+
+    # ══════════════════════════════════════════════════════════
     #  /party_recruit
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="party_recruit", description="Open a party recruitment post.")
-    async def party_recruit(self, interaction: discord.Interaction):
+    @app_commands.describe(game="Optional - pick a saved game preset for this recruitment card's look")
+    @app_commands.autocomplete(game=_game_preset_autocomplete)
+    async def party_recruit(self, interaction: discord.Interaction, game: str = None):
         guild_id = interaction.guild_id
+
+        # 자동완성은 후보만 제안할 뿐 강제하지 않는다 - 존재하지 않는 값이면 모달을 열기 전에
+        # 바로 거부한다(모달 다 채운 뒤에야 알게 되는 것보다 낫다).
+        if game:
+            preset = await self._get_game_preset(guild_id, game)
+            if preset is None:
+                msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
+                await interaction.response.send_message(msg, ephemeral=True)
+                return
+
         title = await self.get_msg(guild_id, "party_modal_title")
         queue_label = await self.get_msg(guild_id, "party_modal_queue_label")
         lanes_label = await self.get_msg(guild_id, "party_modal_lanes_label")
         count_label = await self.get_msg(guild_id, "party_modal_needed_count_label")
-        modal = PartyRecruitmentModal(self, title, queue_label, lanes_label, count_label)
+        modal = PartyRecruitmentModal(self, title, queue_label, lanes_label, count_label, selected_game=game)
         await interaction.response.send_modal(modal)
 
-    async def handle_recruitment_submit(self, interaction: discord.Interaction, queue_type: str, lanes: str, count_str: str) -> None:
+    async def handle_recruitment_submit(self, interaction: discord.Interaction, queue_type: str, lanes: str,
+                                         count_str: str, selected_game: str | None = None) -> None:
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
 
@@ -392,6 +469,7 @@ class KyvoParty(KyvoBaseCog):
                     "lanes": lanes.strip() if lanes else None,
                     "needed_count": needed_count,
                     "expires_at": expires_at.isoformat(),
+                    "selected_game": selected_game or None,
                 }).execute()
             )
             recruitment_row = insert_res.data[0] if insert_res.data else None
@@ -514,10 +592,19 @@ class KyvoParty(KyvoBaseCog):
             # 🛡️ "모집 중" 상태만 대시보드 커스터마이징 대상 - 마감/꽉참/취소 색상은 그대로 고정.
             guild_settings_row = await self.get_guild_settings(guild_id)
             party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
-            description = party_settings["card_description"] or None
-            color = discord.Colour.from_str(party_settings["card_color"])
-            game_name = party_settings["game_name"]
-            card_thumbnail_url = party_settings["card_thumbnail_url"]
+
+            # /party_recruit에서 게임 프리셋을 골랐으면 그 디자인을 쓰고, 없으면(선택 안 함/그 사이
+            # 삭제·수정됨) 길드 기본값으로 안전하게 폴백한다 - 타이머는 프리셋과 무관하게 항상
+            # party_settings(길드 공통값)에서만 가져온다.
+            preset_row = None
+            if row.get("selected_game"):
+                preset_row = await self._get_game_preset(guild_id, row["selected_game"])
+            design = select_party_card_design(party_settings, preset_row)
+
+            description = design["card_description"] or None
+            color = discord.Colour.from_str(design["card_color"])
+            game_name = design["game_name"]
+            card_thumbnail_url = design["card_thumbnail_url"]
 
         embed = discord.Embed(title=title, description=description, color=color)
 

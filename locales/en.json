@@ -232,6 +232,7 @@
   "party_modal_lanes_label": "Lanes Needed (optional)",
   "party_modal_needed_count_label": "Total Players Needed (including you)",
   "party_err_invalid_count": "❌ Total players needed must be a whole number between {min} and {max}.",
+  "party_err_unknown_preset": "❌ No saved game preset named \"{game}\" was found. Please pick one from the autocomplete list, or leave it blank.",
   "party_card_title": "🎮 Party Recruitment: {queue_type}",
   "party_field_leader": "👑 **Leader**",
   "party_field_queue_type": "🎯 **Queue**",
