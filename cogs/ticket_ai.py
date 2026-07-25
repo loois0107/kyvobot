@@ -4,7 +4,12 @@ from discord.ext import commands
 import asyncio
 import os
 import time
+import hmac
+from aiohttp import web
 from openai import AsyncOpenAI
+
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
+TICKET_KNOWLEDGE_MAX_LENGTH = 4000  # OpenAI 토큰 한도 여유 + 과금/저장 폭주 방지 - party_game_presets 등과 동일한 관례
 
 class OpenTicketView(discord.ui.View):
     """
@@ -51,8 +56,75 @@ class KyvoTicketAI(commands.Cog):
         self.ai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
         # Anti-Spam and Concurrency Lock Management Layers
-        self.processing_channels = set()    
-        self.channel_cooldowns = {}         
+        self.processing_channels = set()
+        self.channel_cooldowns = {}
+
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/ticket-knowledge/add", self.handle_add_knowledge_webhook)
+            print("[⚡ TICKET_AI] Internal add-knowledge route registered at /internal/ticket-knowledge/add.", flush=True)
+        else:
+            print("[TICKET_AI][WARN] INTERNAL_API_SECRET not set - dashboard-triggered knowledge base "
+                  "writes are disabled (the /ticket-admin add-knowledge command still works).", flush=True)
+
+    # ══════════════════════════════════════════════════════════
+    #  지식베이스 추가 - /ticket-admin add-knowledge와 대시보드(내부 웹훅) 둘 다 이 함수 하나를
+    #  공유한다. 임베딩 생성(OpenAI 호출)은 항상 여기, 봇 쪽에서만 한다 - 대시보드는 목록 조회/
+    #  삭제만 직접 처리(Supabase 직결)하고, 실제 벡터 생성이 필요한 쓰기 작업은 전부 위임한다.
+    # ══════════════════════════════════════════════════════════
+    async def _add_knowledge(self, guild_id: str, content: str) -> dict:
+        cleaned = (content or "").strip()
+        if not cleaned:
+            return {"status": "empty_content"}
+        if len(cleaned) > TICKET_KNOWLEDGE_MAX_LENGTH:
+            return {"status": "content_too_long", "max_length": TICKET_KNOWLEDGE_MAX_LENGTH}
+
+        try:
+            response = await self.ai_client.embeddings.create(
+                model="text-embedding-3-small",
+                input=cleaned
+            )
+            embedding_vector = response.data[0].embedding
+        except Exception as e:
+            print(f"[TICKET_AI][ERROR] Embedding generation failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            return {"status": "embedding_failed", "detail": f"{type(e).__name__}: {e}"}
+
+        try:
+            payload = {"guild_id": str(guild_id), "content": cleaned, "embedding": embedding_vector}
+            insert_res = await asyncio.to_thread(self.bot.supabase.table("guild_knowledge").insert(payload).execute)
+            row = insert_res.data[0] if insert_res.data else None
+        except Exception as e:
+            print(f"[TICKET_AI][ERROR] Insert failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            return {"status": "db_error", "detail": f"{type(e).__name__}: {e}"}
+
+        return {"status": "ok", "id": row["id"] if row else None, "content": cleaned}
+
+    async def handle_add_knowledge_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[TICKET_AI][WARN] Rejected add-knowledge request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        content = body.get("content")
+        if not guild_id or content is None:
+            return web.Response(status=400, text="guild_id and content are both required")
+
+        result = await self._add_knowledge(str(guild_id), str(content))
+
+        status_to_http = {
+            "empty_content": 400, "content_too_long": 400,
+            "embedding_failed": 502, "db_error": 500,
+        }
+        if result["status"] != "ok":
+            return web.json_response(result, status=status_to_http.get(result["status"], 400))
+
+        return web.json_response(result)
 
     async def get_ticket_settings(self, guild_id: str):
         """Fetches server-specific custom ticket metadata configurations from Supabase."""
@@ -78,23 +150,16 @@ class KyvoTicketAI(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id)
 
-        try:
-            response = await self.ai_client.embeddings.create(
-                model="text-embedding-3-small",
-                input=content
-            )
-            embedding_vector = response.data[0].embedding
+        result = await self._add_knowledge(guild_id, content)
 
-            payload = {
-                "guild_id": guild_id,
-                "content": content,
-                "embedding": embedding_vector
-            }
-            await asyncio.to_thread(self.bot.supabase.table("guild_knowledge").insert(payload).execute)
+        if result["status"] == "empty_content":
+            await interaction.followup.send("❌ Cannot inject an empty knowledge block.", ephemeral=True)
+        elif result["status"] == "content_too_long":
+            await interaction.followup.send(f"❌ That's too long - keep it under {TICKET_KNOWLEDGE_MAX_LENGTH} characters.", ephemeral=True)
+        elif result["status"] != "ok":
+            await interaction.followup.send(f"❌ **Failed to inject knowledge node:** `{result.get('detail', result['status'])}`", ephemeral=True)
+        else:
             await interaction.followup.send("✅ **Vector Knowledge Node Registered!** Securely pushed to pgvector storage.", ephemeral=True)
-        except Exception as e:
-            print(f"[RAG INJECTION ERROR] {e}")
-            await interaction.followup.send(f"❌ **Failed to inject knowledge node:** `{e}`", ephemeral=True)
 
     @app_commands.command(name="ticket-setup", description="Deploy the persistent automated help desk support terminal.")
     @app_commands.default_permissions(manage_guild=True)
