@@ -95,6 +95,30 @@ def compute_ranking(items: list[dict], top_n: int) -> tuple[int, list[dict]]:
     return total_score, top_items
 
 
+def resolve_no_results_message_key(status_counts: dict) -> str:
+    """/cs2_flex_check에서 조회 가능한 계정이 하나도 없을 때, 뭉뚱그린 메시지 대신 실제
+    실패 사유별로 다른 안내를 고른다. status_counts는 '오늘 새로 조회를 시도했고 폴백할
+    캐시도 없었던' 계정들의 {status: count} 집계다 (stale 캐시로라도 results에 들어간
+    계정은 애초에 실패로 안 잡히므로 여기 안 들어온다).
+
+    우선순위: rate_limited가 절반 이상이면 Steam 혼잡을 원인으로 안내 -> 그게 아니고
+    private가 하나라도 있으면 개인정보 설정을 원인으로 안내 -> 나머지(error/empty 등)는
+    일반 오류 안내. 시도된 계정 자체가 없으면(내부 페이싱 캡에 전부 걸린 경우) 기존
+    범용 메시지로 폴백한다."""
+    total = sum(status_counts.values())
+    if total == 0:
+        return "cs2_err_no_valid_inventories"
+
+    rate_limited = status_counts.get("rate_limited", 0)
+    private = status_counts.get("private", 0)
+
+    if rate_limited * 2 >= total:
+        return "cs2_err_rate_limited"
+    if private > 0:
+        return "cs2_err_private_inventories"
+    return "cs2_err_generic_failure"
+
+
 class KyvoCS2Flex(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
@@ -309,6 +333,7 @@ class KyvoCS2Flex(KyvoBaseCog):
         results = []
         skipped_private = 0
         new_lookups = 0
+        failure_status_counts: dict = {}
 
         async with aiohttp.ClientSession() as session:
             for link in present_links:
@@ -340,11 +365,16 @@ class KyvoCS2Flex(KyvoBaseCog):
                     results.append((link, fresh))
                 elif fresh["status"] == "private":
                     skipped_private += 1
+                    failure_status_counts["private"] = failure_status_counts.get("private", 0) + 1
                 elif row:
                     results.append((link, row))
+                else:
+                    # 오늘 조회도 실패했고 폴백할 이전 스냅샷도 없는 경우만 "진짜 실패"로 집계한다.
+                    failure_status_counts[fresh["status"]] = failure_status_counts.get(fresh["status"], 0) + 1
 
         if not results:
-            msg = await self.get_msg(guild_id, "cs2_err_no_valid_inventories")
+            msg_key = resolve_no_results_message_key(failure_status_counts)
+            msg = await self.get_msg(guild_id, msg_key)
             await interaction.followup.send(msg)
             return
 

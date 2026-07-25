@@ -290,6 +290,9 @@
   "cs2_err_save_failed": "❌ 지금 스팀 연동 저장에 실패했습니다. 잠시 후 다시 시도해주세요.",
   "cs2_err_no_linked_members": "❌ 이 서버엔 아직 스팀 계정을 연동한 멤버가 없습니다 (`/steam_link`).",
   "cs2_err_no_valid_inventories": "❌ 연동된 계정을 지금은 하나도 조회할 수 없었습니다 (비공개 인벤토리 또는 스팀 오류). 잠시 후 다시 시도해주세요.",
+  "cs2_err_rate_limited": "⏳ Steam이 지금 요청을 많이 받아 일시적으로 응답을 못 하고 있습니다. 잠시 후 다시 시도해주세요.",
+  "cs2_err_private_inventories": "🔒 인벤토리가 비공개로 설정된 계정이 있습니다. Steam 개인정보 설정을 확인해주세요.",
+  "cs2_err_generic_failure": "❌ 스팀 오류로 연동된 인벤토리를 하나도 조회하지 못했습니다. 잠시 후 다시 시도해주세요.",
   "cs2_flex_title": "🏆 오늘의 CS2 인벤토리 부자",
   "cs2_flex_winner_line": "{member}님이 총 {count}개 아이템, 점수 **{score}**로 1위를 차지했습니다!",
   "cs2_flex_footer_skipped_private": "연동된 멤버 {count}명은 비공개 인벤토리라 제외되었습니다."

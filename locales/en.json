@@ -290,6 +290,9 @@
   "cs2_err_save_failed": "❌ Failed to save your Steam link right now. Please try again later.",
   "cs2_err_no_linked_members": "❌ No members in this server have linked a Steam account yet (`/steam_link`).",
   "cs2_err_no_valid_inventories": "❌ None of the linked accounts could be checked right now (private inventories or Steam errors). Please try again later.",
+  "cs2_err_rate_limited": "⏳ Steam is currently rate-limiting inventory requests. Please try again in a little while.",
+  "cs2_err_private_inventories": "🔒 One or more linked accounts have their inventory set to private. Please check your Steam privacy settings.",
+  "cs2_err_generic_failure": "❌ Couldn't check any linked inventories due to a Steam error. Please try again later.",
   "cs2_flex_title": "🏆 Today's CS2 Flex Champion",
   "cs2_flex_winner_line": "{member} takes the crown with a score of **{score}** across {count} items!",
   "cs2_flex_footer_skipped_private": "{count} linked member(s) skipped - private inventory."
