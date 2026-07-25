@@ -87,11 +87,19 @@ def resolve_party_settings(party_settings: dict | None) -> dict:
     if not (PARTY_CHANNEL_LIFETIME_MIN_HOURS <= channel_lifetime_hours <= PARTY_CHANNEL_LIFETIME_MAX_HOURS):
         channel_lifetime_hours = PARTY_CHANNEL_LIFETIME_HOURS
 
+    game_name = str(party_settings.get("game_name") or "").strip()[:256]  # 디스코드 author name 256자 제한
+
+    card_thumbnail_url = str(party_settings.get("card_thumbnail_url") or "").strip()
+    if not card_thumbnail_url.startswith(("http://", "https://")):
+        card_thumbnail_url = ""
+
     return {
         "card_color": card_color,
         "card_description": card_description,
         "card_lifetime_minutes": card_lifetime_minutes,
         "channel_lifetime_hours": channel_lifetime_hours,
+        "game_name": game_name,
+        "card_thumbnail_url": card_thumbnail_url,
     }
 
 
@@ -353,10 +361,20 @@ class KyvoParty(KyvoBaseCog):
         try:
             card_message = await interaction.channel.send(content=content, embed=embed, view=view, allowed_mentions=allowed_mentions)
         except Exception as e:
-            print(f"[PARTY][ERROR] Failed to post recruitment card {recruitment_id}: {type(e).__name__}: {e}", flush=True)
-            msg = await self.get_msg(guild_id, "party_err_save_failed")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            # 🛡️ 썸네일 URL이 형식은 멀쩡한데 디스코드가 거부하는 극단적 케이스까지 대비한
+            # 마지막 안전장치 - 썸네일 없이 한 번만 재시도한다. 이거 하나 때문에 모집 카드
+            # 전체가 안 뜨는 일은 없어야 한다.
+            print(f"[PARTY][WARN] Failed to post recruitment card {recruitment_id}, retrying without thumbnail: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            try:
+                fallback_embed = await self._build_card_embed(recruitment_row, current_count=1, skip_thumbnail=True)
+                card_message = await interaction.channel.send(content=content, embed=fallback_embed, view=view, allowed_mentions=allowed_mentions)
+            except Exception as e2:
+                print(f"[PARTY][ERROR] Failed to post recruitment card {recruitment_id} even without thumbnail: "
+                      f"{type(e2).__name__}: {e2}", flush=True)
+                msg = await self.get_msg(guild_id, "party_err_save_failed")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
 
         # 3) message_id 기록 - 이게 있어야 버튼 클릭 시 이 행을 다시 찾을 수 있다.
         try:
@@ -395,14 +413,16 @@ class KyvoParty(KyvoBaseCog):
 
     async def _build_card_embed(self, row: dict, current_count: int, finished: bool = False,
                                  party_channel: discord.TextChannel | None = None, expired: bool = False,
-                                 cancelled: bool = False) -> discord.Embed:
+                                 cancelled: bool = False, skip_thumbnail: bool = False) -> discord.Embed:
         guild_id = int(row["guild_id"])
         title = await self.get_msg(guild_id, "party_card_title", queue_type=row["queue_type"])
         leader_label = await self.get_msg(guild_id, "party_field_leader")
         queue_label = await self.get_msg(guild_id, "party_field_queue_type")
-        lanes_label = await self.get_msg(guild_id, "party_field_lanes")
         count_label = await self.get_msg(guild_id, "party_field_count")
         expires_label = await self.get_msg(guild_id, "party_field_expires")
+
+        game_name = ""
+        card_thumbnail_url = ""
 
         if finished:
             description = await self.get_msg(guild_id, "party_full_announcement",
@@ -420,12 +440,32 @@ class KyvoParty(KyvoBaseCog):
             party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
             description = party_settings["card_description"] or None
             color = discord.Colour.from_str(party_settings["card_color"])
+            game_name = party_settings["game_name"]
+            card_thumbnail_url = party_settings["card_thumbnail_url"]
 
         embed = discord.Embed(title=title, description=description, color=color)
+
+        if game_name:
+            embed.set_author(name=f"🎮 {game_name}")
+
+        # 🛡️ 형식이 이상하면(resolve_party_settings가 이미 걸렀지만 이중 방어) 아예 시도 안 하고
+        # 로그만 남긴다 - 썸네일 하나 때문에 카드 전체가 안 뜨는 일이 없어야 한다. 실제로 이미지가
+        # 아니거나 접근 불가능한 링크는(형식은 정상) 디스코드 클라이언트가 알아서 빈 칸으로
+        # 표시할 뿐 전송 자체는 항상 성공한다 - 그 케이스는 여기서 막을 필요/방법이 없다.
+        if card_thumbnail_url and not skip_thumbnail:
+            if card_thumbnail_url.startswith(("http://", "https://")):
+                embed.set_thumbnail(url=card_thumbnail_url)
+            else:
+                print(f"[PARTY][WARN] card_thumbnail_url has an invalid format, skipping thumbnail "
+                      f"(guild={guild_id}, url={card_thumbnail_url})", flush=True)
+
         embed.add_field(name=leader_label, value=f"<@{row['leader_id']}>", inline=True)
-        embed.add_field(name=queue_label, value=row["queue_type"], inline=True)
+        # Queue Type과 Lanes를 하나로 합쳐서 필드 수를 줄인다(5개->4개) - 촘촘했던 인라인 그리드가
+        # 자연스럽게 2열로 정리된다.
+        queue_value = row["queue_type"]
         if row.get("lanes"):
-            embed.add_field(name=lanes_label, value=row["lanes"], inline=True)
+            queue_value = f"{queue_value} · {row['lanes']}"
+        embed.add_field(name=queue_label, value=queue_value, inline=True)
         embed.add_field(name=count_label, value=f"`{current_count}/{row['needed_count']}`", inline=True)
         if not finished and not expired and not cancelled:
             ends_at = datetime.fromisoformat(row["expires_at"])
@@ -536,7 +576,14 @@ class KyvoParty(KyvoBaseCog):
                 updated_embed = await self._build_card_embed(row, current_count=len(participant_ids))
                 await interaction.message.edit(embed=updated_embed)
             except Exception as e:
-                print(f"[PARTY][WARN] Failed to update recruitment card {recruitment_id}: {type(e).__name__}: {e}", flush=True)
+                print(f"[PARTY][WARN] Failed to update recruitment card {recruitment_id}, retrying without "
+                      f"thumbnail: {type(e).__name__}: {e}", flush=True)
+                try:
+                    fallback_embed = await self._build_card_embed(row, current_count=len(participant_ids), skip_thumbnail=True)
+                    await interaction.message.edit(embed=fallback_embed)
+                except Exception as e2:
+                    print(f"[PARTY][ERROR] Failed to update recruitment card {recruitment_id} even without "
+                          f"thumbnail: {type(e2).__name__}: {e2}", flush=True)
 
     async def _create_party_channel(self, row: dict, participant_ids: list[str], card_message: discord.Message) -> None:
         guild_id = int(row["guild_id"])
