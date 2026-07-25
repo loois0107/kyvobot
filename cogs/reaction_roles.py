@@ -3,6 +3,11 @@ from discord import app_commands
 from discord.ext import commands
 from cogs.base import KyvoBaseCog
 import asyncio
+import os
+import hmac
+from aiohttp import web
+
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 
 # 🛡️ 부여했을 때 2차 확인을 받아야 하는 위험 권한 - custom_commands.py의 role_add와 동일한
 # 목록/정신. 반응 제거(역할을 뺏는 것)는 위험하지 않으니 이 체크 대상이 아니다.
@@ -64,10 +69,67 @@ class ReactionRoles(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
 
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/reaction-roles/attach", self.handle_attach_webhook)
+            print("[⚡ REACTION_ROLES] Internal attach route registered at /internal/reaction-roles/attach.", flush=True)
+        else:
+            print("[REACTION_ROLES][WARN] INTERNAL_API_SECRET not set - dashboard-triggered binding "
+                  "creation is disabled (the /reaction_role_add command still works).", flush=True)
+
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, fn)
+
+    # ══════════════════════════════════════════════════════════
+    #  바인딩 생성 - /reaction_role_add와 대시보드(내부 웹훅) 둘 다 이 함수 하나를 공유한다.
+    #  검증(메시지 존재/권한/위계) -> 이모지 부착(검증 겸) -> DB 저장 순서를 반드시 지킨다 -
+    #  DB에 먼저 쓰고 나중에 이모지 부착에 실패하면 "매핑은 있는데 실제로는 못 누르는" 유령
+    #  매핑이 생기기 때문에, 이모지 부착까지 성공해야만 DB에 쓴다.
+    # ══════════════════════════════════════════════════════════
+    async def _create_binding(self, guild: discord.Guild, channel_id: int, message_id: int,
+                               emoji: str, role: discord.Role, created_by: int) -> dict:
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            return {"status": "channel_not_found"}
+
+        try:
+            target_message = await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return {"status": "message_not_found"}
+
+        if role.permissions.administrator:
+            return {"status": "admin_role_blocked"}
+
+        bot_member = guild.me
+        if bot_member is None or not bot_member.guild_permissions.manage_roles:
+            return {"status": "no_manage_roles_permission"}
+
+        if bot_member.top_role <= role:
+            return {"status": "hierarchy_blocked"}
+
+        try:
+            await target_message.add_reaction(emoji)
+        except (discord.HTTPException, discord.NotFound):
+            return {"status": "invalid_emoji"}
+
+        try:
+            await self._db_call(
+                lambda: self.bot.supabase.table("reaction_roles").upsert({
+                    "guild_id": str(guild.id),
+                    "channel_id": str(channel_id),
+                    "message_id": str(message_id),
+                    "emoji": str(emoji),
+                    "role_id": str(role.id),
+                    "created_by": str(created_by),
+                }, on_conflict="message_id,emoji").execute()
+            )
+        except Exception as e:
+            print(f"[REACTION_ROLE][ERROR] Upsert failed: {type(e).__name__}: {e}", flush=True)
+            return {"status": "db_error", "detail": f"{type(e).__name__}: {e}"}
+
+        return {"status": "ok"}
 
     # ══════════════════════════════════════════════════════════
     #  /reaction_role_add - 관리자 명령어
@@ -86,65 +148,88 @@ class ReactionRoles(KyvoBaseCog):
 
         try:
             msg_id = int(message_id)
-            target_message = await interaction.channel.fetch_message(msg_id)
-        except (ValueError, discord.NotFound, discord.HTTPException):
+        except ValueError:
             msg = await self.get_msg(guild_id, "rr_msg_not_found")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        # A/1: administrator 역할 차단
+        # A/1: administrator 역할 차단 - _create_binding도 다시 검사하지만, 위험 권한 확인 뷰를
+        # 띄우기 전에 여기서 먼저 걸러야 불필요한 확인 절차를 안 거친다.
         if role.permissions.administrator:
             msg = await self.get_msg(guild_id, "cc_err_admin_role_blocked", role=role.name)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        # 🛡️ [신규] 생성 시점 사전 체크 - 실행 불가능한 매핑을 애초에 못 만들게 막는다.
-        # on_raw_reaction_add는 응답할 interaction이 없어 실패해도 콘솔 로그만 남는 "조용한 실패"라,
-        # 여기서 미리 걸러내는 게 유저 경험상 훨씬 중요하다.
-        bot_member = interaction.guild.me
-        if bot_member is None or not bot_member.guild_permissions.manage_roles:
-            msg = await self.get_msg(guild_id, "rr_err_no_manage_roles_permission")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
-
-        if bot_member.top_role <= role:
-            msg = await self.get_msg(guild_id, "rr_err_hierarchy", role=role.name)
-            await interaction.followup.send(msg, ephemeral=True)
-            return
-
-        # A/2: 위험 권한 2차 확인
+        # A/2: 위험 권한 2차 확인 - 이것도 _create_binding 밖에서 처리한다(Discord View는
+        # 인터랙션이 있어야만 가능해서, 웹훅 경로와 공유할 수 없다 - 대시보드는 자기 쪽 2단계
+        # 확인 API로 동일한 역할을 한다).
         dangerous = _get_dangerous_permissions(role)
         if dangerous:
             confirmed = await self._confirm_dangerous_role(interaction, role, dangerous)
             if not confirmed:
                 return  # 뷰 안에서 취소/타임아웃 메시지 이미 전송함
 
-        # 이모지가 실제로 반응 가능한지 먼저 검증한다(반응 시도 자체가 검증) - DB 저장은 그 다음.
-        try:
-            await target_message.add_reaction(emoji)
-        except (discord.HTTPException, discord.NotFound):
-            msg = await self.get_msg(guild_id, "rr_err_invalid_emoji")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+        result = await self._create_binding(interaction.guild, interaction.channel.id, msg_id, emoji, role, interaction.user.id)
 
-        try:
-            await self._db_call(
-                lambda: self.bot.supabase.table("reaction_roles").upsert({
-                    "guild_id": str(guild_id),
-                    "channel_id": str(interaction.channel.id),
-                    "message_id": str(msg_id),
-                    "emoji": str(emoji),
-                    "role_id": str(role.id),
-                    "created_by": str(interaction.user.id),
-                }, on_conflict="message_id,emoji").execute()
-            )
-        except Exception as e:
-            print(f"[REACTION_ROLE][ERROR] Upsert failed: {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send(f"❌ {type(e).__name__}: {e}", ephemeral=True)
+        status_to_key = {
+            "channel_not_found": "rr_msg_not_found",
+            "message_not_found": "rr_msg_not_found",
+            "admin_role_blocked": "cc_err_admin_role_blocked",
+            "no_manage_roles_permission": "rr_err_no_manage_roles_permission",
+            "hierarchy_blocked": "rr_err_hierarchy",
+            "invalid_emoji": "rr_err_invalid_emoji",
+        }
+        if result["status"] != "ok":
+            key = status_to_key.get(result["status"])
+            if key:
+                msg = await self.get_msg(guild_id, key, role=role.name)
+            else:
+                msg = f"❌ {result.get('detail', result['status'])}"
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         msg = await self.get_msg(guild_id, "rr_success", message_id=message_id, emoji=emoji, role_name=role.name)
         await interaction.followup.send(msg, ephemeral=True)
+
+    async def handle_attach_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[REACTION_ROLE][WARN] Rejected attach request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        channel_id = body.get("channel_id")
+        message_id = body.get("message_id")
+        emoji = body.get("emoji")
+        role_id = body.get("role_id")
+        created_by = body.get("created_by")
+        if not all([guild_id, channel_id, message_id, emoji, role_id, created_by]):
+            return web.Response(status=400, text="guild_id, channel_id, message_id, emoji, role_id, created_by are all required")
+
+        guild = self.bot.get_guild(int(guild_id))
+        if guild is None:
+            return web.Response(status=404, text="guild not in cache")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            return web.Response(status=404, text="role not found")
+
+        result = await self._create_binding(guild, int(channel_id), int(message_id), str(emoji), role, int(created_by))
+
+        status_to_http = {
+            "channel_not_found": 404, "message_not_found": 404,
+            "admin_role_blocked": 400, "no_manage_roles_permission": 400,
+            "hierarchy_blocked": 400, "invalid_emoji": 400, "db_error": 500,
+        }
+        if result["status"] != "ok":
+            return web.json_response(result, status=status_to_http.get(result["status"], 400))
+
+        return web.json_response(result)
 
     async def _confirm_dangerous_role(self, interaction: discord.Interaction, role: discord.Role, dangerous: list[str]) -> bool:
         """위험 권한 역할일 때 Confirm/Cancel 뷰를 보여주고 응답을 기다린다."""
