@@ -259,7 +259,7 @@
   "scrim_btn_leave": "취소하기",
   "scrim_btn_start": "경기 시작",
   "scrim_card_title": "⚔️ 5v5 내전",
-  "scrim_card_recruit_desc": "{leader}님이 5v5 내전 인원을 모집 중입니다!\n인원이 충분하면 {leader}님이 언제든 **경기 시작**을 누를 수 있습니다. 아무도 시작하지 않으면 {time}에 모집이 마감됩니다.",
+  "scrim_card_recruit_desc": "{leader}님이 5v5 내전 인원을 모집 중입니다!\n⚠️ **참여하면 경기 시작 시 팀 음성 채널로 자동 강제 이동된다는 것에 동의하는 것입니다.**\n인원이 충분하면 {leader}님이 언제든 **경기 시작**을 누를 수 있습니다. 아무도 시작하지 않으면 {time}에 모집이 마감됩니다.",
   "scrim_card_ready_desc": "인원이 다 찼습니다! {leader}님, 준비되면 **경기 시작**을 눌러주세요.",
   "scrim_card_cancelled_desc": "시간 내에 인원이 다 차지 않아 이 내전은 취소되었습니다.",
   "scrim_card_started_desc": "팀 배정과 음성 채널 준비가 끝났습니다. 좋은 경기 되세요!",
