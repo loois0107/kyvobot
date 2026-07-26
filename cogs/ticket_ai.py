@@ -12,6 +12,12 @@ from openai import AsyncOpenAI
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 TICKET_KNOWLEDGE_MAX_LENGTH = 4000  # OpenAI 토큰 한도 여유 + 과금/저장 폭주 방지 - party_game_presets 등과 동일한 관례
 
+# 지식 검색(임베딩 생성/Supabase 매칭) 반복 실패 감지 - anonymous_reports의 일일 한도 카운터와 동일한
+# SET NX + INCR 윈도우 패턴.
+TICKET_AI_FAILURE_WINDOW_SECONDS = 600     # 10분
+TICKET_AI_FAILURE_THRESHOLD = 5            # 윈도우 안 5회
+TICKET_AI_ALERT_COOLDOWN_SECONDS = 3600    # 재알림까지 1시간
+
 # AI 답변 피드백 버튼의 custom_id - anonymous_reports/giveaway의 영구 View와 동일한 이유로
 # 고정 문자열이어야 한다 (message_id는 여기 넣지 않는다 - 아래 TicketFeedbackView docstring 참고).
 TICKET_FEEDBACK_UP_ID = "kyvo_ticket_feedback:up"
@@ -297,6 +303,80 @@ class KyvoTicketAI(commands.Cog):
                 ephemeral=True
             )
 
+    async def _resolve_admin_log_channel(self, guild: discord.Guild, guild_id: str) -> discord.TextChannel | None:
+        """관리자에게 뭔가 알려야 할 때(티켓 아카이브, 지식 검색 반복 실패 등) 쓸 채널을 찾는다 -
+        archive_and_log_ticket이 원래 쓰던 로직을 추출한 것. 두 군데 이상에서 재사용하므로 공유
+        함수로 뺐다(이 세션 전체의 관례 - 두 번째 쓰임이 생기면 추출)."""
+        guild_settings = await self.bot.get_guild_settings(guild_id)
+        configured_log_id = guild_settings.get("antinuke_settings", {}).get("log_channel_id")
+
+        if configured_log_id:
+            log_channel = guild.get_channel(int(configured_log_id))
+            if log_channel:
+                return log_channel
+
+        log_channel = discord.utils.get(guild.text_channels, name="ticket-logs")
+        if log_channel:
+            return log_channel
+
+        log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
+        if log_channel:
+            return log_channel
+
+        return guild.system_channel
+
+    async def _record_knowledge_search_failure(self, guild: discord.Guild, guild_id: str, stage: str, detail: str) -> None:
+        """지식 검색(임베딩 생성/Supabase 매칭) 실패를 Redis 윈도우 카운터에 기록하고, 짧은 시간
+        안에 반복되면 관리자 로그 채널에 1회 알린다. 유저에게는 여전히 아무것도 노출하지 않는다 -
+        이건 순수 관리자용 신호다. 이 감지 자체가 실패해도(Redis 장애 등) 원래 티켓 응답 흐름을
+        절대 막으면 안 되므로 전체가 fail-open이다."""
+        fail_key = f"ticket_ai:knowledge_search_fail:{guild_id}"
+        cooldown_key = f"ticket_ai:knowledge_search_alert_cooldown:{guild_id}"
+
+        try:
+            await self.bot.redis.set(fail_key, 0, ex=TICKET_AI_FAILURE_WINDOW_SECONDS, nx=True)
+            count = await self.bot.redis.incr(fail_key)
+        except Exception as e:
+            print(f"[TICKET_AI][WARN] Failure-counter tracking itself failed, skipping alert check: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return
+
+        if count < TICKET_AI_FAILURE_THRESHOLD:
+            return
+
+        try:
+            cooldown_acquired = await self.bot.redis.set(cooldown_key, "1", ex=TICKET_AI_ALERT_COOLDOWN_SECONDS, nx=True)
+        except Exception as e:
+            print(f"[TICKET_AI][WARN] Alert cooldown check failed, skipping alert to avoid spam risk: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return
+
+        if not cooldown_acquired:
+            return  # 이미 최근에(쿨다운 안에) 알림을 보냈다
+
+        log_channel = await self._resolve_admin_log_channel(guild, guild_id)
+        if log_channel is None:
+            print(f"[TICKET_AI][WARN] Knowledge search failing repeatedly (guild={guild_id}) but no admin "
+                  f"log channel could be resolved to alert.", flush=True)
+            return
+
+        alert_embed = discord.Embed(
+            title="⚠️ AI Knowledge Search Repeatedly Failing",
+            description=(
+                f"Knowledge search has failed **{count} times** in the last "
+                f"{TICKET_AI_FAILURE_WINDOW_SECONDS // 60} minutes.\n"
+                f"Most recent failure stage: `{stage}`\n```{detail[:500]}```\n"
+                f"Users are still getting answers, but without server documentation context. "
+                f"Check OpenAI/Supabase status."
+            ),
+            color=0xe67e22,
+        )
+        try:
+            await log_channel.send(embed=alert_embed)
+        except Exception as e:
+            print(f"[TICKET_AI][ERROR] Failed to send knowledge-search-failure alert (guild={guild_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+
     async def archive_and_log_ticket(self, channel: discord.TextChannel, closed_by: discord.User):
         """🤖 TRANSCRIPT SUMMARY PILELINE: Extracts message history and generates an executive AI report."""
         try:
@@ -343,25 +423,7 @@ class KyvoTicketAI(commands.Cog):
             ai_summary_report = chat_response.choices[0].message.content.strip()
 
             # 3. 📡 SMART ROUTING SECURITY: Strict sequence routing to prevent public general leaks
-            log_channel = None
-            guild_settings = await self.bot.get_guild_settings(guild_id)
-            configured_log_id = guild_settings.get("antinuke_settings", {}).get("log_channel_id")
-
-            # Priority 1: Check dashboard configuration settings row
-            if configured_log_id:
-                log_channel = guild.get_channel(int(configured_log_id))
-            
-            # Priority 2: Look for an explicit premium channel named 'ticket-logs'
-            if not log_channel:
-                log_channel = discord.utils.get(guild.text_channels, name="ticket-logs")
-                
-            # Priority 3: 🔒 SMART FALLBACK - Route to 'mod-logs' instead of general if ticket-logs is missing
-            if not log_channel:
-                log_channel = discord.utils.get(guild.text_channels, name="mod-logs")
-                
-            # Priority 4: Fallback to base system notification gateway channel
-            if not log_channel:
-                log_channel = guild.system_channel
+            log_channel = await self._resolve_admin_log_channel(guild, guild_id)
 
             # 4. Deliver the completed summary report archive packet
             if log_channel:
@@ -497,28 +559,39 @@ class KyvoTicketAI(commands.Cog):
                 memory_history.reverse()
 
             retrieved_context = "No explicit server documentation matching this specific query was found in the database."
-            matched_nodes = []  # try 블록이 embeddings/rpc 호출 도중 실패해도 아래에서 안전하게 참조 가능하도록 기본값 확보
+            matched_nodes = []  # 두 단계 모두 실패해도 아래에서 안전하게 참조 가능하도록 기본값 확보
+
+            # 🛡️ 임베딩 생성과 Supabase 매칭을 별도 try/except로 분리한다 - 예전엔 하나로 뭉쳐서
+            # 잡았기 때문에 로그만 보고는 OpenAI가 문제였는지 Supabase가 문제였는지 알 수 없었다.
+            query_vector = None
             try:
                 query_response = await self.ai_client.embeddings.create(
                     model="text-embedding-3-small",
                     input=user_query
                 )
                 query_vector = query_response.data[0].embedding
+            except Exception as e:
+                print(f"[TICKET_AI][ERROR] Embedding generation failed during knowledge search "
+                      f"(guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+                await self._record_knowledge_search_failure(message.guild, guild_id, "embedding", f"{type(e).__name__}: {e}")
 
-                rpc_params = {
-                    "query_embedding": query_vector,
-                    "match_threshold": 0.28,
-                    "match_count": 1,        
-                    "p_guild_id": guild_id
-                }
-                
-                db_response = await asyncio.to_thread(self.bot.supabase.rpc("match_knowledge", rpc_params).execute)
-                matched_nodes = db_response.data
-                
-                if matched_nodes:
-                    retrieved_context = matched_nodes[0]["content"]
-            except Exception as db_err:
-                print(f"[DATABASE SEARCH EXCEPTION] {db_err}")
+            if query_vector is not None:
+                try:
+                    rpc_params = {
+                        "query_embedding": query_vector,
+                        "match_threshold": 0.28,
+                        "match_count": 1,
+                        "p_guild_id": guild_id
+                    }
+                    db_response = await asyncio.to_thread(self.bot.supabase.rpc("match_knowledge", rpc_params).execute)
+                    matched_nodes = db_response.data
+
+                    if matched_nodes:
+                        retrieved_context = matched_nodes[0]["content"]
+                except Exception as e:
+                    print(f"[TICKET_AI][ERROR] Knowledge match RPC failed (guild={guild_id}): "
+                          f"{type(e).__name__}: {e}", flush=True)
+                    await self._record_knowledge_search_failure(message.guild, guild_id, "supabase_rpc", f"{type(e).__name__}: {e}")
 
             settings = await self.get_ticket_settings(guild_id)
             
