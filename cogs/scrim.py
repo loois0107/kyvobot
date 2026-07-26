@@ -7,8 +7,8 @@ import random
 import itertools
 from datetime import datetime, timezone, timedelta
 
-SCRIM_TEAM_SIZE = 5
-SCRIM_TOTAL_NEEDED = SCRIM_TEAM_SIZE * 2  # 10 - "5v5"로 고정, 파라미터로 안 받는다
+SCRIM_TOTAL_NEEDED = 10                   # 로스터 상한(정원) - 이 이상은 못 들어옴
+SCRIM_MIN_NEEDED = 4                      # 리더가 "경기 시작"을 누를 수 있는 최소 인원(2v2)
 SCRIM_RECRUIT_DURATION_MINUTES = 30       # 모집 타임아웃 - gg_rsvp와 동일한 정신
 SCRIM_AUTO_END_HOURS = 3                  # 리더가 /내전종료를 잊어도 결국 정리되는 최종 안전장치
 SCRIM_CHECK_INTERVAL_SECONDS = 30
@@ -53,18 +53,22 @@ def resolve_effective_tier_ranks(participant_tiers: dict[str, str | None]) -> di
     return {uid: (r if r is not None else fallback) for uid, r in ranks.items()}
 
 
-def balance_teams(effective_ranks: dict[str, float], team_size: int = SCRIM_TEAM_SIZE) -> tuple[list[str], list[str]]:
-    """정확히 team_size*2명을 받아, 완전탐색으로 두 팀의 티어 합 차이가 최소인 분할을 찾는다.
+def balance_teams(effective_ranks: dict[str, float]) -> tuple[list[str], list[str]]:
+    """SCRIM_MIN_NEEDED~SCRIM_TOTAL_NEEDED 사이 아무 인원이나 받아, 완전탐색으로 두 팀
+    (floor(N/2) : ceil(N/2))의 티어 합 차이가 최소인 분할을 찾는다. N이 홀수면 한쪽이 1명
+    많아지는데 어차피 팀 이름(A/B)은 임의 라벨이라 공정성 문제는 없다. N<=10이라 최악의 경우도
     C(10,5)=252가지뿐이라 근사 없이 최적해를 그대로 구할 수 있다. 동점이면 무작위로 하나를
     골라 매번 같은 조합이 나오지 않게 한다."""
     user_ids = list(effective_ranks.keys())
-    expected = team_size * 2
-    if len(user_ids) != expected:
-        raise ValueError(f"balance_teams requires exactly {expected} participants, got {len(user_ids)}")
+    n = len(user_ids)
+    if not (SCRIM_MIN_NEEDED <= n <= SCRIM_TOTAL_NEEDED):
+        raise ValueError(f"balance_teams requires between {SCRIM_MIN_NEEDED} and {SCRIM_TOTAL_NEEDED} "
+                          f"participants, got {n}")
+    team_a_size = n // 2
 
     best_diff = None
     best_splits: list[tuple[list[str], list[str]]] = []
-    for combo in itertools.combinations(user_ids, team_size):
+    for combo in itertools.combinations(user_ids, team_a_size):
         combo_set = set(combo)
         other = [u for u in user_ids if u not in combo_set]
         diff = abs(sum(effective_ranks[u] for u in combo) - sum(effective_ranks[u] for u in other))
@@ -80,9 +84,16 @@ def balance_teams(effective_ranks: dict[str, float], team_size: int = SCRIM_TEAM
 class ScrimRecruitView(discord.ui.View):
     """모집 중 카드에 붙는 영구 View - gg_rsvp.py의 GGRsvpView와 동일한 이유(재시작 후에도 버튼이
     계속 작동해야 함)로 timeout=None + 고정 custom_id. 어떤 내전인지는 매 클릭마다
-    interaction.message.id로 DB에서 다시 찾는다."""
+    interaction.message.id로 DB에서 다시 찾는다.
 
-    def __init__(self, cog: "KyvoScrim", join_label: str = "Join", leave_label: str = "Leave"):
+    🛡️ 참여/취소/시작 버튼이 처음부터(리더 혼자일 때부터) 항상 다 같이 붙어있다 - 예전엔 정원
+    10명이 차야 "경기 시작" 버튼으로 화면이 바뀌는 별도 View(ScrimReadyView)였지만, 리더가
+    인원과 무관하게 아무 때나 시작할 수 있어야 한다는 요구사항으로 바뀌면서 상태 전환 자체가
+    없어졌다 - "시작" 클릭 시 최소 인원 미달이면 handle_start가 안내만 하고 버튼/카드는 그대로
+    둔다(뷰를 바꿀 필요가 없어짐)."""
+
+    def __init__(self, cog: "KyvoScrim", join_label: str = "Join", leave_label: str = "Leave",
+                 start_label: str = "Start Match"):
         super().__init__(timeout=None)
         self.cog = cog
 
@@ -96,25 +107,16 @@ class ScrimRecruitView(discord.ui.View):
         leave_btn.callback = self._on_leave
         self.add_item(leave_btn)
 
+        start_btn = discord.ui.Button(label=start_label, style=discord.ButtonStyle.primary,
+                                       custom_id=SCRIM_START_ID, emoji="🚀")
+        start_btn.callback = self._on_start
+        self.add_item(start_btn)
+
     async def _on_join(self, interaction: discord.Interaction):
         await self.cog.handle_join(interaction)
 
     async def _on_leave(self, interaction: discord.Interaction):
         await self.cog.handle_leave(interaction)
-
-
-class ScrimReadyView(discord.ui.View):
-    """정원이 다 찼을 때 카드에 붙는 영구 View - "경기 시작" 버튼 하나뿐이다. 별도 custom_id를
-    쓰는 별개의 View라 ScrimRecruitView와 동시에 존재해도 라우팅이 섞이지 않는다."""
-
-    def __init__(self, cog: "KyvoScrim", start_label: str = "Start Match"):
-        super().__init__(timeout=None)
-        self.cog = cog
-
-        start_btn = discord.ui.Button(label=start_label, style=discord.ButtonStyle.primary,
-                                       custom_id=SCRIM_START_ID, emoji="🚀")
-        start_btn.callback = self._on_start
-        self.add_item(start_btn)
 
     async def _on_start(self, interaction: discord.Interaction):
         await self.cog.handle_start(interaction)
@@ -222,7 +224,8 @@ class KyvoScrim(KyvoBaseCog):
 
         join_label = await self.get_msg(guild_id, "scrim_btn_join")
         leave_label = await self.get_msg(guild_id, "scrim_btn_leave")
-        view = ScrimRecruitView(self, join_label, leave_label)
+        start_label = await self.get_msg(guild_id, "scrim_btn_start")
+        view = ScrimRecruitView(self, join_label, leave_label, start_label)
         embed = await self._build_recruit_embed(row, [leader_id])
 
         try:
@@ -251,17 +254,8 @@ class KyvoScrim(KyvoBaseCog):
         embed = discord.Embed(title=title, description=desc, color=discord.Color.blurple())
         players_label = await self.get_msg(guild_id, "scrim_field_players")
         mentions = "\n".join(f"<@{uid}>" for uid in participant_ids) or "-"
-        embed.add_field(name=f"{players_label} ({len(participant_ids)}/{SCRIM_TOTAL_NEEDED})", value=mentions, inline=False)
-        return embed
-
-    async def _build_ready_embed(self, row: dict, participant_ids: list[str]) -> discord.Embed:
-        guild_id = int(row["guild_id"])
-        title = await self.get_msg(guild_id, "scrim_card_title")
-        desc = await self.get_msg(guild_id, "scrim_card_ready_desc", leader=f"<@{row['leader_id']}>")
-        embed = discord.Embed(title=title, description=desc, color=discord.Color.gold())
-        players_label = await self.get_msg(guild_id, "scrim_field_players")
-        mentions = "\n".join(f"<@{uid}>" for uid in participant_ids) or "-"
-        embed.add_field(name=f"{players_label} ({len(participant_ids)}/{SCRIM_TOTAL_NEEDED})", value=mentions, inline=False)
+        embed.add_field(name=f"{players_label} ({len(participant_ids)}/{SCRIM_TOTAL_NEEDED}, min {SCRIM_MIN_NEEDED} to start)",
+                         value=mentions, inline=False)
         return embed
 
     async def _build_cancelled_embed(self, row: dict) -> discord.Embed:
@@ -299,8 +293,9 @@ class KyvoScrim(KyvoBaseCog):
 
     # ══════════════════════════════════════════════════════════
     #  참여/취소 - gg_rsvp.py의 handle_join/handle_leave와 동일한 정원 방어 패턴(카운터 컬럼
-    #  없이 낙관적 INSERT + 정렬 후 truncate로 동시 클릭에도 정확히 10명 캡을 지킨다). 다른 점은
-    #  가득 차면 바로 "닫힘"이 아니라 status='full'로 전환하고 "경기 시작" 버튼으로 교체하는 것.
+    #  없이 낙관적 INSERT + 정렬 후 truncate로 동시 클릭에도 정확히 10명 캡을 지킨다). 정원이
+    #  차도 별도 상태 전환 없이 그냥 더 이상 못 들어오게만 막는다 - "경기 시작"은 리더가 인원과
+    #  무관하게 언제든 누를 수 있어서(handle_start), 정원 도달이 더 이상 특별한 이벤트가 아니다.
     # ══════════════════════════════════════════════════════════
     async def handle_join(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -356,15 +351,12 @@ class KyvoScrim(KyvoBaseCog):
         msg = await self.get_msg(guild_id, "scrim_success_joined")
         await interaction.followup.send(msg, ephemeral=True)
 
-        if len(confirmed) >= SCRIM_TOTAL_NEEDED:
-            await self._claim_full(row, confirmed, message=interaction.message)
-        else:
-            embed = await self._build_recruit_embed(row, confirmed)
-            try:
-                await interaction.message.edit(embed=embed)
-            except Exception as e:
-                print(f"[SCRIM][WARN] Failed to refresh scrim card {message_id} after join: "
-                      f"{type(e).__name__}: {e}", flush=True)
+        embed = await self._build_recruit_embed(row, confirmed)
+        try:
+            await interaction.message.edit(embed=embed)
+        except Exception as e:
+            print(f"[SCRIM][WARN] Failed to refresh scrim card {message_id} after join: "
+                  f"{type(e).__name__}: {e}", flush=True)
 
     async def handle_leave(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -406,46 +398,11 @@ class KyvoScrim(KyvoBaseCog):
             print(f"[SCRIM][WARN] Failed to refresh scrim card {message_id} after leave: "
                   f"{type(e).__name__}: {e}", flush=True)
 
-    async def _claim_full(self, row: dict, participant_ids: list[str], message: discord.Message | None = None) -> str:
-        """원자적 클레임: status='recruiting' 조건부 UPDATE라, 정원 마감과 모집 타임아웃이 거의
-        동시에 발생해도 정확히 하나만 처리한다(gg_rsvp._claim_and_close와 동일한 정신)."""
-        try:
-            claim_res = await self._db_call(
-                lambda: self.bot.supabase.table("scrims")
-                        .update({"status": "full"}).eq("id", row["id"]).eq("status", "recruiting").execute()
-            )
-        except Exception as e:
-            print(f"[SCRIM][ERROR] Failed to claim scrim {row['id']} as full: {type(e).__name__}: {e}", flush=True)
-            return "error"
-
-        if not claim_res.data:
-            return "already_resolved"
-
-        guild_id = int(row["guild_id"])
-        start_label = await self.get_msg(guild_id, "scrim_btn_start")
-        embed = await self._build_ready_embed(row, participant_ids)
-        view = ScrimReadyView(self, start_label)
-
-        if message is None:
-            channel = self.bot.get_channel(int(row["channel_id"]))
-            message_id = row.get("message_id")
-            if channel is not None and message_id:
-                try:
-                    message = await channel.fetch_message(int(message_id))
-                except Exception:
-                    message = None
-
-        if message is not None:
-            try:
-                await message.edit(embed=embed, view=view)
-            except Exception as e:
-                print(f"[SCRIM][ERROR] Failed to update ready-state scrim card: {type(e).__name__}: {e}", flush=True)
-
-        return "claimed"
-
     # ══════════════════════════════════════════════════════════
-    #  경기 시작 - 리더만 가능. MOVE_MEMBERS/manage_channels 사전 체크(둘 다 없으면 명확히 실패,
-    #  수동 모드로 조용히 대체하지 않는다) → 완전탐색 팀 배정 → 음성 채널 2개 생성 → 강제 이동.
+    #  경기 시작 - 리더만, 인원과 무관하게 아무 때나 누를 수 있다(최소 인원 미만이면 안내만 하고
+    #  아무 것도 바꾸지 않는다 - 카드/버튼은 그대로 남아 계속 모집을 이어갈 수 있다).
+    #  MOVE_MEMBERS/manage_channels 사전 체크(둘 다 없으면 명확히 실패, 수동 모드로 조용히
+    #  대체하지 않는다) → 완전탐색 팀 배정 → 음성 채널 2개 생성 → 강제 이동.
     # ══════════════════════════════════════════════════════════
     async def handle_start(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
@@ -455,13 +412,20 @@ class KyvoScrim(KyvoBaseCog):
         guild = interaction.guild
 
         row = await self._get_scrim_by_message(message_id)
-        if not row or row["status"] != "full":
+        if not row or row["status"] != "recruiting":
             msg = await self.get_msg(guild_id, "scrim_err_not_ready")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
         if user_id != row["leader_id"]:
             msg = await self.get_msg(guild_id, "scrim_err_leader_only")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        current_count = len(await self._get_participants(row["id"]))
+        if current_count < SCRIM_MIN_NEEDED:
+            msg = await self.get_msg(guild_id, "scrim_err_min_not_reached",
+                                      min=SCRIM_MIN_NEEDED, current=current_count)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -481,7 +445,7 @@ class KyvoScrim(KyvoBaseCog):
                     "status": "in_progress",
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "auto_end_at": (datetime.now(timezone.utc) + timedelta(hours=SCRIM_AUTO_END_HOURS)).isoformat(),
-                }).eq("id", row["id"]).eq("status", "full").execute()
+                }).eq("id", row["id"]).eq("status", "recruiting").execute()
             )
         except Exception as e:
             print(f"[SCRIM][ERROR] Failed to claim scrim {row['id']} for start: {type(e).__name__}: {e}", flush=True)
@@ -490,6 +454,8 @@ class KyvoScrim(KyvoBaseCog):
             return
 
         if not claim_res.data:
+            # 🛡️ 정원 마감 타임아웃(모집 취소)이나 다른 시작 클릭이 그 사이 먼저 이 행을
+            # 선점했을 수 있다 - status='recruiting' 조건부 UPDATE라 정확히 하나만 통과한다.
             msg = await self.get_msg(guild_id, "scrim_err_already_started")
             await interaction.followup.send(msg, ephemeral=True)
             return
@@ -821,5 +787,4 @@ async def setup(bot):
     cog = KyvoScrim(bot)
     await bot.add_cog(cog)
     bot.add_view(ScrimRecruitView(cog))
-    bot.add_view(ScrimReadyView(cog))
     print("[⚡ SCRIM] Cog extension setup complete.", flush=True)
