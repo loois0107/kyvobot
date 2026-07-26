@@ -43,6 +43,7 @@ class KyvoBot(commands.Bot):
             'cogs.reaction_roles',
             'cogs.party',
             'cogs.gg_rsvp',
+            'cogs.scrim',
             'cogs.tier_verify',
             'cogs.twitch',
             'cogs.cs2_flex',
