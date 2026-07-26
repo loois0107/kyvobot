@@ -4,10 +4,16 @@ from discord.ext import commands
 from cogs.base import KyvoBaseCog
 import asyncio
 import time
+import os
+import hmac
+from aiohttp import web
 from datetime import datetime, timezone
 
 REPORT_DAILY_LIMIT = 3
 REPORT_DAILY_WINDOW_SECONDS = 86400
+
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
+VALID_DECISION_ACTIONS = ("approve", "reject", "block")
 
 # 관리자 큐 버튼의 custom_id - 재시작 후에도 discord.py가 이 문자열만으로 콜백을 다시 찾아
 # 연결할 수 있어야 하므로 고정 문자열이어야 한다 (report_id는 여기 넣지 않는다 - 아래 View
@@ -97,6 +103,14 @@ class KyvoAnonymousReports(KyvoBaseCog):
         super().__init__(bot)
         # Redis 장애 시 폴백용 (guild_id, user_id) -> (오늘 카운트, 윈도우 만료 시각)
         self.daily_limit_cache: dict[tuple[int, int], tuple[int, float]] = {}
+
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/anonymous-reports/decide", self.handle_decide_webhook)
+            print("[⚡ ANONYMOUS_REPORTS] Internal decide route registered at /internal/anonymous-reports/decide.", flush=True)
+        else:
+            print("[ANONYMOUS_REPORTS][WARN] INTERNAL_API_SECRET not set - dashboard-triggered decisions are disabled "
+                  "(the admin queue buttons still work).", flush=True)
 
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
@@ -274,8 +288,83 @@ class KyvoAnonymousReports(KyvoBaseCog):
         await interaction.followup.send(msg, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
-    #  관리자 큐 버튼 처리 (승인 / 거절 / 익명 차단)
+    #  관리자 결정 공통 처리 (승인 / 거절 / 익명 차단)
+    #  - 디스코드 버튼과 대시보드 웹훅이 이 함수 하나를 공유한다. interaction을 전혀 건드리지
+    #    않으므로 두 경로가 대칭적으로 재사용할 수 있다(관리자 메시지 편집은 호출자 책임).
+    #  - UPDATE 자체에 WHERE status='pending' 조건을 걸어 원자적으로 "선점"한다 - 버튼 클릭과
+    #    웹훅 요청이 거의 동시에 들어와도 실제로 갱신되는(res.data가 채워지는) 쪽은 하나뿐이다.
+    #    앞단의 status 프리체크는 그저 빠른 실패용 편의 체크일 뿐, 진짜 방어선은 이 조건부 UPDATE.
     # ══════════════════════════════════════════════════════════
+    async def _finalize_report(self, report_row: dict, action: str, admin_id) -> dict:
+        report_id = report_row["id"]
+        guild_id = report_row["guild_id"]
+        reporter_user_id = report_row["user_id"]  # 🛡️ 시스템 내부 전용 - 리턴 dict에 절대 넣지 않는다
+        new_status = "approved" if action == "approve" else "rejected"
+
+        try:
+            update_res = await self._db_call(
+                lambda: self.bot.supabase.table("anonymous_reports")
+                        .update({"status": new_status, "resolved_by": str(admin_id),
+                                 "resolved_at": datetime.now(timezone.utc).isoformat()})
+                        .eq("id", report_id).eq("status", "pending").execute()
+            )
+        except Exception as e:
+            print(f"[ANON_REPORT][ERROR] Failed to update report {report_id} status: {type(e).__name__}: {e}", flush=True)
+            return {"status": "db_error"}
+
+        if not update_res.data:
+            # 이미 다른 경로(버튼 vs 웹훅)가 먼저 처리를 선점했다.
+            return {"status": "already_resolved"}
+
+        if action == "block":
+            try:
+                await self._db_call(
+                    lambda: self.bot.supabase.table("anonymous_report_bans")
+                            .upsert({"guild_id": str(guild_id), "user_id": str(reporter_user_id),
+                                     "banned_by": str(admin_id)})
+                            .execute()
+                )
+            except Exception as e:
+                print(f"[ANON_REPORT][ERROR] Failed to record ban for report {report_id}: {type(e).__name__}: {e}", flush=True)
+
+        if action == "approve":
+            settings = await self._get_report_settings(guild_id)
+            publish_channel_id = settings.get("publish_channel_id")
+            publish_channel = self.bot.get_channel(int(publish_channel_id)) if publish_channel_id else None
+            if publish_channel is not None:
+                pub_title = await self.get_msg(guild_id, "anon_report_publish_title")
+                pub_footer = await self.get_msg(guild_id, "anon_report_publish_footer")
+                pub_embed = discord.Embed(title=pub_title, description=report_row["content"],
+                                           color=discord.Color.green(), timestamp=datetime.now(timezone.utc))
+                pub_embed.set_footer(text=pub_footer)
+                try:
+                    await publish_channel.send(embed=pub_embed)
+                except Exception as e:
+                    print(f"[ANON_REPORT][ERROR] Failed to publish approved report {report_id}: "
+                          f"{type(e).__name__}: {e}", flush=True)
+
+        return {"status": "ok", "report_id": report_id, "guild_id": guild_id, "action": action}
+
+    async def _mark_admin_message_resolved(self, message: discord.Message, guild_id, action: str) -> None:
+        """관리자 큐 메시지에서 버튼을 제거하고 처리 결과를 표시한다 - 버튼 경로와 웹훅 경로가
+        공유한다(웹훅 경로는 admin_message_id로 fetch한 메시지를 넘겨준다)."""
+        resolved_key = {
+            "approve": "anon_report_resolved_approved",
+            "reject": "anon_report_resolved_rejected",
+            "block": "anon_report_resolved_blocked",
+        }[action]
+        resolved_text = await self.get_msg(guild_id, resolved_key)
+
+        original_embed = message.embeds[0] if message.embeds else discord.Embed()
+        updated_embed = original_embed.copy()
+        updated_embed.add_field(name="Status", value=resolved_text, inline=False)
+
+        # 🛡️ [Persistent View 주의사항] self(AnonymousReportAdminView)는 등록된 하나의 인스턴스를
+        # 모든 제보 메시지가 공유한다. 여기서 self.disabled=True로 mutate한 뒤 view=self로 edit하면
+        # 다른 모든 제보 메시지의 버튼까지 같이 영향을 받는 공유 상태 버그가 된다. 그래서 view=None으로
+        # 교체해 이 메시지에서만 버튼을 완전히 제거한다(등록된 템플릿 자체는 안 건드림).
+        await message.edit(embed=updated_embed, view=None)
+
     async def handle_admin_decision(self, interaction: discord.Interaction, action: str) -> None:
         await interaction.response.defer()
         guild_id = interaction.guild_id
@@ -300,66 +389,82 @@ class KyvoAnonymousReports(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        report_id = report_row["id"]
-        reporter_user_id = report_row["user_id"]  # 🛡️ 시스템 내부 전용 - 임베드/메시지 어디에도 노출 금지
-        admin_id = interaction.user.id
-        new_status = "approved" if action == "approve" else "rejected"
+        result = await self._finalize_report(report_row, action, interaction.user.id)
 
-        try:
-            await self._db_call(
-                lambda: self.bot.supabase.table("anonymous_reports")
-                        .update({"status": new_status, "resolved_by": str(admin_id),
-                                 "resolved_at": datetime.now(timezone.utc).isoformat()})
-                        .eq("id", report_id).execute()
-            )
-        except Exception as e:
-            print(f"[ANON_REPORT][ERROR] Failed to update report {report_id} status: {type(e).__name__}: {e}", flush=True)
+        if result["status"] == "db_error":
             await interaction.followup.send("❌ An error occurred while processing this report.", ephemeral=True)
             return
+        if result["status"] == "already_resolved":
+            msg = await self.get_msg(guild_id, "anon_report_already_resolved")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
 
-        if action == "block":
+        await self._mark_admin_message_resolved(interaction.message, guild_id, action)
+
+    # ══════════════════════════════════════════════════════════
+    #  대시보드발 내부 웹훅 - 승인/거절/차단을 봇에 위임한다. 처리 로직은 버튼 경로와
+    #  100% 동일한 _finalize_report를 거치고, 관리자 큐 메시지도 여기서 직접 편집해
+    #  버튼이 남아있지 않게 한다(admin_message_id로 메시지를 다시 찾아서).
+    # ══════════════════════════════════════════════════════════
+    async def handle_decide_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[ANON_REPORT][WARN] Rejected decide request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        report_id = body.get("report_id")
+        action = body.get("action")
+        admin_id = body.get("admin_id")
+        if not all([guild_id, report_id, action, admin_id]):
+            return web.Response(status=400, text="guild_id, report_id, action, admin_id are all required")
+        if action not in VALID_DECISION_ACTIONS:
+            return web.json_response({"status": "invalid_action"}, status=400)
+
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("anonymous_reports")
+                        .select("*")
+                        .eq("id", report_id).eq("guild_id", str(guild_id))
+                        .execute()
+            )
+            report_row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[ANON_REPORT][ERROR] Failed to look up report {report_id} for webhook decision: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return web.json_response({"status": "db_error"}, status=500)
+
+        if not report_row:
+            return web.json_response({"status": "report_not_found"}, status=404)
+
+        result = await self._finalize_report(report_row, action, admin_id)
+        if result["status"] != "ok":
+            status_to_http = {"already_resolved": 409, "db_error": 500}
+            return web.json_response(result, status=status_to_http.get(result["status"], 400))
+
+        # DB 상태 변경(진짜 소스 오브 트루스)은 이미 성공했다 - 관리자 메시지 편집이 실패해도
+        # (채널 설정이 바뀌었거나 메시지가 지워진 경우 등) 대시보드엔 여전히 성공을 반환한다.
+        # UX 결함(버튼이 남아있음)일 뿐 데이터 불일치는 아니므로 fail-open, 로그만 남긴다.
+        admin_message_id = report_row.get("admin_message_id")
+        if admin_message_id:
             try:
-                await self._db_call(
-                    lambda: self.bot.supabase.table("anonymous_report_bans")
-                            .upsert({"guild_id": str(guild_id), "user_id": str(reporter_user_id),
-                                     "banned_by": str(admin_id)})
-                            .execute()
-                )
+                settings = await self._get_report_settings(guild_id)
+                admin_channel_id = settings.get("admin_channel_id")
+                admin_channel = self.bot.get_channel(int(admin_channel_id)) if admin_channel_id else None
+                if admin_channel is None:
+                    raise RuntimeError("admin channel not found/cached")
+                message = await admin_channel.fetch_message(int(admin_message_id))
+                await self._mark_admin_message_resolved(message, guild_id, action)
             except Exception as e:
-                print(f"[ANON_REPORT][ERROR] Failed to record ban for report {report_id}: {type(e).__name__}: {e}", flush=True)
+                print(f"[ANON_REPORT][WARN] DB updated but failed to edit admin message {admin_message_id} "
+                      f"for report {report_id}: {type(e).__name__}: {e}", flush=True)
 
-        if action == "approve":
-            settings = await self._get_report_settings(guild_id)
-            publish_channel_id = settings.get("publish_channel_id")
-            publish_channel = interaction.guild.get_channel(int(publish_channel_id)) if publish_channel_id else None
-            if publish_channel is not None:
-                pub_title = await self.get_msg(guild_id, "anon_report_publish_title")
-                pub_footer = await self.get_msg(guild_id, "anon_report_publish_footer")
-                pub_embed = discord.Embed(title=pub_title, description=report_row["content"],
-                                           color=discord.Color.green(), timestamp=datetime.now(timezone.utc))
-                pub_embed.set_footer(text=pub_footer)
-                try:
-                    await publish_channel.send(embed=pub_embed)
-                except Exception as e:
-                    print(f"[ANON_REPORT][ERROR] Failed to publish approved report {report_id}: "
-                          f"{type(e).__name__}: {e}", flush=True)
-
-        resolved_key = {
-            "approve": "anon_report_resolved_approved",
-            "reject": "anon_report_resolved_rejected",
-            "block": "anon_report_resolved_blocked",
-        }[action]
-        resolved_text = await self.get_msg(guild_id, resolved_key)
-
-        original_embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed()
-        updated_embed = original_embed.copy()
-        updated_embed.add_field(name="Status", value=resolved_text, inline=False)
-
-        # 🛡️ [Persistent View 주의사항] self(AnonymousReportAdminView)는 등록된 하나의 인스턴스를
-        # 모든 제보 메시지가 공유한다. 여기서 self.disabled=True로 mutate한 뒤 view=self로 edit하면
-        # 다른 모든 제보 메시지의 버튼까지 같이 영향을 받는 공유 상태 버그가 된다. 그래서 view=None으로
-        # 교체해 이 메시지에서만 버튼을 완전히 제거한다(등록된 템플릿 자체는 안 건드림).
-        await interaction.message.edit(embed=updated_embed, view=None)
+        return web.json_response(result)
 
     # ══════════════════════════════════════════════════════════
     #  /anonymous_unban - 관리자 전용, 익명 차단 해제
