@@ -18,6 +18,13 @@ TICKET_AI_FAILURE_WINDOW_SECONDS = 600     # 10분
 TICKET_AI_FAILURE_THRESHOLD = 5            # 윈도우 안 5회
 TICKET_AI_ALERT_COOLDOWN_SECONDS = 3600    # 재알림까지 1시간
 
+# 하루 AI 답변 한도 - "첫 요청 시점 기준 24시간 롤링"(anonymous_reports의 REPORT_DAILY_WINDOW_SECONDS와
+# 동일한 정신, 타임존 문제 회피). guild_ticket_settings.daily_guild_limit/daily_user_limit이 없으면
+# 이 기본값으로 폴백한다.
+TICKET_AI_DAILY_WINDOW_SECONDS = 86400
+TICKET_AI_DEFAULT_DAILY_GUILD_LIMIT = 400
+TICKET_AI_DEFAULT_DAILY_USER_LIMIT = 20
+
 # AI 답변 피드백 버튼의 custom_id - anonymous_reports/giveaway의 영구 View와 동일한 이유로
 # 고정 문자열이어야 한다 (message_id는 여기 넣지 않는다 - 아래 TicketFeedbackView docstring 참고).
 TICKET_FEEDBACK_UP_ID = "kyvo_ticket_feedback:up"
@@ -99,6 +106,10 @@ class KyvoTicketAI(commands.Cog):
         # Anti-Spam and Concurrency Lock Management Layers
         self.processing_channels = set()
         self.channel_cooldowns = {}
+
+        # 하루 AI 답변 한도 - Redis 장애 시 폴백용 (key -> (오늘 카운트, 윈도우 만료 시각)).
+        # anonymous_reports의 daily_limit_cache와 동일한 정신 - 장애 시에도 진짜 작동하는 방어.
+        self.daily_limit_cache: dict[str, tuple[int, float]] = {}
 
     async def cog_load(self):
         if INTERNAL_API_SECRET:
@@ -377,6 +388,59 @@ class KyvoTicketAI(commands.Cog):
             print(f"[TICKET_AI][ERROR] Failed to send knowledge-search-failure alert (guild={guild_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
 
+    # ══════════════════════════════════════════════════════════
+    #  하루 AI 답변 한도 (서버 전체 + 유저 개인) - anonymous_reports의 일일 한도 카운터와 동일한
+    #  SET NX + INCR 패턴. Redis 장애 시 인메모리 카운터로 진짜 방어를 유지한다(그냥 스킵 아님) -
+    #  이 기능의 목적이 도배/비용 방어라, 장애 시 전부 허용으로 새면 방어가 필요한 순간 무력화된다.
+    # ══════════════════════════════════════════════════════════
+    async def _get_daily_limits(self, guild_id: str) -> tuple[int, int]:
+        settings = await self.get_ticket_settings(guild_id)
+        guild_limit = (settings or {}).get("daily_guild_limit") or TICKET_AI_DEFAULT_DAILY_GUILD_LIMIT
+        user_limit = (settings or {}).get("daily_user_limit") or TICKET_AI_DEFAULT_DAILY_USER_LIMIT
+        return guild_limit, user_limit
+
+    async def _check_daily_limit(self, key: str, limit: int) -> bool:
+        """True면 아직 한도 이내(허용), False면 한도 초과."""
+        try:
+            await self.bot.redis.set(key, 0, ex=TICKET_AI_DAILY_WINDOW_SECONDS, nx=True)
+            count = await self.bot.redis.incr(key)
+            return count <= limit
+        except Exception as e:
+            print(f"[TICKET_AI][WARN] Redis daily-limit check failed for '{key}', falling back to local: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return self._check_daily_limit_local(key, limit)
+
+    def _check_daily_limit_local(self, key: str, limit: int) -> bool:
+        now = time.time()
+        count, expiry = self.daily_limit_cache.get(key, (0, now + TICKET_AI_DAILY_WINDOW_SECONDS))
+        if now > expiry:
+            count, expiry = 0, now + TICKET_AI_DAILY_WINDOW_SECONDS
+        count += 1
+        self.daily_limit_cache[key] = (count, expiry)
+        return count <= limit
+
+    # ══════════════════════════════════════════════════════════
+    #  스태프 에스컬레이션 - AI가 스스로 판단해서(TRIGGER_STAFF_ALERT) 트리거하는 경우와, 하루
+    #  한도 초과로 트리거하는 경우가 이 함수 하나를 공유한다. 한도 초과 시엔 OpenAI를 아예
+    #  호출하지 않고 바로 이걸 실행하므로 그 티켓에서는 추가 비용이 들지 않는다.
+    # ══════════════════════════════════════════════════════════
+    async def _escalate_to_staff(self, channel: discord.TextChannel, mention: str, reason: str) -> None:
+        current_name = channel.name
+        new_name = f"🚨-{current_name}"
+        await channel.edit(name=new_name, reason=f"AI Smart escalation handover triggered ({reason}).")
+
+        escalation_embed = discord.Embed(
+            title="🚨 Human Assistance Requested",
+            description=(
+                f"Hello {mention}, I've paused my automated chat layer and "
+                f"flagged this support session for review. **Server Administration staff has been appended to this queue.**\n\n"
+                f"Please remain patient while an agent reviews the dialogue log above."
+            ),
+            color=0xe74c3c
+        )
+        escalation_embed.set_footer(text=f"Reason: {reason}")
+        await channel.send(embed=escalation_embed)
+
     async def archive_and_log_ticket(self, channel: discord.TextChannel, closed_by: discord.User):
         """🤖 TRANSCRIPT SUMMARY PILELINE: Extracts message history and generates an executive AI report."""
         try:
@@ -541,6 +605,27 @@ class KyvoTicketAI(commands.Cog):
         self.processing_channels.add(channel_id)
 
         try:
+            # 🛡️ 하루 한도 체크는 OpenAI 호출 전에 한다 - 한도 초과면 답변 대신 바로 에스컬레이션
+            # 하므로 그 요청에서는 임베딩/채팅 완성 호출이 아예 발생하지 않는다(비용 절감 겸함).
+            # 서버 전체 한도를 먼저 보고(더 넓은 게이트), 그다음 유저 개인 한도를 본다.
+            guild_limit, user_limit = await self._get_daily_limits(guild_id)
+            guild_key = f"ticket_ai_daily:guild:{guild_id}"
+            user_key = f"ticket_ai_daily:user:{guild_id}:{message.author.id}"
+
+            if not await self._check_daily_limit(guild_key, guild_limit):
+                await self._escalate_to_staff(
+                    message.channel, message.author.mention,
+                    "This server's daily AI answer limit has been reached"
+                )
+                return
+
+            if not await self._check_daily_limit(user_key, user_limit):
+                await self._escalate_to_staff(
+                    message.channel, message.author.mention,
+                    "Your daily AI answer limit has been reached"
+                )
+                return
+
             async with message.channel.typing():
                 memory_history = []
                 async for hist_msg in message.channel.history(limit=6, oldest_first=False):
@@ -626,20 +711,10 @@ class KyvoTicketAI(commands.Cog):
             ai_final_answer = chat_response.choices[0].message.content.strip()
 
             if "TRIGGER_STAFF_ALERT" in ai_final_answer:
-                current_name = message.channel.name
-                new_name = f"🚨-{current_name}"
-                await message.channel.edit(name=new_name, reason="AI Smart escalation handover triggered.")
-                
-                escalation_embed = discord.Embed(
-                    title="🚨 Human Assistance Requested",
-                    description=(
-                        f"Hello {message.author.mention}, I've paused my automated chat layer and "
-                        f"flagged this support session for review. **Server Administration staff has been appended to this queue.**\n\n"
-                        f"Please remain patient while an agent reviews the dialogue log above."
-                    ),
-                    color=0xe74c3c
+                await self._escalate_to_staff(
+                    message.channel, message.author.mention,
+                    "The AI determined a human agent is needed for this request"
                 )
-                await message.channel.send(embed=escalation_embed)
                 return
 
             ai_reply = discord.Embed(
