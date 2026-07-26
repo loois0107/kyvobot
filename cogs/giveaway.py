@@ -3,12 +3,18 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from cogs.base import KyvoBaseCog
 import asyncio
+import json
+import os
+import hmac
 import random
+from aiohttp import web
 from datetime import datetime, timezone, timedelta
 
 GIVEAWAY_MIN_DURATION_MINUTES = 5
 GIVEAWAY_MAX_DURATION_MINUTES = 10080  # 7일
 GIVEAWAY_CHECK_INTERVAL_SECONDS = 30
+
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 
 # 응모 버튼의 custom_id - 재시작 후에도 discord.py가 이 문자열만으로 콜백을 다시 찾아
 # 연결할 수 있어야 하므로 고정 문자열이어야 한다 (giveaway_id는 여기 넣지 않는다 - 아래
@@ -50,6 +56,14 @@ class KyvoGiveaway(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
         self.check_expired_giveaways.start()
+
+    async def cog_load(self):
+        if INTERNAL_API_SECRET:
+            self.bot.web_app.router.add_post("/internal/giveaway/replace-winner", self.handle_replace_winner_webhook)
+            print("[⚡ GIVEAWAY] Internal replace-winner route registered at /internal/giveaway/replace-winner.", flush=True)
+        else:
+            print("[GIVEAWAY][WARN] INTERNAL_API_SECRET not set - dashboard-triggered winner replacement is disabled "
+                  "(/giveaway end still works).", flush=True)
 
     async def cog_unload(self):
         self.check_expired_giveaways.cancel()
@@ -99,6 +113,75 @@ class KyvoGiveaway(KyvoBaseCog):
             interaction, prize, entry_cost, winner_count, duration_minutes,
             prize_type="role", prize_amount=None, prize_role=prize_role, channel=channel
         )
+
+    async def _active_giveaway_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaways").select("id, prize, ends_at")
+                        .eq("guild_id", str(interaction.guild_id)).eq("status", "active")
+                        .order("ends_at").limit(25).execute()
+            )
+        except Exception as e:
+            print(f"[GIVEAWAY][WARN] Autocomplete lookup failed: {type(e).__name__}: {e}", flush=True)
+            return []
+
+        current_lower = current.lower()
+        choices = []
+        for row in res.data or []:
+            if current_lower and current_lower not in row["prize"].lower():
+                continue
+            ends_at = datetime.fromisoformat(row["ends_at"])
+            label = f"{row['prize']} (ends {ends_at.strftime('%Y-%m-%d %H:%M UTC')})"[:100]
+            choices.append(app_commands.Choice(name=label, value=str(row["id"])))
+        return choices[:25]
+
+    # ══════════════════════════════════════════════════════════
+    #  /giveaway end - 조기 마감. check_expired_giveaways와 완전히 같은 원자적 클레임
+    #  (_claim_and_conclude)을 공유한다 - 자동 타이머 틱과 이 명령어가 거의 동시에 발생해도
+    #  status='active' 조건부 UPDATE 덕분에 정확히 하나만 실제로 마감 처리를 수행한다.
+    # ══════════════════════════════════════════════════════════
+    @giveaway_group.command(name="end", description="End an active giveaway immediately and draw winners now.")
+    @app_commands.describe(giveaway="The active giveaway to end early.")
+    @app_commands.autocomplete(giveaway=_active_giveaway_autocomplete)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def giveaway_end(self, interaction: discord.Interaction, giveaway: str):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild_id
+
+        try:
+            giveaway_id = int(giveaway)
+        except ValueError:
+            msg = await self.get_msg(guild_id, "giveaway_end_not_found")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaways").select("*")
+                        .eq("id", giveaway_id).eq("guild_id", str(guild_id)).execute()
+            )
+            giveaway_row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to look up giveaway {giveaway_id} for early end: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            msg = await self.get_msg(guild_id, "giveaway_end_error")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if not giveaway_row:
+            msg = await self.get_msg(guild_id, "giveaway_end_not_found")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        result = await self._claim_and_conclude(giveaway_row)
+
+        if result == "claimed":
+            msg = await self.get_msg(guild_id, "giveaway_end_success")
+        elif result == "already_concluded":
+            msg = await self.get_msg(guild_id, "giveaway_end_already_concluded")
+        else:
+            msg = await self.get_msg(guild_id, "giveaway_end_error")
+        await interaction.followup.send(msg, ephemeral=True)
 
     async def _create_giveaway(self, interaction: discord.Interaction, prize: str, entry_cost: int,
                                 winner_count: int, duration_minutes: int, prize_type: str,
@@ -316,32 +399,42 @@ class KyvoGiveaway(KyvoBaseCog):
             return
 
         for giveaway_row in expired:
-            # 🛡️ 원자적 클레임: status='active' 조건이 걸린 채로 UPDATE해서, 실제로 행을
-            # 건드린 경우(=우리가 선점)에만 진행한다. 배포 중 인스턴스가 겹치거나 같은
-            # 틱이 두 번 처리하는 걸 막는다 - automod의 SET NX와 같은 정신, 매체만 Postgres.
-            try:
-                claim_res = await self._db_call(
-                    lambda gid=giveaway_row["id"]: self.bot.supabase.table("giveaways")
-                            .update({"status": "concluded"})
-                            .eq("id", gid).eq("status", "active").execute()
-                )
-            except Exception as e:
-                print(f"[GIVEAWAY][ERROR] Failed to claim giveaway {giveaway_row['id']}: "
-                      f"{type(e).__name__}: {e}", flush=True)
-                continue
-
-            if not claim_res.data:
-                continue  # 다른 인스턴스/이전 틱이 이미 선점함
-
-            try:
-                await self.conclude_giveaway(giveaway_row)
-            except Exception as e:
-                print(f"[GIVEAWAY][ERROR] Failed to conclude giveaway {giveaway_row['id']}: "
-                      f"{type(e).__name__}: {e}", flush=True)
+            await self._claim_and_conclude(giveaway_row)
 
     @check_expired_giveaways.before_loop
     async def before_check_expired_giveaways(self):
         await self.bot.wait_until_ready()
+
+    async def _claim_and_conclude(self, giveaway_row: dict) -> str:
+        """반환값: 'claimed'(내가 선점해서 처리함) / 'already_concluded'(다른 경로가 선점) / 'error'.
+
+        🛡️ 자동 타이머(check_expired_giveaways)와 수동 조기 마감(/giveaway end)이 이 메서드
+        하나를 공유한다 - status='active' 조건이 걸린 UPDATE가 원자적 클레임이라, 거의
+        동시에 들어와도 실제로 행이 갱신되는(claim_res.data가 채워지는) 쪽 단 하나만 진행한다.
+        automod의 SET NX와 같은 정신, 매체만 Postgres.
+        """
+        try:
+            claim_res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaways")
+                        .update({"status": "concluded"})
+                        .eq("id", giveaway_row["id"]).eq("status", "active").execute()
+            )
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to claim giveaway {giveaway_row['id']}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return "error"
+
+        if not claim_res.data:
+            return "already_concluded"  # 다른 인스턴스/경로가 이미 선점함
+
+        try:
+            await self.conclude_giveaway(giveaway_row)
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to conclude giveaway {giveaway_row['id']}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return "error"
+
+        return "claimed"
 
     async def conclude_giveaway(self, giveaway_row: dict) -> None:
         guild_id = int(giveaway_row["guild_id"])
@@ -448,40 +541,207 @@ class KyvoGiveaway(KyvoBaseCog):
                       f"giveaway={giveaway_id}: {type(e).__name__}: {e}", flush=True)
 
     async def _payout_role(self, guild_id: int, giveaway_id, winners: list[str], role_id: str) -> None:
+        for user_id in winners:
+            await self._payout_role_single(guild_id, giveaway_id, user_id, role_id)
+
+    async def _payout_role_single(self, guild_id: int, giveaway_id, user_id: str, role_id: str) -> bool:
         guild = self.bot.get_guild(guild_id)
         if guild is None:
             print(f"[GIVEAWAY][ERROR] Guild {guild_id} not in cache, cannot pay out role for giveaway {giveaway_id}", flush=True)
-            return
+            return False
 
         role = guild.get_role(int(role_id)) if role_id else None
         if role is None:
             print(f"[GIVEAWAY][ERROR] Prize role {role_id} no longer exists (guild={guild_id}, giveaway={giveaway_id})", flush=True)
-            return
+            return False
 
         bot_member = guild.me
         if bot_member is None or not bot_member.guild_permissions.manage_roles:
             print(f"[GIVEAWAY][ERROR] Bot lacks manage_roles permission (guild={guild_id}, giveaway={giveaway_id})", flush=True)
-            return
+            return False
 
         if bot_member.top_role <= role:
             print(f"[GIVEAWAY][ERROR] Role hierarchy: bot's top role '{bot_member.top_role}' is not above "
                   f"prize role '{role.name}' (guild={guild_id}, giveaway={giveaway_id})", flush=True)
-            return
+            return False
 
-        for user_id in winners:
-            member = guild.get_member(int(user_id))
-            if member is None:
-                print(f"[GIVEAWAY][ERROR] Winner {user_id} is not a cached guild member, cannot grant role "
-                      f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
-                continue
+        member = guild.get_member(int(user_id))
+        if member is None:
+            print(f"[GIVEAWAY][ERROR] Winner {user_id} is not a cached guild member, cannot grant role "
+                  f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
+            return False
+
+        try:
+            await member.add_roles(role, reason=f"[KYVO GIVEAWAY] {giveaway_id}")
+            return True
+        except discord.Forbidden:
+            print(f"[GIVEAWAY][ERROR] Forbidden while granting prize role to winner user={user_id} "
+                  f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
+            return False
+        except discord.HTTPException as e:
+            print(f"[GIVEAWAY][ERROR] HTTPException while granting prize role: {type(e).__name__}: {e} "
+                  f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
+            return False
+
+    # ══════════════════════════════════════════════════════════
+    #  재추첨 - 이미 발표된 당첨자 한 명을 다른 응모자로 교체한다(전체 재추첨이 아님).
+    #  포인트 상품은 원 당첨자에게서 회수 + 새 당첨자에게 지급하지만, 역할 상품은 자동으로
+    #  회수하지 않는다 - 그 유저가 다른 경로로 이미 정당하게 갖고 있던 역할일 수도 있어서,
+    #  봇은 이걸 구분할 방법이 없다. role_note로 호출자(대시보드)에게 수동 처리가 필요함을 알린다.
+    # ══════════════════════════════════════════════════════════
+    async def _replace_winner(self, giveaway_row: dict, original_winner_id: str, admin_id, reason: str | None) -> dict:
+        guild_id = int(giveaway_row["guild_id"])
+        giveaway_id = giveaway_row["id"]
+
+        if giveaway_row["status"] != "concluded":
+            return {"status": "not_concluded"}
+
+        winners = list(giveaway_row.get("winners") or [])
+        if original_winner_id not in winners:
+            return {"status": "not_a_winner"}
+
+        try:
+            entries_res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaway_entries").select("user_id")
+                        .eq("giveaway_id", giveaway_id).execute()
+            )
+            entrant_ids = [row["user_id"] for row in (entries_res.data or [])]
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to fetch entries for replacement (giveaway={giveaway_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return {"status": "error"}
+
+        remaining_pool = [uid for uid in entrant_ids if uid not in winners]
+        if not remaining_pool:
+            return {"status": "no_remaining_entrants"}
+
+        new_winner_id = select_winners(remaining_pool, 1)[0]
+        new_winners = [new_winner_id if uid == original_winner_id else uid for uid in winners]
+
+        # 🛡️ 원자적 클레임: winners 배열에 여전히 original_winner_id가 들어있을 때만 갱신한다
+        # (.contains 필터). 같은 재추첨 요청이 중복 제출되는 레이스를 막는다 - 앞선 기능들의
+        # status='pending'/'active' 조건부 UPDATE와 동일한 정신, 조건만 배열 포함 여부로 바뀐 것.
+        # winners는 jsonb 컬럼이라 .contains에 Postgres 배열 리터럴이 아닌 JSON 문자열을 넘겨야 한다
+        # (supabase-py는 plain list를 주면 자동으로 '{a,b}' 리터럴로 직렬화하는데, 이는 jsonb가
+        # 아닌 네이티브 배열 컬럼용이라 여기선 json.dumps로 직접 JSON 배열 문자열을 만들어 넘긴다).
+        try:
+            update_res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaways")
+                        .update({"winners": new_winners})
+                        .eq("id", giveaway_id).eq("status", "concluded")
+                        .contains("winners", json.dumps([original_winner_id])).execute()
+            )
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to update winners for replacement (giveaway={giveaway_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return {"status": "error"}
+
+        if not update_res.data:
+            return {"status": "already_replaced"}
+
+        role_note = False
+        payout_ok = None
+
+        if giveaway_row["prize_type"] == "points":
+            prize_amount = giveaway_row["prize_amount"]
             try:
-                await member.add_roles(role, reason=f"[KYVO GIVEAWAY] {giveaway_id}")
-            except discord.Forbidden:
-                print(f"[GIVEAWAY][ERROR] Forbidden while granting prize role to winner user={user_id} "
-                      f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
-            except discord.HTTPException as e:
-                print(f"[GIVEAWAY][ERROR] HTTPException while granting prize role: {type(e).__name__}: {e} "
-                      f"(guild={guild_id}, giveaway={giveaway_id})", flush=True)
+                original_data = await self.bot.get_user_data(str(original_winner_id), str(guild_id))
+                new_points = original_data.get("points", 0) - prize_amount
+                if new_points < 0:
+                    print(f"[GIVEAWAY][WARN] Reclaiming prize points from user={original_winner_id} "
+                          f"(giveaway={giveaway_id}) drives their balance negative ({new_points}) - "
+                          f"they likely already spent it.", flush=True)
+                original_data["points"] = new_points
+                await self.bot.save_user_data(str(original_winner_id), str(guild_id), original_data)
+            except Exception as e:
+                print(f"[GIVEAWAY][ERROR] Failed to reclaim points from original winner user={original_winner_id} "
+                      f"(giveaway={giveaway_id}): {type(e).__name__}: {e}", flush=True)
+
+            try:
+                new_data = await self.bot.get_user_data(str(new_winner_id), str(guild_id))
+                new_data["points"] = new_data.get("points", 0) + prize_amount
+                payout_ok = await self.bot.save_user_data(str(new_winner_id), str(guild_id), new_data)
+            except Exception as e:
+                print(f"[GIVEAWAY][ERROR] Failed to pay out points to replacement winner user={new_winner_id} "
+                      f"(giveaway={giveaway_id}): {type(e).__name__}: {e}", flush=True)
+                payout_ok = False
+        elif giveaway_row["prize_type"] == "role":
+            role_note = True  # 원 당첨자 역할은 자동 회수하지 않음 - 호출자가 안내 문구를 보여줘야 함
+            payout_ok = await self._payout_role_single(guild_id, giveaway_id, new_winner_id, giveaway_row["prize_role_id"])
+
+        try:
+            await self._db_call(
+                lambda: self.bot.supabase.table("giveaway_replacements").insert({
+                    "giveaway_id": giveaway_id, "original_winner_id": str(original_winner_id),
+                    "new_winner_id": str(new_winner_id), "replaced_by": str(admin_id), "reason": reason,
+                }).execute()
+            )
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to record replacement audit row (giveaway={giveaway_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+        channel = self.bot.get_channel(int(giveaway_row["channel_id"]))
+        if channel is not None:
+            title = await self.get_msg(guild_id, "giveaway_replaced_announcement_title")
+            desc = await self.get_msg(guild_id, "giveaway_replaced_announcement_desc",
+                                       prize=giveaway_row["prize"], original=f"<@{original_winner_id}>",
+                                       new_winner=f"<@{new_winner_id}>")
+            embed = discord.Embed(title=title, description=desc, color=discord.Color.orange())
+            try:
+                await channel.send(embed=embed)
+            except Exception as e:
+                print(f"[GIVEAWAY][ERROR] Failed to post replacement announcement (giveaway={giveaway_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+
+        return {
+            "status": "ok", "giveaway_id": giveaway_id, "original_winner_id": str(original_winner_id),
+            "new_winner_id": str(new_winner_id), "prize_type": giveaway_row["prize_type"],
+            "role_note": role_note, "payout_ok": payout_ok,
+        }
+
+    async def handle_replace_winner_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[GIVEAWAY][WARN] Rejected replace-winner request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        giveaway_id = body.get("giveaway_id")
+        original_winner_id = body.get("original_winner_id")
+        admin_id = body.get("admin_id")
+        reason = body.get("reason")
+        if not all([guild_id, giveaway_id, original_winner_id, admin_id]):
+            return web.Response(status=400, text="guild_id, giveaway_id, original_winner_id, admin_id are all required")
+
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("giveaways").select("*")
+                        .eq("id", giveaway_id).eq("guild_id", str(guild_id)).execute()
+            )
+            giveaway_row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[GIVEAWAY][ERROR] Failed to look up giveaway {giveaway_id} for replacement: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return web.json_response({"status": "error"}, status=500)
+
+        if not giveaway_row:
+            return web.json_response({"status": "giveaway_not_found"}, status=404)
+
+        result = await self._replace_winner(giveaway_row, str(original_winner_id), admin_id, reason)
+
+        if result["status"] != "ok":
+            status_to_http = {
+                "not_concluded": 400, "not_a_winner": 400, "no_remaining_entrants": 400,
+                "already_replaced": 409, "error": 500,
+            }
+            return web.json_response(result, status=status_to_http.get(result["status"], 400))
+
+        return web.json_response(result)
 
 
 async def setup(bot):
