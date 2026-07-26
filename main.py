@@ -42,6 +42,7 @@ class KyvoBot(commands.Bot):
             'cogs.giveaway',
             'cogs.reaction_roles',
             'cogs.party',
+            'cogs.gg_rsvp',
             'cogs.tier_verify',
             'cogs.twitch',
             'cogs.cs2_flex',
