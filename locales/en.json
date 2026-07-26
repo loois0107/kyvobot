@@ -361,5 +361,15 @@
   "weekly_report_no_data": "No data",
   "weekly_report_field_party_king": "🥇 Party King of the Week",
   "weekly_report_field_popular_game": "🎮 Popular Game of the Week",
-  "weekly_report_field_duo_combo": "⚔️ Best Duo Combo"
+  "weekly_report_field_duo_combo": "⚔️ Best Duo Combo",
+  "onboarding_welcome_title": "🎉 Thanks for adding Kyvo!",
+  "onboarding_welcome_desc": "Thanks for inviting me! Click the title above to open your server's dashboard, or check out what I can do below.",
+  "onboarding_field_party_title": "🎮 Party Recruiting",
+  "onboarding_field_party_desc": "/party_recruit, /gg, and /내전 (scrim) let members instantly put together a group.",
+  "onboarding_field_ticket_title": "🤖 AI Ticket Support",
+  "onboarding_field_ticket_desc": "Run /ticket-setup to deploy a 24/7 AI-powered support desk.",
+  "onboarding_field_leveling_title": "📊 Leveling & Economy",
+  "onboarding_field_leveling_desc": "Configure XP rates, role rewards, and the server shop from the dashboard.",
+  "onboarding_field_automod_title": "🛡️ Auto-Moderation",
+  "onboarding_field_automod_desc": "Spam/word filtering and anonymous reports can be toggled from the dashboard."
 }

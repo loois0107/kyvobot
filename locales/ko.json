@@ -361,5 +361,15 @@
   "weekly_report_no_data": "데이터 없음",
   "weekly_report_field_party_king": "🥇 이번 주 파티왕",
   "weekly_report_field_popular_game": "🎮 이번 주 인기 게임",
-  "weekly_report_field_duo_combo": "⚔️ 최고의 듀오 콤비"
+  "weekly_report_field_duo_combo": "⚔️ 최고의 듀오 콤비",
+  "onboarding_welcome_title": "🎉 Kyvo와 함께해주셔서 감사해요!",
+  "onboarding_welcome_desc": "초대해주셔서 감사합니다! 위 제목을 클릭하면 대시보드로 이동해요. 아래에서 핵심 기능들을 확인해보세요.",
+  "onboarding_field_party_title": "🎮 파티 모집",
+  "onboarding_field_party_desc": "/party_recruit, /gg, /내전 으로 멤버들이 즉석에서 파티나 스크림을 모을 수 있어요.",
+  "onboarding_field_ticket_title": "🤖 AI 티켓 지원",
+  "onboarding_field_ticket_desc": "/ticket-setup 으로 24시간 자동 응답하는 AI 지원 데스크를 배포할 수 있어요.",
+  "onboarding_field_leveling_title": "📊 레벨 & 경제 시스템",
+  "onboarding_field_leveling_desc": "대시보드에서 XP 배율, 역할 보상, 서버 상점을 설정할 수 있어요.",
+  "onboarding_field_automod_title": "🛡️ 자동 관리",
+  "onboarding_field_automod_desc": "스팸/욕설 필터링, 익명 제보함 등을 대시보드에서 켜고 끌 수 있어요."
 }
