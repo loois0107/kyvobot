@@ -5,11 +5,17 @@ import asyncio
 import os
 import time
 import hmac
+from datetime import datetime, timezone
 from aiohttp import web
 from openai import AsyncOpenAI
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 TICKET_KNOWLEDGE_MAX_LENGTH = 4000  # OpenAI 토큰 한도 여유 + 과금/저장 폭주 방지 - party_game_presets 등과 동일한 관례
+
+# AI 답변 피드백 버튼의 custom_id - anonymous_reports/giveaway의 영구 View와 동일한 이유로
+# 고정 문자열이어야 한다 (message_id는 여기 넣지 않는다 - 아래 TicketFeedbackView docstring 참고).
+TICKET_FEEDBACK_UP_ID = "kyvo_ticket_feedback:up"
+TICKET_FEEDBACK_DOWN_ID = "kyvo_ticket_feedback:down"
 
 class OpenTicketView(discord.ui.View):
     """
@@ -49,6 +55,35 @@ class TicketSystemView(discord.ui.View):
             await channel.delete(reason="Ticket session closed and securely archived by administrative request.")
         except discord.Forbidden:
             print(f"[SECURITY ERROR] Missing channel management permissions for: {channel.name}")
+
+class TicketFeedbackView(discord.ui.View):
+    """AI 답변 메시지에 붙는 영구(Persistent) View.
+
+    anonymous_reports의 관리자 큐 View와 완전히 같은 이유로 timeout=None + 고정 custom_id로
+    만든다. 등록된 이 View 인스턴스 하나를 "모든" AI 답변 메시지가 공유하므로, 어떤 메시지인지는
+    self에 저장하지 않고 매 클릭마다 interaction.message.id로 DB에서 다시 찾는다.
+    """
+
+    def __init__(self, cog: "KyvoTicketAI"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+        up_btn = discord.ui.Button(label="Helpful", style=discord.ButtonStyle.success,
+                                    custom_id=TICKET_FEEDBACK_UP_ID, emoji="👍")
+        up_btn.callback = self._on_up
+        self.add_item(up_btn)
+
+        down_btn = discord.ui.Button(label="Not Helpful", style=discord.ButtonStyle.danger,
+                                      custom_id=TICKET_FEEDBACK_DOWN_ID, emoji="👎")
+        down_btn.callback = self._on_down
+        self.add_item(down_btn)
+
+    async def _on_up(self, interaction: discord.Interaction):
+        await self.cog.handle_feedback_click(interaction, True)
+
+    async def _on_down(self, interaction: discord.Interaction):
+        await self.cog.handle_feedback_click(interaction, False)
+
 
 class KyvoTicketAI(commands.Cog):
     def __init__(self, bot):
@@ -344,6 +379,79 @@ class KyvoTicketAI(commands.Cog):
         except Exception as e:
             print(f"[ARCHIVE LOG MATRIX FAULT] Critical pipeline blockage creating final report packet: {e}")
 
+    # ══════════════════════════════════════════════════════════
+    #  AI 답변 피드백 (👍/👎)
+    # ══════════════════════════════════════════════════════════
+    def _get_ticket_opener_id(self, channel: discord.TextChannel) -> str | None:
+        """티켓 채널에는 소유권을 기록하는 별도 테이블이 없다 - create_ticket_channel이 부여한
+        채널 오버라이트(봇/@everyone 제외한 유일한 멤버 = 개설자)에서 역산한다. 오버라이트가
+        예상과 다르게 변형돼 있으면(수동 편집 등) 안전하게 None을 반환한다(투표는 fail-closed로 거부)."""
+        bot_id = self.bot.user.id if self.bot.user else None
+        candidates = [
+            target for target in channel.overwrites
+            if isinstance(target, discord.Member) and target.id != bot_id
+        ]
+        if len(candidates) == 1:
+            return str(candidates[0].id)
+        return None
+
+    async def handle_feedback_click(self, interaction: discord.Interaction, rating: bool) -> None:
+        # 🛡️ anonymous_reports/giveaway와 동일한 패턴 - defer 후 interaction.message.edit()를 쓴다
+        # (interaction.response.edit_message()가 아니라). 실제 라이브 버튼 클릭과, 진짜 메시지를
+        # 감싼 합성 interaction으로 하는 테스트 양쪽에서 동일한 코드 경로가 동작해야 하기 때문.
+        await interaction.response.defer(ephemeral=True)
+        message_id = str(interaction.message.id)
+
+        try:
+            res = await asyncio.to_thread(
+                self.bot.supabase.table("ticket_ai_feedback").select("*").eq("message_id", message_id).execute
+            )
+            row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[TICKET_AI][ERROR] Failed to look up feedback row for message {message_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred while recording your feedback.", ephemeral=True)
+            return
+
+        if not row:
+            await interaction.followup.send("❌ This message can no longer accept feedback.", ephemeral=True)
+            return
+
+        if not row.get("opener_id") or row["opener_id"] != str(interaction.user.id):
+            await interaction.followup.send(
+                "❌ Only the person who opened this ticket can rate this answer.", ephemeral=True
+            )
+            return
+
+        # 🛡️ [중복 방지] 버튼 제거(voted 후 view=None)가 1차 방어선이지만, 편집이 반영되기 전에
+        # 두 번째 클릭이 들어오는 레이스도 있을 수 있다 - rating이 이미 채워져 있으면 조용히
+        # 덮어쓰지 않고 명시적으로 거부한다.
+        if row.get("rating") is not None:
+            await interaction.followup.send("❌ You've already rated this answer.", ephemeral=True)
+            return
+
+        try:
+            await asyncio.to_thread(
+                self.bot.supabase.table("ticket_ai_feedback").update({
+                    "rating": rating, "voted_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("message_id", message_id).execute
+            )
+        except Exception as e:
+            print(f"[TICKET_AI][ERROR] Failed to record feedback for message {message_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred while recording your feedback.", ephemeral=True)
+            return
+
+        original_embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed()
+        updated_embed = original_embed.copy()
+        updated_embed.add_field(
+            name="Feedback",
+            value="👍 Marked as helpful - thanks!" if rating else "👎 Marked as not helpful - thanks!",
+            inline=False,
+        )
+        await interaction.message.edit(embed=updated_embed, view=None)
+        await interaction.followup.send("✅ Thanks for your feedback!", ephemeral=True)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -389,6 +497,7 @@ class KyvoTicketAI(commands.Cog):
                 memory_history.reverse()
 
             retrieved_context = "No explicit server documentation matching this specific query was found in the database."
+            matched_nodes = []  # try 블록이 embeddings/rpc 호출 도중 실패해도 아래에서 안전하게 참조 가능하도록 기본값 확보
             try:
                 query_response = await self.ai_client.embeddings.create(
                     model="text-embedding-3-small",
@@ -466,7 +575,24 @@ class KyvoTicketAI(commands.Cog):
                 color=0x9b59b6
             )
             ai_reply.set_footer(text="Kyvo Automation Layer • Multi-Turn Conversational RAG Architecture")
-            await message.channel.send(embed=ai_reply)
+            feedback_view = TicketFeedbackView(self)
+            sent_reply = await message.channel.send(embed=ai_reply, view=feedback_view)
+
+            # 🛡️ 이 행이 있어야 버튼 클릭 시 message_id로 다시 찾을 수 있다(익명 제보/추첨과 동일한
+            # "먼저 메시지를 보내고, 그 ID로 추적 행을 만든다" 순서). knowledge_id는 매칭된 지식
+            # 항목이 없으면 NULL - 이 경우도 피드백 자체는 남지만 특정 항목 통계엔 안 잡힌다.
+            knowledge_id = matched_nodes[0]["id"] if matched_nodes else None
+            opener_id = self._get_ticket_opener_id(message.channel)
+            try:
+                await asyncio.to_thread(
+                    self.bot.supabase.table("ticket_ai_feedback").insert({
+                        "message_id": str(sent_reply.id), "guild_id": guild_id, "channel_id": str(channel_id),
+                        "opener_id": opener_id, "knowledge_id": knowledge_id,
+                    }).execute
+                )
+            except Exception as e:
+                print(f"[TICKET_AI][ERROR] Failed to record feedback tracking row for message {sent_reply.id}: "
+                      f"{type(e).__name__}: {e}", flush=True)
 
         except Exception as e:
             print(f"[RAG ENGINE EXCEPTION] Pipeline failed: {e}")
@@ -484,4 +610,5 @@ async def setup(bot):
     cog = KyvoTicketAI(bot)
     bot.add_view(OpenTicketView(cog))
     bot.add_view(TicketSystemView(cog))
+    bot.add_view(TicketFeedbackView(cog))
     await bot.add_cog(cog)
