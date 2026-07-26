@@ -355,5 +355,11 @@
   "cs2_err_generic_failure": "❌ 스팀 오류로 연동된 인벤토리를 하나도 조회하지 못했습니다. 잠시 후 다시 시도해주세요.",
   "cs2_flex_title": "🏆 오늘의 CS2 인벤토리 부자",
   "cs2_flex_winner_line": "{member}님이 총 {count}개 아이템, 점수 **{score}**로 1위를 차지했습니다!",
-  "cs2_flex_footer_skipped_private": "연동된 멤버 {count}명은 비공개 인벤토리라 제외되었습니다."
+  "cs2_flex_footer_skipped_private": "연동된 멤버 {count}명은 비공개 인벤토리라 제외되었습니다.",
+  "weekly_report_title": "📊 주간 리포트",
+  "weekly_report_quiet_desc": "이번 주는 조용했네요 - 결성된 파티가 없어요.",
+  "weekly_report_no_data": "데이터 없음",
+  "weekly_report_field_party_king": "🥇 이번 주 파티왕",
+  "weekly_report_field_popular_game": "🎮 이번 주 인기 게임",
+  "weekly_report_field_duo_combo": "⚔️ 최고의 듀오 콤비"
 }

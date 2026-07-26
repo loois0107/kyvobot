@@ -355,5 +355,11 @@
   "cs2_err_generic_failure": "❌ Couldn't check any linked inventories due to a Steam error. Please try again later.",
   "cs2_flex_title": "🏆 Today's CS2 Flex Champion",
   "cs2_flex_winner_line": "{member} takes the crown with a score of **{score}** across {count} items!",
-  "cs2_flex_footer_skipped_private": "{count} linked member(s) skipped - private inventory."
+  "cs2_flex_footer_skipped_private": "{count} linked member(s) skipped - private inventory.",
+  "weekly_report_title": "📊 Weekly Report",
+  "weekly_report_quiet_desc": "It was quiet this week - no parties were formed.",
+  "weekly_report_no_data": "No data",
+  "weekly_report_field_party_king": "🥇 Party King of the Week",
+  "weekly_report_field_popular_game": "🎮 Popular Game of the Week",
+  "weekly_report_field_duo_combo": "⚔️ Best Duo Combo"
 }
