@@ -186,6 +186,20 @@ def meets_min_tier_requirement(min_tier: str | None, verified_tier: str | None) 
     return actual_rank >= required_rank
 
 
+def reorder_favorite_first(names: list[str], favorite: str | None) -> list[str]:
+    """자동완성 후보 목록에서 즐겨찾기를 맨 앞으로 올린다. 즐겨찾기가 없거나(None) 지금 후보
+    목록에 없으면(현재 입력과 안 맞거나, 관리자가 그 사이 프리셋을 지웠으면) 원래 순서 그대로."""
+    if not favorite or favorite not in names:
+        return names
+    return [favorite] + [n for n in names if n != favorite]
+
+
+def resolve_effective_game(explicit_game: str | None, favorite_game: str | None) -> str | None:
+    """game 파라미터를 생략했을 때(explicit_game이 falsy)만 즐겨찾기로 대체한다. 유저가 명시적으로
+    고른 값은 절대 덮어쓰지 않는다."""
+    return explicit_game if explicit_game else favorite_game
+
+
 class RoleWarningConfirmView(discord.ui.View):
     """위험 권한 역할을 티어 역할로 등록하기 전 마지막 확인. custom_commands.py/reaction_roles.py의
     동명 View와 동일한 패턴(각 cog가 자기 완결적이도록 복제)."""
@@ -471,7 +485,26 @@ class KyvoParty(KyvoBaseCog):
         presets = await self._get_game_presets(interaction.guild_id)
         current_lower = current.lower()
         matches = [p["game_name"] for p in presets if current_lower in p["game_name"].lower()]
+        favorite = await self._get_favorite_game(interaction.guild_id, interaction.user.id)
+        matches = reorder_favorite_first(matches, favorite)
         return [app_commands.Choice(name=name, value=name) for name in matches[:25]]  # 디스코드 자동완성 응답 상한
+
+    # ══════════════════════════════════════════════════════════
+    #  즐겨찾기 게임 (user_party_preferences) - /profile 대시보드가 직접 관리한다(봇 웹훅 불필요 -
+    #  단순 개인 설정 저장이라 party_tier_roles처럼 Discord 부작용이 없다). 봇은 조회만 한다:
+    #  자동완성 순서 조정(위) + /party_recruit에서 game 파라미터 생략 시 대체(아래).
+    # ══════════════════════════════════════════════════════════
+    async def _get_favorite_game(self, guild_id: int, user_id: int) -> str | None:
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("user_party_preferences").select("favorite_game_name")
+                        .eq("guild_id", str(guild_id)).eq("user_id", str(user_id)).limit(1).execute()
+            )
+            return res.data[0]["favorite_game_name"] if res.data else None
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch favorite game (guild={guild_id}, user={user_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return None
 
     # ══════════════════════════════════════════════════════════
     #  /party_recruit
@@ -487,14 +520,25 @@ class KyvoParty(KyvoBaseCog):
     async def party_recruit(self, interaction: discord.Interaction, game: str = None, min_tier: str = None):
         guild_id = interaction.guild_id
 
+        # 🛡️ game을 생략했으면 저장된 즐겨찾기로 조용히 대체한다 - Discord 슬래시 커맨드는 유저별
+        # 동적 기본값을 UI 레벨에서 지원하지 않아서, 이게 실질적으로 "기본값 자동 채움"에 해당한다.
+        favorite_game = None if game else await self._get_favorite_game(guild_id, interaction.user.id)
+        used_favorite = not game and favorite_game is not None
+        game = resolve_effective_game(game, favorite_game)
+
         # 자동완성은 후보만 제안할 뿐 강제하지 않는다 - 존재하지 않는 값이면 모달을 열기 전에
         # 바로 거부한다(모달 다 채운 뒤에야 알게 되는 것보다 낫다).
         if game:
             preset = await self._get_game_preset(guild_id, game)
             if preset is None:
-                msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
-                await interaction.response.send_message(msg, ephemeral=True)
-                return
+                if used_favorite:
+                    # 저장된 즐겨찾기가 그 사이 삭제된 경우 - 유저가 직접 고른 값이 아니므로
+                    # 명령어를 실패시키지 않고 "게임 미지정"으로 조용히 넘어간다.
+                    game = None
+                else:
+                    msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
+                    await interaction.response.send_message(msg, ephemeral=True)
+                    return
 
         title = await self.get_msg(guild_id, "party_modal_title")
         queue_label = await self.get_msg(guild_id, "party_modal_queue_label")
