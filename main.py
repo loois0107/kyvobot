@@ -71,6 +71,13 @@ class KyvoBot(commands.Bot):
         print(">>> web server start task created <<<", flush=True)
 
         try:
+            from cogs.i18n_commands import KoreanCommandTranslator
+            await self.tree.set_translator(KoreanCommandTranslator())
+            print("[SYSTEM LOG] Korean command translator registered.", flush=True)
+        except Exception as e:
+            print(f"[SYSTEM ERROR] Failed to register Korean command translator: {e}", flush=True)
+
+        try:
             print("[SYSTEM LOG] Syncing application commands globally...", flush=True)
             synced = await self.tree.sync()
             print(f"[SYSTEM LOG] Successfully synced {len(synced)} commands globally to Discord.", flush=True)
