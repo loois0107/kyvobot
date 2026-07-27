@@ -115,7 +115,7 @@ class KyvoAnonymousReports(KyvoBaseCog):
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     async def _get_report_settings(self, guild_id) -> dict:
         """anonymous_reports_settings를 Redis Cache-Aside(KyvoBaseCog.get_guild_settings)로 읽어온다."""

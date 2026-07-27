@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, Client
 from aiohttp import web
 
@@ -19,6 +20,11 @@ class KyvoBot(commands.Bot):
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         self.supabase: Client = create_client(supabase_url, supabase_key)
+
+        # 🛡️ gg_rsvp/party/giveaway/scrim 등 10개 코그의 _db_call()이 공유하는 전용 스레드풀 -
+        # 파이썬 프로세스 전체가 공유하는 기본 executor(run_in_executor(None, ...))는 다른 블로킹
+        # 작업과도 경합하므로, DB 호출만 별도로 격리해서 병목/경합을 줄인다.
+        self.db_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kyvo-db")
 
     async def setup_hook(self):
         print(">>> SETUP_HOOK STARTED <<<", flush=True)

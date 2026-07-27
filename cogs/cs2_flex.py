@@ -140,7 +140,7 @@ class KyvoCS2Flex(KyvoBaseCog):
 
     async def _db_call(self, fn):
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  Steam Web API 헬퍼

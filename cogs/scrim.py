@@ -132,7 +132,7 @@ class KyvoScrim(KyvoBaseCog):
 
     async def _db_call(self, fn):
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  조회 헬퍼
@@ -756,6 +756,8 @@ class KyvoScrim(KyvoBaseCog):
     @check_scrim_timers.before_loop
     async def before_check_scrim_timers(self):
         await self.bot.wait_until_ready()
+        # gg_rsvp/party/giveaway/scrim 4개 루프의 30초 틱이 겹치지 않도록 어긋나게 시작한다.
+        await asyncio.sleep(22)
 
     async def _cancel_recruiting(self, row: dict) -> str:
         try:

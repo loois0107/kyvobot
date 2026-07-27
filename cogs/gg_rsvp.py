@@ -56,7 +56,7 @@ class KyvoGGRsvp(KyvoBaseCog):
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  게임 프리셋 조회/자동완성 - party.py의 동명 헬퍼와 동일한 로직을 복제한다("각 cog가
@@ -391,6 +391,9 @@ class KyvoGGRsvp(KyvoBaseCog):
     @check_expired_gg_rsvps.before_loop
     async def before_check_expired_gg_rsvps(self):
         await self.bot.wait_until_ready()
+        # 🛡️ gg_rsvp/party/giveaway/scrim 4개 루프가 전부 30초 주기라 동시에 틱을 맞으면 DB
+        # 호출이 한 순간에 몰린다 - 최초 1회만 지연을 주면 이후에도 서로 어긋난 채로 유지된다.
+        await asyncio.sleep(0)
 
 
 async def setup(bot):

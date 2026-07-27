@@ -80,7 +80,7 @@ class ReactionRoles(KyvoBaseCog):
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  바인딩 생성 - /reaction_role_add와 대시보드(내부 웹훅) 둘 다 이 함수 하나를 공유한다.

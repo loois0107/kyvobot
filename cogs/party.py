@@ -388,7 +388,7 @@ class KyvoParty(KyvoBaseCog):
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  재매핑 시 이전 역할 정리 - /tier_role_set과 대시보드(내부 웹훅) 둘 다 이 함수 하나를 공유한다.
@@ -1186,6 +1186,8 @@ class KyvoParty(KyvoBaseCog):
     @check_party_timers.before_loop
     async def before_check_party_timers(self):
         await self.bot.wait_until_ready()
+        # gg_rsvp/party/giveaway/scrim 4개 루프의 30초 틱이 겹치지 않도록 어긋나게 시작한다.
+        await asyncio.sleep(7)
 
     async def _expire_recruitments(self) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()

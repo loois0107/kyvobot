@@ -71,7 +71,7 @@ class KyvoGiveaway(KyvoBaseCog):
     async def _db_call(self, fn):
         """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, fn)
+        return await loop.run_in_executor(self.bot.db_executor, fn)
 
     # ══════════════════════════════════════════════════════════
     #  /giveaway points / /giveaway role - 관리자 명령어 (서브커맨드로 분리)
@@ -404,6 +404,8 @@ class KyvoGiveaway(KyvoBaseCog):
     @check_expired_giveaways.before_loop
     async def before_check_expired_giveaways(self):
         await self.bot.wait_until_ready()
+        # gg_rsvp/party/giveaway/scrim 4개 루프의 30초 틱이 겹치지 않도록 어긋나게 시작한다.
+        await asyncio.sleep(15)
 
     async def _claim_and_conclude(self, giveaway_row: dict) -> str:
         """반환값: 'claimed'(내가 선점해서 처리함) / 'already_concluded'(다른 경로가 선점) / 'error'.
