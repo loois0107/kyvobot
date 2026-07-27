@@ -371,5 +371,11 @@
   "onboarding_field_leveling_title": "📊 레벨 & 경제 시스템",
   "onboarding_field_leveling_desc": "대시보드에서 XP 배율, 역할 보상, 서버 상점을 설정할 수 있어요.",
   "onboarding_field_automod_title": "🛡️ 자동 관리",
-  "onboarding_field_automod_desc": "스팸/욕설 필터링, 익명 제보함 등을 대시보드에서 켜고 끌 수 있어요."
+  "onboarding_field_automod_desc": "스팸/욕설 필터링, 익명 제보함 등을 대시보드에서 켜고 끌 수 있어요.",
+  "automod_log_title": "🚨 자동 관리 조치 발생",
+  "automod_log_field_offender": "대상 유저",
+  "automod_log_field_channel": "채널",
+  "automod_log_field_reason": "사유",
+  "automod_log_field_action": "조치 내용",
+  "automod_log_field_content": "삭제된 메시지"
 }

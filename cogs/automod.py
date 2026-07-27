@@ -48,6 +48,43 @@ AUTOMOD_TIMEOUT_DEFAULT_SECONDS = 600  # 기존 하드코딩값과 동일 - 설�
 AUTOMOD_FORBIDDEN_WORD_MAX_LENGTH = 50
 AUTOMOD_FORBIDDEN_WORDS_MAX_COUNT = 200
 
+# 🛡️ 처벌 로그 채널 게시 - 대시보드에 antinuke_settings.log_channel_id를 설정할 UI가 아직 없어서
+# (app/api/settings/[guildId]/route.ts 주석 참고), 실질적으로는 이 이름의 채널이 대부분의 서버에서
+# 유일한 실사용 경로가 된다. 예전(초기 커밋)엔 있었다가 로그 배치 큐 도입 때 통째로 삭제됐던 기능을
+# 복원한다 - 이번엔 DB 큐(enqueue_log)와 완전히 독립적으로 동작하도록 설계.
+AUTOMOD_LOG_CHANNEL_NAME = "automod-logs"
+AUTOMOD_LOG_CONTENT_PREVIEW_MAX_LENGTH = 200
+
+
+def truncate_message_preview(content: str, max_length: int = AUTOMOD_LOG_CONTENT_PREVIEW_MAX_LENGTH) -> str:
+    """처벌 로그 임베드에 넣을 삭제된 메시지 미리보기를 자른다 - max_length를 넘으면 "..."을 붙인다."""
+    if not content:
+        return ""
+    if len(content) <= max_length:
+        return content
+    return content[:max_length] + "..."
+
+
+def resolve_automod_log_channel(guild: discord.Guild, antinuke_settings: dict | None) -> discord.TextChannel | None:
+    """처벌 로그를 올릴 채널을 고른다: 설정된 채널(antinuke_settings.log_channel_id) -> 이름이
+    "automod-logs"인 채널 -> guild.system_channel. 셋 다 없으면 None(호출부가 조용히 스킵)."""
+    antinuke_settings = antinuke_settings or {}
+
+    configured_id = antinuke_settings.get("log_channel_id")
+    if configured_id:
+        try:
+            channel = guild.get_channel(int(configured_id))
+        except (TypeError, ValueError):
+            channel = None
+        if channel:
+            return channel
+
+    named_channel = discord.utils.get(guild.text_channels, name=AUTOMOD_LOG_CHANNEL_NAME)
+    if named_channel:
+        return named_channel
+
+    return guild.system_channel
+
 
 def resolve_automod_settings(automod_settings: dict | None) -> dict:
     """대시보드가 저장한 automod_settings를 안전하게 정규화한다 - 값이 없거나(미설정 길드),
@@ -263,6 +300,11 @@ class AutoMod(KyvoBaseCog):
                     action=punishment_log,
                     reason=f"{base_reason} | Channel: #{message.channel.name}",
                 )
+                await self._post_punishment_log(
+                    guild=message.guild, member=message.author, channel=message.channel,
+                    action=punishment_log, reason=base_reason, content=message.content,
+                    antinuke_settings=nested_settings.get("antinuke_settings") or {},
+                )
 
             # ⚡ 부모 클래스의 get_msg 기반으로 유저 경고 메시지 출력
             warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
@@ -293,12 +335,54 @@ class AutoMod(KyvoBaseCog):
                 action="bad_word_delete",
                 reason=f"{log_reason} | Channel: #{message.channel.name}"
             )
+            await self._post_punishment_log(
+                guild=message.guild, member=message.author, channel=message.channel,
+                action="bad_word_delete", reason=log_reason, content=message.content,
+                antinuke_settings=nested_settings.get("antinuke_settings") or {},
+            )
 
             warn_msg = await self.get_msg(message.guild.id, "bad_word_warn", mention=message.author.mention)
             try:
                 await message.channel.send(warn_msg, delete_after=3.0)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
+    # ══════════════════════════════════════════════════════════
+    #  ③-2 automod-logs 채널 실시간 게시 - enqueue_log(DB 큐)와 완전히 독립적으로 동작한다.
+    #  배치 큐는 DB insert 부하 완화가 목적이었지 채널 알림을 지연시킬 이유가 없어서, 원자적
+    #  클레임이 확정되는 시점에 즉시 발송한다.
+    # ══════════════════════════════════════════════════════════
+    async def _post_punishment_log(self, guild: discord.Guild, member: discord.Member, channel: discord.abc.Messageable,
+                                    action: str, reason: str, content: str, antinuke_settings: dict) -> None:
+        """이 함수가 무엇을 하다 실패하든(채널 없음/권한 부족/Discord API 오류) enqueue_log가 이미
+        큐에 넣은 DB 로그엔 절대 영향을 주지 않는다 - 통째로 여기서 삼킨다(on_member_join에 추가한
+        것과 동일한 안전망). 반대 방향도 마찬가지: enqueue_log 자체가 예외를 던지지 않는 구조라
+        (큐가 가득 차면 카운터만 증가) 이 함수의 성공/실패가 DB 큐에 영향을 줄 수도 없다."""
+        try:
+            log_channel = resolve_automod_log_channel(guild, antinuke_settings)
+            if log_channel is None:
+                return
+
+            title = await self.get_msg(guild.id, "automod_log_title")
+            lbl_offender = await self.get_msg(guild.id, "automod_log_field_offender")
+            lbl_channel = await self.get_msg(guild.id, "automod_log_field_channel")
+            lbl_reason = await self.get_msg(guild.id, "automod_log_field_reason")
+            lbl_action = await self.get_msg(guild.id, "automod_log_field_action")
+            lbl_content = await self.get_msg(guild.id, "automod_log_field_content")
+
+            embed = discord.Embed(title=title, color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
+            embed.add_field(name=lbl_offender, value=f"{member.mention} (`{member.id}`)", inline=True)
+            embed.add_field(name=lbl_channel, value=getattr(channel, "mention", str(channel)), inline=True)
+            embed.add_field(name=lbl_action, value=f"`{action}`", inline=True)
+            embed.add_field(name=lbl_reason, value=reason, inline=False)
+
+            preview = truncate_message_preview(content)
+            if preview:
+                embed.add_field(name=lbl_content, value=f"```\n{preview}\n```", inline=False)
+
+            await log_channel.send(embed=embed)
+        except Exception as e:
+            print(f"[AUTOMOD_LOG][ERROR] Failed to post punishment log embed (guild={guild.id}): {type(e).__name__}: {e}", flush=True)
 
     # ══════════════════════════════════════════════════════════
     #  ④ Log Batch Queue Async Engine (AutoMod 고유 자산 유지)
