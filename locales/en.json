@@ -365,7 +365,7 @@
   "onboarding_welcome_title": "🎉 Thanks for adding Kyvo!",
   "onboarding_welcome_desc": "Thanks for inviting me! Click the title above to open your server's dashboard, or check out what I can do below.",
   "onboarding_field_party_title": "🎮 Party Recruiting",
-  "onboarding_field_party_desc": "/party_recruit, /gg, and /내전 (scrim) let members instantly put together a group.",
+  "onboarding_field_party_desc": "/party_recruit, /gg, and /scrim_start let members instantly put together a group.",
   "onboarding_field_ticket_title": "🤖 AI Ticket Support",
   "onboarding_field_ticket_desc": "Run /ticket-setup to deploy a 24/7 AI-powered support desk.",
   "onboarding_field_leveling_title": "📊 Leveling & Economy",

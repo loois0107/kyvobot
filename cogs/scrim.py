@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 SCRIM_TOTAL_NEEDED = 10                   # 로스터 상한(정원) - 이 이상은 못 들어옴
 SCRIM_MIN_NEEDED = 4                      # 리더가 "경기 시작"을 누를 수 있는 최소 인원(2v2)
 SCRIM_RECRUIT_DURATION_MINUTES = 30       # 모집 타임아웃 - gg_rsvp와 동일한 정신
-SCRIM_AUTO_END_HOURS = 3                  # 리더가 /내전종료를 잊어도 결국 정리되는 최종 안전장치
+SCRIM_AUTO_END_HOURS = 3                  # 리더가 /scrim_end를 잊어도 결국 정리되는 최종 안전장치
 SCRIM_CHECK_INTERVAL_SECONDS = 30
 
 SCRIM_JOIN_ID = "kyvo_scrim:join"
@@ -185,9 +185,10 @@ class KyvoScrim(KyvoBaseCog):
         return {uid: found.get(uid) for uid in user_ids}
 
     # ══════════════════════════════════════════════════════════
-    #  /내전 - 모집 시작. gg_rsvp.py와 동일한 흐름(모달 없이 즉시 카드) + 10명 고정.
+    #  /scrim_start - 모집 시작. gg_rsvp.py와 동일한 흐름(모달 없이 즉시 카드) + 10명 고정.
+    #  (예전엔 /내전이었음 - 다른 모든 명령어와 영문 snake_case 컨벤션을 맞추기 위해 개명)
     # ══════════════════════════════════════════════════════════
-    @app_commands.command(name="내전", description="Start recruiting a balanced 5v5 scrim.")
+    @app_commands.command(name="scrim_start", description="Start recruiting a balanced 5v5 scrim.")
     async def scrim_start_recruit(self, interaction: discord.Interaction):
         await interaction.response.defer()
         guild_id = interaction.guild_id
@@ -573,14 +574,15 @@ class KyvoScrim(KyvoBaseCog):
         return results
 
     # ══════════════════════════════════════════════════════════
-    #  /내전종료 - 리더 또는 서버 관리 권한자만. 자동 종료(auto_end_at)와 이 함수 둘 다
+    #  /scrim_end - 리더 또는 서버 관리 권한자만. 자동 종료(auto_end_at)와 이 함수 둘 다
     #  _end_scrim 하나를 공유한다(원자적 클레임으로 중복 처리 방지).
+    #  (예전엔 /내전종료였음 - 다른 모든 명령어와 영문 snake_case 컨벤션을 맞추기 위해 개명)
     # ══════════════════════════════════════════════════════════
     # 🛡️ app_commands.checks.has_permissions(manage_guild=True)를 데코레이터로 걸면 Discord
     # 클라이언트가 manage_guild 없는 유저에게 이 명령어 자체를 안 보여줄 수 있다 - "리더 또는
     # 관리자" 요구사항과 안 맞아서(리더는 관리 권한이 없을 수도 있음), 권한 판단은 전부 함수
     # 내부 로직으로 처리한다.
-    @app_commands.command(name="내전종료", description="End the current scrim and return everyone to their original voice channel.")
+    @app_commands.command(name="scrim_end", description="End the current scrim and return everyone to their original voice channel.")
     async def scrim_end(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -635,7 +637,7 @@ class KyvoScrim(KyvoBaseCog):
             return None
 
     async def _end_scrim(self, row: dict) -> dict | None:
-        """원자적 클레임: status='in_progress' 조건부 UPDATE - /내전종료 명령어와 auto_end_at
+        """원자적 클레임: status='in_progress' 조건부 UPDATE - /scrim_end 명령어와 auto_end_at
         타이머가 거의 동시에 발생해도 정확히 하나만 실제로 정리를 수행한다."""
         try:
             claim_res = await self._db_call(
@@ -748,7 +750,7 @@ class KyvoScrim(KyvoBaseCog):
 
         for row in overdue:
             print(f"[SCRIM][WARN] Auto-ending scrim {row['id']} - auto_end_at safety backstop reached "
-                  f"(leader never ran /내전종료).", flush=True)
+                  f"(leader never ran /scrim_end).", flush=True)
             await self._end_scrim(row)
 
     @check_scrim_timers.before_loop
