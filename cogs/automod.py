@@ -2,6 +2,7 @@ import time
 import asyncio
 import json
 import os
+import re
 from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import commands, tasks
@@ -47,6 +48,18 @@ AUTOMOD_TIMEOUT_DEFAULT_SECONDS = 600  # 기존 하드코딩값과 동일 - 설�
 
 AUTOMOD_FORBIDDEN_WORD_MAX_LENGTH = 50
 AUTOMOD_FORBIDDEN_WORDS_MAX_COUNT = 200
+
+AUTOMOD_MAX_CHARS_MIN = 100
+AUTOMOD_MAX_CHARS_MAX = 4000
+AUTOMOD_MAX_CHARS_DEFAULT = 800
+
+AUTOMOD_MAX_LINES_MIN = 3
+AUTOMOD_MAX_LINES_MAX = 50
+AUTOMOD_MAX_LINES_DEFAULT = 12
+
+# 길이/줄수 판정 전에 트리플 백틱 코드 블록 내용을 잘라낸다 - 정상적인 긴 코드 스니펫이 오탐되지
+# 않게 하기 위함(닫히지 않은 백틱은 매칭 안 돼서 안전 쪽으로 - 전체가 그대로 카운트된다).
+CODE_BLOCK_PATTERN = re.compile(r"```.*?```", re.DOTALL)
 
 # 🛡️ 처벌 로그 채널 게시 - 대시보드에 antinuke_settings.log_channel_id를 설정할 UI가 아직 없어서
 # (app/api/settings/[guildId]/route.ts 주석 참고), 실질적으로는 이 이름의 채널이 대부분의 서버에서
@@ -113,11 +126,47 @@ def resolve_automod_settings(automod_settings: dict | None) -> dict:
     if not (AUTOMOD_TIMEOUT_MIN_SECONDS <= timeout_seconds <= AUTOMOD_TIMEOUT_MAX_SECONDS):
         timeout_seconds = AUTOMOD_TIMEOUT_DEFAULT_SECONDS
 
+    try:
+        max_chars = int(automod_settings.get("max_chars"))
+    except (TypeError, ValueError):
+        max_chars = AUTOMOD_MAX_CHARS_DEFAULT
+    if not (AUTOMOD_MAX_CHARS_MIN <= max_chars <= AUTOMOD_MAX_CHARS_MAX):
+        max_chars = AUTOMOD_MAX_CHARS_DEFAULT
+
+    try:
+        max_lines = int(automod_settings.get("max_lines"))
+    except (TypeError, ValueError):
+        max_lines = AUTOMOD_MAX_LINES_DEFAULT
+    if not (AUTOMOD_MAX_LINES_MIN <= max_lines <= AUTOMOD_MAX_LINES_MAX):
+        max_lines = AUTOMOD_MAX_LINES_DEFAULT
+
     return {
         "spam_limit": spam_limit,
         "spam_interval_seconds": spam_interval_seconds,
         "timeout_seconds": timeout_seconds,
+        "max_chars": max_chars,
+        "max_lines": max_lines,
     }
+
+
+def check_message_shape(content: str, max_chars: int, max_lines: int) -> tuple[str | None, int]:
+    """단일 메시지만 보고 즉시 판단 가능한 두 규칙 - 트리플 백틱 코드 블록은 판정에서 제외한다.
+    글자 수 위반이 줄 수 위반보다 우선(둘 다 걸리면 "too_long"을 반환) - 임의 순서지만 항상
+    결정적이다. 위반 없으면 (None, 0). 두 번째 반환값은 실제 측정치(글자 수 또는 줄 수) -
+    spam_reason처럼 로그/경고 메시지에 실제 수치를 보여주기 위함."""
+    if not content:
+        return None, 0
+
+    stripped = CODE_BLOCK_PATTERN.sub("", content)
+
+    if len(stripped) > max_chars:
+        return "too_long", len(stripped)
+
+    line_count = stripped.count("\n") + 1
+    if line_count > max_lines:
+        return "too_many_lines", line_count
+
+    return None, 0
 
 
 class AutoMod(KyvoBaseCog):
@@ -248,6 +297,8 @@ class AutoMod(KyvoBaseCog):
         limit = automod_settings["spam_limit"]
         window = automod_settings["spam_interval_seconds"]
         timeout_seconds = automod_settings["timeout_seconds"]
+        max_chars = automod_settings["max_chars"]
+        max_lines = automod_settings["max_lines"]
 
         count, exceeded = await self.check_spam(
             guild_id=message.guild.id,
@@ -314,6 +365,45 @@ class AutoMod(KyvoBaseCog):
                     await message.channel.send(warn_msg, delete_after=5.0)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
+            return
+
+        # 1-2. 메시지 형태 규칙 - 글자 수/줄 수 초과(버스트 여부와 무관하게 메시지 하나만 봐도
+        # 즉시 판단 가능). 짧은 시간에 반복되면 위의 check_spam이 이미 매번 슬라이딩 윈도우에
+        # 등록하고 있으므로(exceeded 여부와 무관하게), 별도 카운터 없이도 기존 스팸 타임아웃
+        # 경로로 자연스럽게 escalate된다.
+        shape_violation, shape_count = check_message_shape(message.content, max_chars, max_lines)
+
+        if shape_violation:
+            try:
+                await message.delete()
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
+
+            if shape_violation == "too_long":
+                reason_key, warn_key, limit_value = "automod_too_long_reason", "automod_too_long_warn", max_chars
+            else:
+                reason_key, warn_key, limit_value = "automod_many_lines_reason", "automod_many_lines_warn", max_lines
+
+            log_reason = await self.get_msg(message.guild.id, reason_key, count=shape_count, limit=limit_value)
+            self.enqueue_log(
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+                action=f"{shape_violation}_delete",
+                reason=f"{log_reason} | Channel: #{message.channel.name}",
+            )
+            await self._post_punishment_log(
+                guild=message.guild, member=message.author, channel=message.channel,
+                action=f"{shape_violation}_delete", reason=log_reason, content=message.content,
+                antinuke_settings=nested_settings.get("antinuke_settings") or {},
+            )
+
+            warn_msg = await self.get_msg(message.guild.id, warn_key, mention=message.author.mention)
+            try:
+                await message.channel.send(warn_msg, delete_after=5.0)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
             return
 
         # 2. 금지어 필터링
