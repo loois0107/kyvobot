@@ -191,12 +191,12 @@ class KyvoTicketAI(commands.Cog):
         return None
 
     ticket_admin = app_commands.Group(
-        name="ticket-admin", 
-        description="Manage AI Vector Knowledge Base matrix and support structures",
+        name="ticket-admin",
+        description="Manage the AI support ticket system's settings and knowledge base.",
         default_permissions=discord.Permissions(manage_guild=True)
     )
 
-    @ticket_admin.command(name="add-knowledge", description="Inject a custom documentation block into Supabase Vector DB.")
+    @ticket_admin.command(name="add-knowledge", description="Teach the AI new information for ticket support.")
     @app_commands.describe(content="The actual guidelines, server rules, or FAQ text chunk to teach the AI.")
     async def add_knowledge(self, interaction: discord.Interaction, content: str):
         await interaction.response.defer(ephemeral=True)
@@ -213,7 +213,7 @@ class KyvoTicketAI(commands.Cog):
         else:
             await interaction.followup.send("✅ **Vector Knowledge Node Registered!** Securely pushed to pgvector storage.", ephemeral=True)
 
-    @app_commands.command(name="ticket-setup", description="Deploy the persistent automated help desk support terminal.")
+    @app_commands.command(name="ticket-setup", description="Set up the AI-powered support ticket panel.")
     @app_commands.default_permissions(manage_guild=True)
     async def ticket_setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

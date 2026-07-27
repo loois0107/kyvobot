@@ -342,7 +342,7 @@ class CustomCommands(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  슬래시 관리자 명령어 (목록 조회)
     # ══════════════════════════════════════════════════════════
-    @app_commands.command(name="cc_list", description="Display all active custom commands within this server node.")
+    @app_commands.command(name="cc_list", description="List all custom commands in this server.")
     async def cc_list(self, interaction: discord.Interaction):
         await interaction.response.defer()
         try:

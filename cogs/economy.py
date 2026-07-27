@@ -1249,7 +1249,7 @@ class KyvoEconomy(KyvoBaseCog):
 
     eco_group = app_commands.Group(name="eco", description="Admin monetary allocation tools", default_permissions=discord.Permissions(manage_guild=True))
 
-    @eco_group.command(name="give", description="Forcefully credit currency allocation to a specific user profile.")
+    @eco_group.command(name="give", description="Give points to a user.")
     async def eco_give(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Mutates user financial schema by injecting points directly."""
         await interaction.response.defer(ephemeral=True)
@@ -1275,7 +1275,7 @@ class KyvoEconomy(KyvoBaseCog):
         print(f"[ECONOMY ADMIN] Granted {amount} to {target.name} via admin override.")
         await interaction.followup.send(f"✅ Successfully allocated **+{amount:,}** {currency_name} to {target.mention}.", ephemeral=True)
 
-    @eco_group.command(name="take", description="Deduct custom balance indexes away from a targeted user.")
+    @eco_group.command(name="take", description="Take points from a user.")
     async def eco_take(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Enforces administrative budget cuts/penalties onto user point structures."""
         await interaction.response.defer(ephemeral=True)

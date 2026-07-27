@@ -251,7 +251,7 @@ class KyvoTierVerify(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  /tier_verify
     # ══════════════════════════════════════════════════════════
-    @app_commands.command(name="tier_verify", description="Verify your League of Legends account and get a rank-based role.")
+    @app_commands.command(name="tier_verify", description="Verify your League of Legends account and get a rank-based role (requires /riot_region_set first).")
     async def tier_verify(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         title = await self.get_msg(guild_id, "tier_verify_modal_title")
