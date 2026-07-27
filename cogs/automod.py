@@ -306,12 +306,14 @@ class AutoMod(KyvoBaseCog):
                     antinuke_settings=nested_settings.get("antinuke_settings") or {},
                 )
 
-            # ⚡ 부모 클래스의 get_msg 기반으로 유저 경고 메시지 출력
-            warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
-            try:
-                await message.channel.send(warn_msg, delete_after=5.0)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+                # 🛡️ [경고 메시지 중복 방지] 처벌/로그와 동일한 이유로 claimed 블록 안으로 이동 -
+                # 슬라이딩 윈도우 카운트는 처벌 후에도 리셋되지 않아, 같은 burst 안의 후속
+                # 메시지마다 경고가 반복 전송되던 문제(경고 자체가 채널을 도배)를 막는다.
+                warn_msg = await self.get_msg(message.guild.id, "spam_warn", mention=message.author.mention)
+                try:
+                    await message.channel.send(warn_msg, delete_after=5.0)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             return
 
         # 2. 금지어 필터링
