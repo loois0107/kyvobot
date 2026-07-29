@@ -6,7 +6,7 @@ import time
 import random
 import io
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import aiohttp
 
 
@@ -17,6 +17,14 @@ def clean_hex_color(hex_str, fallback):
     if not clean.startswith('#'):
         clean = f"#{clean}"
     return clean if len(clean) in [4, 7, 9] else fallback
+
+
+def fit_card_background(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Crops+resizes `image` to `size` preserving its source aspect ratio - the same
+    "cover" behavior as the dashboard preview's CSS `background-size: cover` (see
+    app/(app)/profile/[guildId]/page.tsx). A bare `.resize(size)` instead stretches/squishes
+    the source to fit, ignoring its aspect ratio, which is what produced the distorted cards."""
+    return ImageOps.fit(image, size, method=Image.LANCZOS)
 
 
 def resolve_card_settings(leveling_set: dict, user_override: dict | None) -> dict:
@@ -257,7 +265,7 @@ class KyvoLeveling(KyvoBaseCog):
                     async with session.get(background_url, headers=headers, timeout=5) as resp:
                         if resp.status == 200:
                             bg_data = await resp.read()
-                            card = Image.open(io.BytesIO(bg_data)).convert("RGBA").resize((base_w, base_h))
+                            card = fit_card_background(Image.open(io.BytesIO(bg_data)).convert("RGBA"), (base_w, base_h))
                         else:
                             print(f"[RANK_CARD][WARN] background_url fetch returned status {resp.status}, "
                                   f"falling back to solid color (guild={guild_id}, user={user_id}, url={background_url})", flush=True)
