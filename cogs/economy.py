@@ -1253,6 +1253,9 @@ class KyvoEconomy(KyvoBaseCog):
     async def eco_give(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Mutates user financial schema by injecting points directly."""
         await interaction.response.defer(ephemeral=True)
+        if target.bot:
+            await interaction.followup.send("❌ 봇 계정에는 사용할 수 없습니다.", ephemeral=True)
+            return
         if amount <= 0:
             await interaction.followup.send("❌ Allocation quantity threshold error: Must be greater than 0.", ephemeral=True)
             return
@@ -1279,6 +1282,9 @@ class KyvoEconomy(KyvoBaseCog):
     async def eco_take(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Enforces administrative budget cuts/penalties onto user point structures."""
         await interaction.response.defer(ephemeral=True)
+        if target.bot:
+            await interaction.followup.send("❌ 봇 계정에는 사용할 수 없습니다.", ephemeral=True)
+            return
         if amount <= 0:
             await interaction.followup.send("❌ Deduction quantity threshold error: Must be greater than 0.", ephemeral=True)
             return
