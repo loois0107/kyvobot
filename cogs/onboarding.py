@@ -1,9 +1,13 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 from cogs.base import KyvoBaseCog
 import os
 
 DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
+# 🛡️ cogs/leveling.py와 동일한 검증 - discord.py는 Button(url=...)의 스킴을 검사하지 않아서,
+# 잘못된 값(스킴 누락 등)을 그대로 Discord API에 보내면 응답 자체가 HTTPException으로 실패한다.
+DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
 ONBOARDING_EMBED_COLOR = 0x5865F2
 
 
@@ -65,6 +69,30 @@ class KyvoOnboarding(KyvoBaseCog):
         except (discord.Forbidden, discord.HTTPException) as e:
             print(f"[ONBOARDING][ERROR] Failed to send welcome message (guild={guild.id}, channel={channel.id}): "
                   f"{type(e).__name__}: {e}", flush=True)
+
+    # 🛡️ default_permissions(administrator=True)는 has_permissions()와 달리 "권한 없으면 에러"가
+    # 아니라 "권한 없는 유저에게는 명령어 자체가 안 보임"이다(Discord 클라이언트가 필터링) - 이
+    # 명령어는 관리자용 대시보드 링크일 뿐이라 일반 유저에게 노출될 이유가 없어서 이 방식을 쓴다.
+    @app_commands.command(name="dashboard", description="Get a link to this server's admin dashboard.")
+    @app_commands.default_permissions(administrator=True)
+    async def dashboard(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild_id
+
+        if DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
+            button_label = await self.get_msg(guild_id, "dashboard_link_button")
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label=button_label,
+                style=discord.ButtonStyle.link,
+                url=f"{DASHBOARD_BASE_URL}/dashboard/{guild_id}",
+            ))
+            await interaction.followup.send(view=view, ephemeral=True)
+        else:
+            # 🛡️ URL을 못 만드는 상황(미설정 또는 스킴 없음)에서도 명령어가 조용히 실패하지
+            # 않도록, 버튼 없이 텍스트 응답만이라도 나가게 한다.
+            msg = await self.get_msg(guild_id, "dashboard_link_unavailable")
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot):
