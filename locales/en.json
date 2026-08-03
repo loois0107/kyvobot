@@ -2,6 +2,7 @@
   "leaderboard_title": "🏆 KyvoBot Server Leaderboard",
   "no_data": "No ranking data exists yet.",
   "rank_card_title": "📊 {name}'s Rank Card",
+  "rank_card_profile_button": "🎨 Customize My Card",
   "level": "Level",
   "standing": "Server Rank",
   "xp": "XP",

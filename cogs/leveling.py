@@ -9,6 +9,9 @@ import os
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import aiohttp
 
+# 🔗 cogs/onboarding.py와 동일한 패턴 - 대시보드 도메인을 환경변수로 주입받아 딥링크를 만든다.
+DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
+
 
 def clean_hex_color(hex_str, fallback):
     if not hex_str:
@@ -344,11 +347,31 @@ class KyvoLeveling(KyvoBaseCog):
         except Exception:
             draw.ellipse((45, 45, 195, 195), fill=card_color)
 
+        # 🔗 개인 대시보드(/profile/{guild_id})로 가는 URL 버튼 - 링크 스타일이라 클릭해도
+        # 디스코드 클라이언트가 바로 브라우저를 여는 것만으로 끝나고, 봇 서버로 인터랙션이
+        # 오지 않는다(custom_id 기반 버튼과 달리 콜백 등록이 필요 없음). /level은 관리자가
+        # 아닌 일반 멤버도 매번 쓰는 명령어라, 관리자만 열 수 있는 /dashboard 사이드바/헤더
+        # 진입점과 달리 실제 타겟 유저층(랭크카드를 꾸미고 싶은 본인)에게 직접 닿는 유일한 경로다.
+        # 🛡️ send_kwargs에서 아예 키를 빼야 한다 - discord.py의 followup.send는 view=None을
+        # "view 없음"이 아니라 진짜 View 객체처럼 처리하려다 크래시한다(내부적으로 MISSING
+        # 센티널과 비교하지 None과 비교하지 않음). DASHBOARD_BASE_URL 미설정 시엔 view 자체를
+        # 아예 안 넘겨야 기존 동작(파일만 전송)이 그대로 유지된다.
+        send_kwargs = {}
+        if DASHBOARD_BASE_URL:
+            profile_button_label = await self.get_msg(guild_id, "rank_card_profile_button")
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label=profile_button_label,
+                style=discord.ButtonStyle.link,
+                url=f"{DASHBOARD_BASE_URL}/profile/{guild_id}",
+            ))
+            send_kwargs["view"] = view
+
         with io.BytesIO() as image_binary:
             card.save(image_binary, "PNG")
             image_binary.seek(0)
             file = discord.File(fp=image_binary, filename="rank_card.png")
-            await interaction.followup.send(file=file)
+            await interaction.followup.send(file=file, **send_kwargs)
 
 async def setup(bot):
     await bot.add_cog(KyvoLeveling(bot))
