@@ -11,6 +11,11 @@ import aiohttp
 
 # 🔗 cogs/onboarding.py와 동일한 패턴 - 대시보드 도메인을 환경변수로 주입받아 딥링크를 만든다.
 DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
+# 🛡️ discord.py는 Button(url=...)의 스킴을 검사하지 않는다 - 잘못된 값(스킴 누락 등)을 그대로
+# Discord API에 보내면 followup.send()가 HTTPException으로 터져서 랭크카드 이미지 전송 자체가
+# 실패한다. DASHBOARD_BASE_URL은 개발자가 설정하는 값이라 위험은 낮지만, 미리 걸러서 잘못
+# 설정됐을 때도 최소한 이미지는 정상 전송되게(버튼만 빠짐) 한다.
+DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
 
 
 def clean_hex_color(hex_str, fallback):
@@ -357,13 +362,21 @@ class KyvoLeveling(KyvoBaseCog):
         # 센티널과 비교하지 None과 비교하지 않음). DASHBOARD_BASE_URL 미설정 시엔 view 자체를
         # 아예 안 넘겨야 기존 동작(파일만 전송)이 그대로 유지된다.
         send_kwargs = {}
-        if DASHBOARD_BASE_URL:
+        if DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
             profile_button_label = await self.get_msg(guild_id, "rank_card_profile_button")
+            leaderboard_button_label = await self.get_msg(guild_id, "rank_card_leaderboard_button")
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label=profile_button_label,
                 style=discord.ButtonStyle.link,
                 url=f"{DASHBOARD_BASE_URL}/profile/{guild_id}",
+            ))
+            # 🔗 개인 대시보드의 세 번째 탭(리더보드)으로 바로 연결 - /leaderboard 커맨드가
+            # 따로 없어서, 실사용자가 매번 실행하는 /level에 함께 붙이는 게 가장 눈에 띈다.
+            view.add_item(discord.ui.Button(
+                label=leaderboard_button_label,
+                style=discord.ButtonStyle.link,
+                url=f"{DASHBOARD_BASE_URL}/profile/{guild_id}/leaderboard",
             ))
             send_kwargs["view"] = view
 

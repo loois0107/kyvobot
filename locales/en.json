@@ -3,6 +3,7 @@
   "no_data": "No ranking data exists yet.",
   "rank_card_title": "📊 {name}'s Rank Card",
   "rank_card_profile_button": "🎨 Customize My Card",
+  "rank_card_leaderboard_button": "🏆 View Leaderboard",
   "level": "Level",
   "standing": "Server Rank",
   "xp": "XP",

@@ -3,6 +3,7 @@
   "no_data": "아직 랭킹 데이터가 존재하지 않습니다.",
   "rank_card_title": "📊 {name}님의 랭크 카드",
   "rank_card_profile_button": "🎨 내 카드 꾸미기",
+  "rank_card_leaderboard_button": "🏆 리더보드 보기",
   "level": "레벨",
   "standing": "서버 순위",
   "xp": "경험치",
