@@ -55,6 +55,7 @@ class KyvoBot(commands.Bot):
             'cogs.cs2_flex',
             'cogs.weekly_report',
             'cogs.onboarding',
+            'cogs.dashboard_auth',
         ]
         print(">>> Loading extensions... <<<", flush=True)
 
