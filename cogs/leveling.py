@@ -168,9 +168,11 @@ class KyvoLeveling(KyvoBaseCog):
 
         if leveled_up:
             try:
+                title = await self.get_msg(guild_id, "level_up_title")
+                desc = await self.get_msg(guild_id, "level_up_desc", mention=message.author.mention, level=current_level)
                 alert_embed = discord.Embed(
-                    title="🎉 LEVEL UP!",
-                    description=f"Congratulations {message.author.mention}! You advanced to **Level {current_level}**.",
+                    title=title,
+                    description=desc,
                     color=discord.Color.gold()
                 )
                 await message.channel.send(embed=alert_embed, delete_after=10.0)

@@ -1377,7 +1377,8 @@ class KyvoParty(KyvoBaseCog):
         cancel_label = await self.get_msg(guild_id, "cc_cancel_button")
 
         view = RoleWarningConfirmView(interaction.user.id, confirm_label, cancel_label)
-        embed = discord.Embed(title="⚠️ Dangerous Permission Warning", description=warning_msg, color=discord.Color.orange())
+        warning_title = await self.get_msg(guild_id, "cc_warning_dangerous_title")
+        embed = discord.Embed(title=warning_title, description=warning_msg, color=discord.Color.orange())
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         await view.wait()
 

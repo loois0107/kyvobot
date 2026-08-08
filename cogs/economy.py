@@ -101,7 +101,8 @@ class BlackjackView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
-            await interaction.response.send_message("❌ This is not your blackjack table.", ephemeral=True)
+            msg = await self.cog.get_msg(self.game.guild_id, "bj_err_not_your_table")
+            await interaction.response.send_message(msg, ephemeral=True)
             return False
         return True
 
@@ -236,7 +237,8 @@ class MinesView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
-            await interaction.response.send_message("❌ This is not your minefield.", ephemeral=True)
+            msg = await self.cog.get_msg(self.game.guild_id, "mines_err_not_your_game")
+            await interaction.response.send_message(msg, ephemeral=True)
             return False
         return True
 
@@ -351,7 +353,8 @@ class RouletteView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
-            await interaction.response.send_message("❌ This is not your revolver.", ephemeral=True)
+            msg = await self.cog.get_msg(self.game.guild_id, "roulette_err_not_your_game")
+            await interaction.response.send_message(msg, ephemeral=True)
             return False
         return True
 
@@ -423,15 +426,19 @@ class KyvoEconomy(KyvoBaseCog):
         current_points = user_data.get("points", 0)
 
         # Premium UI Upgrade: Formatted Embed
+        title = await self.get_msg(interaction.guild_id, "bal_title")
+        holder = await self.get_msg(interaction.guild_id, "bal_holder", mention=interaction.user.mention)
+        field_label = await self.get_msg(interaction.guild_id, "bal_field_balance")
+        footer = await self.get_msg(interaction.guild_id, "bal_footer")
         embed = discord.Embed(
-            title="💳 Financial Statement",
-            description=f"Account holder: {interaction.user.mention}",
+            title=title,
+            description=holder,
             color=discord.Color.green(),
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="Available Balance", value=f"🪙 **{current_points:,}** {currency_name}", inline=False)
-        embed.set_footer(text="KyvoBot Decentralized Ledger Asset")
+        embed.add_field(name=field_label, value=f"🪙 **{current_points:,}** {currency_name}", inline=False)
+        embed.set_footer(text=footer)
 
         await interaction.followup.send(embed=embed)
 
@@ -444,17 +451,16 @@ class KyvoEconomy(KyvoBaseCog):
 
         # Concurrency check to stop double-tap exploit on daily rewards
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Transaction Pending:** Your ledger entry is currently being updated. Please wait.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "daily_err_pending")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if user_id in self.cooldowns and now - self.cooldowns[user_id] < 86400:
             remaining = 86400 - (now - self.cooldowns[user_id])
             hours = int(remaining // 3600)
             minutes = int((remaining % 3600) // 60)
-            await interaction.followup.send(
-                f"⏳ Cooldown Active! You have already claimed your daily reward. Try again in **{hours}h {minutes}m**.",
-                ephemeral=True
-            )
+            msg = await self.get_msg(interaction.guild_id, "daily_err_cooldown", hours=hours, minutes=minutes)
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         self.active_transactions.add(user_id)
@@ -468,23 +474,24 @@ class KyvoEconomy(KyvoBaseCog):
 
             save_ok = await self.bot.save_user_data(str(user_id), str(interaction.guild_id), user_data)
             if not save_ok:
-                await interaction.followup.send(
-                    "❌ **Ledger Write Failed:** Your daily reward could not be saved due to a database error. Please try again shortly.",
-                    ephemeral=True
-                )
+                msg = await self.get_msg(interaction.guild_id, "daily_err_save_failed")
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
             # 저장이 실제로 성공했을 때만 쿨다운을 건다 - 실패했는데 24시간 묶어두면 보상도 못 받고 재시도도 못 함
             self.cooldowns[user_id] = now
 
             # Premium UI Upgrade: Celebration Embed
+            title = await self.get_msg(interaction.guild_id, "daily_title")
+            desc = await self.get_msg(interaction.guild_id, "daily_desc", mention=interaction.user.mention, reward=reward, currency=currency_name)
+            footer = await self.get_msg(interaction.guild_id, "daily_footer")
             embed = discord.Embed(
-                title="🎁 Daily Allowance Credited",
-                description=f"Success {interaction.user.mention}! You received an injection of **+{reward}** {currency_name}.",
+                title=title,
+                description=desc,
                 color=discord.Color.gold(),
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
-            embed.set_footer(text="KyvoBot Automated Cash Flow Layer")
+            embed.set_footer(text=footer)
             await interaction.followup.send(embed=embed)
         finally:
             self.active_transactions.discard(user_id)
@@ -500,16 +507,19 @@ class KyvoEconomy(KyvoBaseCog):
 
         # 1. Base Boundary Guards
         if amount <= 0:
-            await interaction.followup.send("❌ You must wager a positive number greater than 0.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "bet_err_invalid_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if amount > 1000000000:
-            await interaction.followup.send("❌ Transaction Refused: Bet amount exceeds maximum allowable parameter of 1,000,000,000.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "bet_err_max_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         # 2. Concurrency Processing Lock Interceptor
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "econ_err_processing_blocked")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         self.active_transactions.add(user_id)
@@ -519,45 +529,48 @@ class KyvoEconomy(KyvoBaseCog):
             min_bet = economy_set.get("min_bet", 10)
 
             if amount < min_bet:
-                await interaction.followup.send(f"❌ The minimum wager amount allowed on this server is **{min_bet}** {currency_name}.", ephemeral=True)
+                msg = await self.get_msg(interaction.guild_id, "bet_err_min_bet", min_bet=min_bet, currency=currency_name)
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
             user_data = await self.bot.get_user_data(str(user_id), str(interaction.guild_id))
             current_points = user_data.get("points", 0)
 
             if current_points < amount:
-                await interaction.followup.send(f"❌ Transaction declined: Insufficient liquidity. You only possess **{current_points:,}**.", ephemeral=True)
+                msg = await self.get_msg(interaction.guild_id, "bet_err_insufficient", points=f"{current_points:,}")
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
             dice_roll = random.randint(1, 100)
             if dice_roll > 50:
                 user_data["points"] = current_points + amount
-                title_text = "🟩 WIN! Wager Successful"
-                status_msg = f"The algorithm settled in your favor! You gained **+{amount:,}** {currency_name}."
+                title_text = await self.get_msg(interaction.guild_id, "bet_win_title")
+                status_msg = await self.get_msg(interaction.guild_id, "bet_status_win", amount=f"{amount:,}", currency=currency_name)
                 embed_color = discord.Color.green()
             else:
                 user_data["points"] = current_points - amount
-                title_text = "🟥 LOSE! Liquidated"
-                status_msg = f"The house cleared your position. You lost **-{amount:,}** {currency_name}."
+                title_text = await self.get_msg(interaction.guild_id, "bet_lose_title")
+                status_msg = await self.get_msg(interaction.guild_id, "bet_status_lose", amount=f"{amount:,}", currency=currency_name)
                 embed_color = discord.Color.red()
 
             save_ok = await self.bot.save_user_data(str(user_id), str(interaction.guild_id), user_data)
             if not save_ok:
-                await interaction.followup.send(
-                    "❌ **Ledger Write Failed:** Your wager result could not be saved due to a database error. Your balance was not changed.",
-                    ephemeral=True
-                )
+                msg = await self.get_msg(interaction.guild_id, "bet_err_save_failed")
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
             # Premium UI Upgrade: Casino Embed Layout
+            desc = await self.get_msg(interaction.guild_id, "bet_desc", mention=interaction.user.mention, status=status_msg, roll=dice_roll)
+            field_label = await self.get_msg(interaction.guild_id, "bet_field_balance")
+            footer = await self.get_msg(interaction.guild_id, "bet_footer")
             embed = discord.Embed(
                 title=title_text,
-                description=f"{interaction.user.mention}, {status_msg}\n*(Dice Engine Roll Matrix: {dice_roll}/100)*",
+                description=desc,
                 color=embed_color,
                 timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
-            embed.add_field(name="Updated Wallet Balance", value=f"🪙 **{user_data['points']:,}** {currency_name}", inline=False)
-            embed.set_footer(text="KyvoBot Risk Assessment Terminal")
+            embed.add_field(name=field_label, value=f"🪙 **{user_data['points']:,}** {currency_name}", inline=False)
+            embed.set_footer(text=footer)
             await interaction.followup.send(embed=embed)
         finally:
             self.active_transactions.discard(user_id)
@@ -574,7 +587,8 @@ class KyvoEconomy(KyvoBaseCog):
         guild_id = interaction.guild_id
 
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            msg = await self.get_msg(guild_id, "econ_err_processing_blocked")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         economy_set = await self._get_economy_settings(guild_id)
@@ -658,11 +672,9 @@ class KyvoEconomy(KyvoBaseCog):
 
             save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
             if not save_ok:
-                return discord.Embed(
-                    title="❌ Ledger Write Failed",
-                    description="Your blackjack result could not be saved due to a database error. Your balance was not changed.",
-                    color=discord.Color.red()
-                )
+                title = await self.get_msg(game.guild_id, "econ_err_ledger_title")
+                desc = await self.get_msg(game.guild_id, "bj_err_save_failed")
+                return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
         status_msg = await self.get_msg(game.guild_id, status_key, points=game.bet)
         return await self._build_blackjack_embed(game, finished=True, status_msg=status_msg)
@@ -714,7 +726,8 @@ class KyvoEconomy(KyvoBaseCog):
         mine_count = danger_level.value
 
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            msg = await self.get_msg(guild_id, "econ_err_processing_blocked")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         economy_set = await self._get_economy_settings(guild_id)
@@ -795,11 +808,9 @@ class KyvoEconomy(KyvoBaseCog):
 
         save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
         if not save_ok:
-            return discord.Embed(
-                title="❌ Ledger Write Failed",
-                description="Your mines result could not be saved due to a database error. Your balance was not changed.",
-                color=discord.Color.red()
-            )
+            title = await self.get_msg(game.guild_id, "econ_err_ledger_title")
+            desc = await self.get_msg(game.guild_id, "mines_err_save_failed_hit")
+            return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
         status_msg = await self.get_msg(game.guild_id, "mines_status_mine_hit", points=game.bet)
         return await self._build_mines_embed(game, finished=True, status_msg=status_msg, reveal_mines=True)
@@ -814,11 +825,9 @@ class KyvoEconomy(KyvoBaseCog):
 
         save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
         if not save_ok:
-            return discord.Embed(
-                title="❌ Ledger Write Failed",
-                description="Your cash-out could not be saved due to a database error. Your balance was not changed.",
-                color=discord.Color.red()
-            )
+            title = await self.get_msg(game.guild_id, "econ_err_ledger_title")
+            desc = await self.get_msg(game.guild_id, "mines_err_save_failed_cashout")
+            return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
         status_msg = await self.get_msg(
             game.guild_id, "mines_status_cashout",
@@ -866,7 +875,8 @@ class KyvoEconomy(KyvoBaseCog):
         guild_id = interaction.guild_id
 
         if user_id in self.active_transactions:
-            await interaction.followup.send("⚠️ **Processing Blocked:** Overlapping transaction data detected. Settle down!", ephemeral=True)
+            msg = await self.get_msg(guild_id, "econ_err_processing_blocked")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         economy_set = await self._get_economy_settings(guild_id)
@@ -939,11 +949,9 @@ class KyvoEconomy(KyvoBaseCog):
 
         save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
         if not save_ok:
-            return discord.Embed(
-                title="❌ Ledger Write Failed",
-                description="Your roulette result could not be saved due to a database error. Your balance was not changed.",
-                color=discord.Color.red()
-            )
+            title = await self.get_msg(game.guild_id, "econ_err_ledger_title")
+            desc = await self.get_msg(game.guild_id, "roulette_err_save_failed_shot")
+            return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
         status_msg = await self.get_msg(game.guild_id, "roulette_status_shot", points=game.bet)
         return await self._build_roulette_embed(game, finished=True, status_msg=status_msg, reveal_bullet=True)
@@ -957,11 +965,9 @@ class KyvoEconomy(KyvoBaseCog):
 
         save_ok = await self.bot.save_user_data(str(game.user_id), str(game.guild_id), user_data)
         if not save_ok:
-            return discord.Embed(
-                title="❌ Ledger Write Failed",
-                description="Your cash-out could not be saved due to a database error. Your balance was not changed.",
-                color=discord.Color.red()
-            )
+            title = await self.get_msg(game.guild_id, "econ_err_ledger_title")
+            desc = await self.get_msg(game.guild_id, "roulette_err_save_failed_cashout")
+            return discord.Embed(title=title, description=desc, color=discord.Color.red())
 
         status_msg = await self.get_msg(
             game.guild_id, "roulette_status_cashout",
@@ -1013,12 +1019,15 @@ class KyvoEconomy(KyvoBaseCog):
         shop_items = economy_set.get("shop_items", [])
 
         if not shop_items:
-            await interaction.followup.send("🛒 The server shop is currently empty. Staff has not added any assets yet.")
+            msg = await self.get_msg(interaction.guild_id, "shop_empty")
+            await interaction.followup.send(msg)
             return
 
+        title = await self.get_msg(interaction.guild_id, "shop_title", guild=interaction.guild.name)
+        desc_hint = await self.get_msg(interaction.guild_id, "shop_desc_hint")
         embed = discord.Embed(
-            title=f"🛒 {interaction.guild.name} Market Index",
-            description="Use `/buy <item_name>` to settle an order.",
+            title=title,
+            description=desc_hint,
             color=0x5865f2,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -1033,12 +1042,11 @@ class KyvoEconomy(KyvoBaseCog):
             item_name = item.get("name", "Unknown Item")
             item_price = item.get("price", 0)
             item_desc = item.get("description", "")
-            embed.add_field(
-                name=f"📦 {item_name}",
-                value=f"💵 Price: **{item_price:,}** {currency_name}\n📝 *{item_desc}*",
-                inline=False
-            )
-        embed.set_footer(text="KyvoBot Custom Guild Commerce Layer")
+            field_name = await self.get_msg(interaction.guild_id, "shop_field_item_name", name=item_name)
+            field_value = await self.get_msg(interaction.guild_id, "shop_field_item_value", price=f"{item_price:,}", currency=currency_name, desc=item_desc)
+            embed.add_field(name=field_name, value=field_value, inline=False)
+        footer = await self.get_msg(interaction.guild_id, "shop_footer")
+        embed.set_footer(text=footer)
         await interaction.followup.send(embed=embed)
 
     @shop_group.command(name="add", description="Add a brand new item to the server shop.")
@@ -1047,15 +1055,18 @@ class KyvoEconomy(KyvoBaseCog):
         """Appends a dictionary entry into guild shop items array structure."""
         await interaction.response.defer(ephemeral=True)
         if price <= 0:
-            await interaction.followup.send("❌ Base item cost value parameter must be a positive integer.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "shop_add_err_invalid_price")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if price > 1000000000:
-            await interaction.followup.send("❌ Item cost parameter cannot exceed max boundary threshold of 1,000,000,000.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "shop_add_err_price_too_high")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if len(name) > 50 or len(description) > 200:
-            await interaction.followup.send("❌ Bounds overflow: Item name max length is 50, description max length is 200.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "shop_add_err_bounds_overflow")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         guild_id = interaction.guild_id
@@ -1065,7 +1076,8 @@ class KyvoEconomy(KyvoBaseCog):
         shop_items = economy_set.get("shop_items", [])
 
         if any(isinstance(item, dict) and item.get('name', '').lower() == name.lower() for item in shop_items):
-            await interaction.followup.send("❌ Duplicate Item Identifier! An item with that configuration metadata already exists.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "shop_add_err_duplicate")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         new_item = {"name": name.strip(), "price": price, "description": description.strip()}
@@ -1081,7 +1093,8 @@ class KyvoEconomy(KyvoBaseCog):
         # 캐시를 무효화해야 다음 조회가 최대 5분간 옛날 상점 목록을 보여주는 걸 막을 수 있다.
         await self.invalidate_settings_cache(guild_id)
 
-        await interaction.followup.send(f"✅ Successfully appended asset **{name}** to shop registry for **{price:,}** units.", ephemeral=True)
+        msg = await self.get_msg(guild_id, "shop_add_success", name=name, price=f"{price:,}")
+        await interaction.followup.send(msg, ephemeral=True)
 
     async def _process_purchase(self, user_id: str, guild_id, item_name: str) -> dict:
         """구매 처리 공통 로직 - /shop buy 커맨드와 대시보드발 내부 웹훅이 둘 다 이 메서드를 거친다.
@@ -1163,28 +1176,30 @@ class KyvoEconomy(KyvoBaseCog):
         status = result["status"]
 
         if status == "locked":
-            await interaction.followup.send("⚠️ **Processing Blocked:** Active purchase order pending on this account context. Hold on.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "shop_buy_err_locked")
+            await interaction.followup.send(msg, ephemeral=True)
         elif status == "item_not_found":
-            await interaction.followup.send(f"❌ Asset lookup failure: '**{item_name}**' does not exist inside the shop index.")
+            msg = await self.get_msg(interaction.guild_id, "shop_buy_err_not_found", item_name=item_name)
+            await interaction.followup.send(msg)
         elif status == "item_misconfigured":
-            await interaction.followup.send(
-                "❌ This item is misconfigured (invalid price) and can't be purchased right now. Please contact a server admin.",
-                ephemeral=True,
-            )
+            msg = await self.get_msg(interaction.guild_id, "shop_buy_err_misconfigured")
+            await interaction.followup.send(msg, ephemeral=True)
         elif status == "insufficient_points":
-            await interaction.followup.send(
-                f"❌ Settle Order Denied: You require **{result['required_points']:,}** {result['currency_name']}, "
-                f"but only hold **{result['current_points']:,}**."
+            msg = await self.get_msg(
+                interaction.guild_id, "shop_buy_err_insufficient",
+                required=f"{result['required_points']:,}", currency=result['currency_name'],
+                current=f"{result['current_points']:,}",
             )
+            await interaction.followup.send(msg)
         elif status == "save_failed":
-            await interaction.followup.send(
-                "❌ **Ledger Write Failed:** Your purchase could not be saved due to a database error. No points were deducted.",
-                ephemeral=True
-            )
+            msg = await self.get_msg(interaction.guild_id, "shop_buy_err_save_failed")
+            await interaction.followup.send(msg, ephemeral=True)
         else:
-            await interaction.followup.send(
-                f"🛍️ **Transaction Complete!** Purchased asset **{result['item_name']}** for **{result['price']:,}** {result['currency_name']}!"
+            msg = await self.get_msg(
+                interaction.guild_id, "shop_buy_success",
+                name=result['item_name'], price=f"{result['price']:,}", currency=result['currency_name'],
             )
+            await interaction.followup.send(msg)
 
     async def handle_shop_buy_webhook(self, request: web.Request) -> web.Response:
         secret_header = request.headers.get("X-Internal-Secret", "")
@@ -1222,11 +1237,13 @@ class KyvoEconomy(KyvoBaseCog):
         inventory = user_data.get("inventory", [])
 
         if not inventory:
-            await interaction.followup.send("🎒 Vault Empty! Your inventory holds zero assets. Purchase items from `/shop view`.")
+            msg = await self.get_msg(interaction.guild_id, "inv_empty")
+            await interaction.followup.send(msg)
             return
 
+        title = await self.get_msg(interaction.guild_id, "inv_title", user=interaction.user.display_name)
         embed = discord.Embed(
-            title=f"🎒 Personal Asset Vault: {interaction.user.display_name}",
+            title=title,
             color=0x2b2d31,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
@@ -1240,7 +1257,8 @@ class KyvoEconomy(KyvoBaseCog):
             else:
                 description_lines.append(f"• **{item}** ` x1 `")
         embed.description = "\n".join(description_lines)
-        embed.set_footer(text="KyvoBot Distributed Inventory Node")
+        footer = await self.get_msg(interaction.guild_id, "inv_footer")
+        embed.set_footer(text=footer)
         await interaction.followup.send(embed=embed)
 
     # ========================================================
@@ -1254,14 +1272,17 @@ class KyvoEconomy(KyvoBaseCog):
         """Mutates user financial schema by injecting points directly."""
         await interaction.response.defer(ephemeral=True)
         if target.bot:
-            await interaction.followup.send("❌ 봇 계정에는 사용할 수 없습니다.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_err_bot_target")
+            await interaction.followup.send(msg, ephemeral=True)
             return
         if amount <= 0:
-            await interaction.followup.send("❌ Allocation quantity threshold error: Must be greater than 0.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_give_err_invalid_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if amount > 1000000000:
-            await interaction.followup.send("❌ Allocation quantity threshold error: Max limit is 1,000,000,000.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_give_err_max_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         economy_set = await self._get_economy_settings(interaction.guild_id)
@@ -1272,25 +1293,30 @@ class KyvoEconomy(KyvoBaseCog):
         save_ok = await self.bot.save_user_data(str(target.id), str(interaction.guild_id), user_data)
 
         if not save_ok:
-            await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not allocate funds to {target.mention} due to a database error.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_give_err_save_failed", mention=target.mention)
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         print(f"[ECONOMY ADMIN] Granted {amount} to {target.name} via admin override.")
-        await interaction.followup.send(f"✅ Successfully allocated **+{amount:,}** {currency_name} to {target.mention}.", ephemeral=True)
+        msg = await self.get_msg(interaction.guild_id, "eco_give_success", amount=f"{amount:,}", currency=currency_name, mention=target.mention)
+        await interaction.followup.send(msg, ephemeral=True)
 
     @eco_group.command(name="take", description="Take points from a user.")
     async def eco_take(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Enforces administrative budget cuts/penalties onto user point structures."""
         await interaction.response.defer(ephemeral=True)
         if target.bot:
-            await interaction.followup.send("❌ 봇 계정에는 사용할 수 없습니다.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_err_bot_target")
+            await interaction.followup.send(msg, ephemeral=True)
             return
         if amount <= 0:
-            await interaction.followup.send("❌ Deduction quantity threshold error: Must be greater than 0.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_take_err_invalid_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if amount > 1000000000:
-            await interaction.followup.send("❌ Deduction quantity threshold error: Max limit is 1,000,000,000.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_take_err_max_amount")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         economy_set = await self._get_economy_settings(interaction.guild_id)
@@ -1303,11 +1329,13 @@ class KyvoEconomy(KyvoBaseCog):
         save_ok = await self.bot.save_user_data(str(target.id), str(interaction.guild_id), user_data)
 
         if not save_ok:
-            await interaction.followup.send(f"❌ **Ledger Write Failed:** Could not deduct funds from {target.mention} due to a database error.", ephemeral=True)
+            msg = await self.get_msg(interaction.guild_id, "eco_take_err_save_failed", mention=target.mention)
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         print(f"[ECONOMY ADMIN] Deducted {amount} from {target.name} via admin override.")
-        await interaction.followup.send(f"✅ Successfully liquidated **-{amount:,}** {currency_name} from {target.mention}.", ephemeral=True)
+        msg = await self.get_msg(interaction.guild_id, "eco_take_success", amount=f"{amount:,}", currency=currency_name, mention=target.mention)
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot):

@@ -8,6 +8,7 @@ import hmac
 from datetime import datetime, timezone
 from aiohttp import web
 from openai import AsyncOpenAI
+from cogs.base import KyvoBaseCog
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
 TICKET_KNOWLEDGE_MAX_LENGTH = 4000  # OpenAI 토큰 한도 여유 + 과금/저장 폭주 방지 - party_game_presets 등과 동일한 관례
@@ -34,10 +35,16 @@ class OpenTicketView(discord.ui.View):
     """
     Persistent View class responsible for handling the initial ticket creation button matrix.
     Registered globally within setup invocation to survive bot container restarts.
+
+    🛡️ [다국어] btn_label은 기본값(영어)이 있지만, 실제로 티켓 패널을 보낼 때(ticket_setup)는
+    항상 self.open_ticket.label에 get_msg로 조회한 값을 덮어써서 보낸다 - 여기 기본값은
+    setup() 안에서 bot 재시작 시 인터랙션 라우팅용으로만 등록되는 인스턴스(실제로 화면에
+    새로 렌더링되지 않음, custom_id 매칭만 필요)에 쓰인다.
     """
-    def __init__(self, cog):
+    def __init__(self, cog, btn_label: str = "📩 Open Support Ticket"):
         super().__init__(timeout=None)
         self.cog = cog
+        self.open_ticket.label = btn_label
 
     @discord.ui.button(label="📩 Open Support Ticket", style=discord.ButtonStyle.primary, custom_id="kyvo_ticket_open")
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -49,20 +56,23 @@ class TicketSystemView(discord.ui.View):
     Persistent View instance appended inside active ticket channel instances.
     Provides administrative utility operations such as secure archiving and channel purging.
     """
-    def __init__(self, cog):
+    def __init__(self, cog, btn_label: str = "🔒 Close Ticket"):
         super().__init__(timeout=None)
         self.cog = cog
+        self.close_ticket.label = btn_label
 
     @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.danger, custom_id="kyvo_ticket_close")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         channel = interaction.channel
-        
-        await interaction.followup.send("⚠️ **Archiving conversation transcript and deleting channel in 5 seconds...**")
-        
+        guild_id = channel.guild.id
+
+        archiving_msg = await self.cog.get_msg(guild_id, "tai_close_archiving_msg")
+        await interaction.followup.send(archiving_msg)
+
         # 🛡️ CORE UPGRADE: Trigger the dynamic AI summary engine before the channel is destroyed
         await self.cog.archive_and_log_ticket(channel, interaction.user)
-        
+
         await asyncio.sleep(5)
         try:
             await channel.delete(reason="Ticket session closed and securely archived by administrative request.")
@@ -75,18 +85,21 @@ class TicketFeedbackView(discord.ui.View):
     anonymous_reports의 관리자 큐 View와 완전히 같은 이유로 timeout=None + 고정 custom_id로
     만든다. 등록된 이 View 인스턴스 하나를 "모든" AI 답변 메시지가 공유하므로, 어떤 메시지인지는
     self에 저장하지 않고 매 클릭마다 interaction.message.id로 DB에서 다시 찾는다.
+
+    🛡️ [다국어] up_label/down_label 기본값(영어)은 setup()의 전역 재등록 인스턴스용 - 실제 AI
+    답변마다 새로 만들어지는 인스턴스(on_message)는 항상 get_msg로 조회한 값을 넘긴다.
     """
 
-    def __init__(self, cog: "KyvoTicketAI"):
+    def __init__(self, cog: "KyvoTicketAI", up_label: str = "Helpful", down_label: str = "Not Helpful"):
         super().__init__(timeout=None)
         self.cog = cog
 
-        up_btn = discord.ui.Button(label="Helpful", style=discord.ButtonStyle.success,
+        up_btn = discord.ui.Button(label=up_label, style=discord.ButtonStyle.success,
                                     custom_id=TICKET_FEEDBACK_UP_ID, emoji="👍")
         up_btn.callback = self._on_up
         self.add_item(up_btn)
 
-        down_btn = discord.ui.Button(label="Not Helpful", style=discord.ButtonStyle.danger,
+        down_btn = discord.ui.Button(label=down_label, style=discord.ButtonStyle.danger,
                                       custom_id=TICKET_FEEDBACK_DOWN_ID, emoji="👎")
         down_btn.callback = self._on_down
         self.add_item(down_btn)
@@ -98,11 +111,14 @@ class TicketFeedbackView(discord.ui.View):
         await self.cog.handle_feedback_click(interaction, False)
 
 
-class KyvoTicketAI(commands.Cog):
+class KyvoTicketAI(KyvoBaseCog):
     def __init__(self, bot):
-        self.bot = bot
+        # 🛡️ [다국어 전환] 다른 모든 Cog와 동일하게 KyvoBaseCog를 상속해서 self.get_msg /
+        # self.get_guild_settings(Redis Cache-Aside)를 그대로 물려받는다 - 이 Cog는 원래
+        # commands.Cog만 상속해서 get_msg가 아예 없었다(오늘 발견한 버그의 근본 원인).
+        super().__init__(bot)
         self.ai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
+
         # Anti-Spam and Concurrency Lock Management Layers
         self.processing_channels = set()
         self.channel_cooldowns = {}
@@ -205,13 +221,17 @@ class KyvoTicketAI(commands.Cog):
         result = await self._add_knowledge(guild_id, content)
 
         if result["status"] == "empty_content":
-            await interaction.followup.send("❌ Cannot inject an empty knowledge block.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_admin_err_empty_content")
+            await interaction.followup.send(msg, ephemeral=True)
         elif result["status"] == "content_too_long":
-            await interaction.followup.send(f"❌ That's too long - keep it under {TICKET_KNOWLEDGE_MAX_LENGTH} characters.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_admin_err_too_long", max=TICKET_KNOWLEDGE_MAX_LENGTH)
+            await interaction.followup.send(msg, ephemeral=True)
         elif result["status"] != "ok":
-            await interaction.followup.send(f"❌ **Failed to inject knowledge node:** `{result.get('detail', result['status'])}`", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_admin_err_failed", detail=result.get('detail', result['status']))
+            await interaction.followup.send(msg, ephemeral=True)
         else:
-            await interaction.followup.send("✅ **Vector Knowledge Node Registered!** Securely pushed to pgvector storage.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_admin_success")
+            await interaction.followup.send(msg, ephemeral=True)
 
     @app_commands.command(name="ticket-setup", description="Set up the AI-powered support ticket panel.")
     @app_commands.default_permissions(manage_guild=True)
@@ -220,13 +240,11 @@ class KyvoTicketAI(commands.Cog):
         guild_id = str(interaction.guild_id)
 
         settings = await self.get_ticket_settings(guild_id)
-        
-        embed_title = settings.get("setup_title") if settings and settings.get("setup_title") else "🎫 Support Portal & Advanced AI Concierge"
-        embed_desc = settings.get("setup_desc") if settings and settings.get("setup_desc") else (
-            "Click the button below to establish a private secure communication channel with staff.\n\n"
-            "🤖 **Context-Aware RAG Engine Active:** State your inquiry freely. Our "
-            "AI remembers the conversation history and queries server docs for an immediate resolution!"
-        )
+
+        default_title = await self.get_msg(guild_id, "tai_setup_default_title")
+        default_desc = await self.get_msg(guild_id, "tai_setup_default_desc")
+        embed_title = settings.get("setup_title") if settings and settings.get("setup_title") else default_title
+        embed_desc = settings.get("setup_desc") if settings and settings.get("setup_desc") else default_desc
 
         embed = discord.Embed(
             title=embed_title,
@@ -234,9 +252,11 @@ class KyvoTicketAI(commands.Cog):
             color=0x5865f2
         )
 
-        view = OpenTicketView(self)
+        btn_label = await self.get_msg(guild_id, "tai_setup_btn_label")
+        view = OpenTicketView(self, btn_label=btn_label)
         await interaction.channel.send(embed=embed, view=view)
-        await interaction.followup.send("✅ Support terminal panel operational.", ephemeral=True)
+        success_msg = await self.get_msg(guild_id, "tai_setup_success")
+        await interaction.followup.send(success_msg, ephemeral=True)
 
     async def create_ticket_channel(self, interaction: discord.Interaction):
         """Spawns an isolated private support text channel encrypted with custom permission overwrites."""
@@ -254,10 +274,8 @@ class KyvoTicketAI(commands.Cog):
             # Anti-Spam Guard Check
             existing_channel = discord.utils.get(guild.text_channels, name=target_channel_name)
             if existing_channel:
-                await interaction.followup.send(
-                    f"❌ **Access Denied:** You already have an active support session running at {existing_channel.mention}.",
-                    ephemeral=True
-                )
+                msg = await self.get_msg(guild_id, "tai_err_already_active", channel=existing_channel.mention)
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
             bot_member = guild.me
@@ -284,35 +302,31 @@ class KyvoTicketAI(commands.Cog):
             )
 
             settings = await self.get_ticket_settings(guild_id)
-            welcome_title = settings.get("welcome_title") if settings and settings.get("welcome_title") else "🔒 Context-Aware AI Ticket Active"
-            welcome_desc = settings.get("welcome_desc") if settings and settings.get("welcome_desc") else (
-                f"Welcome, {user.mention}. Please state your question or issue description in detail.\n\n"
-                "🤖 Our semantic RAG engine will instantly convert your message into vector fields, "
-                "query our database index, and generate an answer based on server documentation."
-            )
+            default_welcome_title = await self.get_msg(guild_id, "tai_welcome_default_title")
+            default_welcome_desc = await self.get_msg(guild_id, "tai_welcome_default_desc", mention=user.mention)
+            welcome_title = settings.get("welcome_title") if settings and settings.get("welcome_title") else default_welcome_title
+            welcome_desc = settings.get("welcome_desc") if settings and settings.get("welcome_desc") else default_welcome_desc
 
             welcome = discord.Embed(
                 title=welcome_title,
                 description=welcome_desc,
                 color=0x2b2d31
             )
-            
-            view = TicketSystemView(self)
+
+            close_btn_label = await self.get_msg(guild_id, "tai_close_btn_label")
+            view = TicketSystemView(self, btn_label=close_btn_label)
             await ticket_channel.send(embed=welcome, view=view)
-            await interaction.followup.send(f"✅ Ticket environment established: {ticket_channel.mention}", ephemeral=True)
+            create_success_msg = await self.get_msg(guild_id, "tai_create_success", channel=ticket_channel.mention)
+            await interaction.followup.send(create_success_msg, ephemeral=True)
 
         except discord.Forbidden:
             print(f"[CRITICAL PERMISSION ERROR] Bot lacks 'Manage Channels' permission in guild: {interaction.guild_id}")
-            await interaction.followup.send(
-                "❌ **Creation Failed:** The bot lacks the required **'Manage Channels'** permission bitfield to spawn text channel nodes.",
-                ephemeral=True
-            )
+            msg = await self.get_msg(interaction.guild_id, "tai_err_no_manage_channels")
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             print(f"[TICKET CREATION EXCEPTION] Pipeline failed: {e}")
-            await interaction.followup.send(
-                f"❌ **Internal Core Exception Encountered:** Failed to assemble ticket layer: `{e}`",
-                ephemeral=True
-            )
+            msg = await self.get_msg(interaction.guild_id, "tai_err_internal_exception", error=e)
+            await interaction.followup.send(msg, ephemeral=True)
 
     async def _resolve_admin_log_channel(self, guild: discord.Guild, guild_id: str) -> discord.TextChannel | None:
         """관리자에게 뭔가 알려야 할 때(티켓 아카이브, 지식 검색 반복 실패 등) 쓸 채널을 찾는다 -
@@ -371,17 +385,12 @@ class KyvoTicketAI(commands.Cog):
                   f"log channel could be resolved to alert.", flush=True)
             return
 
-        alert_embed = discord.Embed(
-            title="⚠️ AI Knowledge Search Repeatedly Failing",
-            description=(
-                f"Knowledge search has failed **{count} times** in the last "
-                f"{TICKET_AI_FAILURE_WINDOW_SECONDS // 60} minutes.\n"
-                f"Most recent failure stage: `{stage}`\n```{detail[:500]}```\n"
-                f"Users are still getting answers, but without server documentation context. "
-                f"Check OpenAI/Supabase status."
-            ),
-            color=0xe67e22,
+        alert_title = await self.get_msg(guild_id, "tai_knowledge_alert_title")
+        alert_desc = await self.get_msg(
+            guild_id, "tai_knowledge_alert_desc",
+            count=count, minutes=TICKET_AI_FAILURE_WINDOW_SECONDS // 60, stage=stage, detail=detail[:500],
         )
+        alert_embed = discord.Embed(title=alert_title, description=alert_desc, color=0xe67e22)
         try:
             await log_channel.send(embed=alert_embed)
         except Exception as e:
@@ -424,21 +433,19 @@ class KyvoTicketAI(commands.Cog):
     #  한도 초과로 트리거하는 경우가 이 함수 하나를 공유한다. 한도 초과 시엔 OpenAI를 아예
     #  호출하지 않고 바로 이걸 실행하므로 그 티켓에서는 추가 비용이 들지 않는다.
     # ══════════════════════════════════════════════════════════
-    async def _escalate_to_staff(self, channel: discord.TextChannel, mention: str, reason: str) -> None:
+    async def _escalate_to_staff(self, channel: discord.TextChannel, mention: str, reason_key: str) -> None:
+        guild_id = channel.guild.id
+        reason = await self.get_msg(guild_id, reason_key)
+
         current_name = channel.name
         new_name = f"🚨-{current_name}"
         await channel.edit(name=new_name, reason=f"AI Smart escalation handover triggered ({reason}).")
 
-        escalation_embed = discord.Embed(
-            title="🚨 Human Assistance Requested",
-            description=(
-                f"Hello {mention}, I've paused my automated chat layer and "
-                f"flagged this support session for review. **Server Administration staff has been appended to this queue.**\n\n"
-                f"Please remain patient while an agent reviews the dialogue log above."
-            ),
-            color=0xe74c3c
-        )
-        escalation_embed.set_footer(text=f"Reason: {reason}")
+        title = await self.get_msg(guild_id, "tai_escalate_title")
+        desc = await self.get_msg(guild_id, "tai_escalate_desc", mention=mention)
+        footer = await self.get_msg(guild_id, "tai_escalate_footer", reason=reason)
+        escalation_embed = discord.Embed(title=title, description=desc, color=0xe74c3c)
+        escalation_embed.set_footer(text=footer)
         await channel.send(embed=escalation_embed)
 
     async def archive_and_log_ticket(self, channel: discord.TextChannel, closed_by: discord.User):
@@ -491,15 +498,21 @@ class KyvoTicketAI(commands.Cog):
 
             # 4. Deliver the completed summary report archive packet
             if log_channel:
+                archive_title = await self.get_msg(guild_id, "tai_archive_title", channel=channel.name)
+                executor_field = await self.get_msg(guild_id, "tai_archive_field_executor")
+                executor_value = await self.get_msg(guild_id, "tai_archive_field_executor_value", mention=closed_by.mention, id=closed_by.id)
+                summary_field = await self.get_msg(guild_id, "tai_archive_field_summary")
+                archive_footer = await self.get_msg(guild_id, "tai_archive_footer", guild_id=guild_id)
+
                 archive_embed = discord.Embed(
-                    title=f"📋 Support Ticket Archive Log // {channel.name}",
+                    title=archive_title,
                     color=0x34495e,
                     timestamp=discord.utils.utcnow()
                 )
-                archive_embed.add_field(name="Session Executor", value=f"Closed by {closed_by.mention} (`ID: {closed_by.id}`)", inline=False)
-                archive_embed.add_field(name="AI Executive Summary Audit", value=ai_summary_report, inline=False)
-                archive_embed.set_footer(text=f"Server ID Core Node: {guild_id}")
-                
+                archive_embed.add_field(name=executor_field, value=executor_value, inline=False)
+                archive_embed.add_field(name=summary_field, value=ai_summary_report, inline=False)
+                archive_embed.set_footer(text=archive_footer)
+
                 await log_channel.send(embed=archive_embed)
 
         except Exception as e:
@@ -528,6 +541,8 @@ class KyvoTicketAI(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         message_id = str(interaction.message.id)
 
+        guild_id = interaction.guild_id
+
         try:
             res = await asyncio.to_thread(
                 self.bot.supabase.table("ticket_ai_feedback").select("*").eq("message_id", message_id).execute
@@ -536,24 +551,26 @@ class KyvoTicketAI(commands.Cog):
         except Exception as e:
             print(f"[TICKET_AI][ERROR] Failed to look up feedback row for message {message_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ An error occurred while recording your feedback.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_feedback_err_generic")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if not row:
-            await interaction.followup.send("❌ This message can no longer accept feedback.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_feedback_err_stale")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if not row.get("opener_id") or row["opener_id"] != str(interaction.user.id):
-            await interaction.followup.send(
-                "❌ Only the person who opened this ticket can rate this answer.", ephemeral=True
-            )
+            msg = await self.get_msg(guild_id, "tai_feedback_err_not_opener")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         # 🛡️ [중복 방지] 버튼 제거(voted 후 view=None)가 1차 방어선이지만, 편집이 반영되기 전에
         # 두 번째 클릭이 들어오는 레이스도 있을 수 있다 - rating이 이미 채워져 있으면 조용히
         # 덮어쓰지 않고 명시적으로 거부한다.
         if row.get("rating") is not None:
-            await interaction.followup.send("❌ You've already rated this answer.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_feedback_err_already_rated")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         try:
@@ -565,18 +582,18 @@ class KyvoTicketAI(commands.Cog):
         except Exception as e:
             print(f"[TICKET_AI][ERROR] Failed to record feedback for message {message_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ An error occurred while recording your feedback.", ephemeral=True)
+            msg = await self.get_msg(guild_id, "tai_feedback_err_generic")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
+        field_name = await self.get_msg(guild_id, "tai_feedback_field_name")
+        field_value = await self.get_msg(guild_id, "tai_feedback_value_up" if rating else "tai_feedback_value_down")
         original_embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed()
         updated_embed = original_embed.copy()
-        updated_embed.add_field(
-            name="Feedback",
-            value="👍 Marked as helpful - thanks!" if rating else "👎 Marked as not helpful - thanks!",
-            inline=False,
-        )
+        updated_embed.add_field(name=field_name, value=field_value, inline=False)
         await interaction.message.edit(embed=updated_embed, view=None)
-        await interaction.followup.send("✅ Thanks for your feedback!", ephemeral=True)
+        success_msg = await self.get_msg(guild_id, "tai_feedback_success")
+        await interaction.followup.send(success_msg, ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -615,14 +632,14 @@ class KyvoTicketAI(commands.Cog):
             if not await self._check_daily_limit(guild_key, guild_limit):
                 await self._escalate_to_staff(
                     message.channel, message.author.mention,
-                    "This server's daily AI answer limit has been reached"
+                    "tai_escalate_reason_guild_limit"
                 )
                 return
 
             if not await self._check_daily_limit(user_key, user_limit):
                 await self._escalate_to_staff(
                     message.channel, message.author.mention,
-                    "Your daily AI answer limit has been reached"
+                    "tai_escalate_reason_user_limit"
                 )
                 return
 
@@ -679,7 +696,7 @@ class KyvoTicketAI(commands.Cog):
                     await self._record_knowledge_search_failure(message.guild, guild_id, "supabase_rpc", f"{type(e).__name__}: {e}")
 
             settings = await self.get_ticket_settings(guild_id)
-            
+
             if settings and settings.get("system_prompt"):
                 base_prompt = settings.get("system_prompt")
                 if "{context}" in base_prompt:
@@ -697,6 +714,18 @@ class KyvoTicketAI(commands.Cog):
                     "DO NOT output 'TRIGGER_STAFF_ALERT' for casual greetings (e.g., 'hello', 'hi', 'hey', or foreign equivalents like '안녕'), polite gestures, or basic small talk. For greetings, simply respond warmly, acknowledge the user, and ask how you can assist them based on server guidelines."
                 )
 
+            # 🛡️ [다국어] 이 서버(guild_settings.language)가 한국어면 AI에게 항상 한국어로 답하라고
+            # 못박는다 - 안 그러면 유저가 영어로 물었을 때 AI가 영어로 답해서, 같은 서버 안에서도
+            # 응답 언어가 뒤섞이는 원인이 된다(오늘 발견한 "메시지가 섞여 나온다" 버그의 일부).
+            guild_settings = await self.get_guild_settings(guild_id)
+            reply_lang = guild_settings.get("language", "en")
+            language_instruction = (
+                "\n\nIMPORTANT: Always respond in Korean (한국어), regardless of what language the user's message is written in."
+                if reply_lang == "ko"
+                else "\n\nIMPORTANT: Always respond in English, regardless of what language the user's message is written in."
+            )
+            system_prompt += language_instruction
+
             openai_messages = [{"role": "system", "content": system_prompt}]
             openai_messages.extend(memory_history)
             openai_messages.append({"role": "user", "content": user_query})
@@ -713,17 +742,21 @@ class KyvoTicketAI(commands.Cog):
             if "TRIGGER_STAFF_ALERT" in ai_final_answer:
                 await self._escalate_to_staff(
                     message.channel, message.author.mention,
-                    "The AI determined a human agent is needed for this request"
+                    "tai_escalate_reason_ai_triggered"
                 )
                 return
 
+            reply_title = await self.get_msg(guild_id, "tai_reply_title")
+            reply_footer = await self.get_msg(guild_id, "tai_reply_footer")
             ai_reply = discord.Embed(
-                title="🤖 Kyvo AI Intelligent Support Agent",
+                title=reply_title,
                 description=ai_final_answer,
                 color=0x9b59b6
             )
-            ai_reply.set_footer(text="Kyvo Automation Layer • Multi-Turn Conversational RAG Architecture")
-            feedback_view = TicketFeedbackView(self)
+            ai_reply.set_footer(text=reply_footer)
+            up_label = await self.get_msg(guild_id, "tai_feedback_btn_up")
+            down_label = await self.get_msg(guild_id, "tai_feedback_btn_down")
+            feedback_view = TicketFeedbackView(self, up_label=up_label, down_label=down_label)
             sent_reply = await message.channel.send(embed=ai_reply, view=feedback_view)
 
             # 🛡️ 이 행이 있어야 버튼 클릭 시 message_id로 다시 찾을 수 있다(익명 제보/추첨과 동일한
@@ -744,9 +777,11 @@ class KyvoTicketAI(commands.Cog):
 
         except Exception as e:
             print(f"[RAG ENGINE EXCEPTION] Pipeline failed: {e}")
+            error_title = await self.get_msg(guild_id, "tai_error_title")
+            error_desc = await self.get_msg(guild_id, "tai_error_desc", error=e)
             error_embed = discord.Embed(
-                title="⚠️ AI Engine Fault Encountered",
-                description=f"An exception occurred inside the RAG automation stack:\n`{e}`\n\n*Check OpenAI billing balance limits or parameter tokens.*",
+                title=error_title,
+                description=error_desc,
                 color=0xe67e22
             )
             await message.channel.send(embed=error_embed)
