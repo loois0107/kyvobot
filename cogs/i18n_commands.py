@@ -91,6 +91,9 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     # ── ticket_ai.py ──
     "ticket-admin add-knowledge": {"name": "지식추가", "description": "티켓 지원용으로 AI에게 새로운 정보를 학습시킵니다."},
     "ticket-setup": {"name": "티켓설정", "description": "AI 기반 지원 티켓 패널을 설치합니다."},
+
+    # ── onboarding.py ──
+    "dashboard": {"name": "대시보드", "description": "이 서버의 관리자 대시보드 링크를 받습니다."},
 }
 
 # (qualified_name, 파라미터의 파이썬 식별자) -> {"name": ..., "description": ...}
@@ -134,6 +137,27 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
     ("twitch_channel_set", "member"): {"name": "멤버", "description": "라이브 중 역할을 부여할 디스코드 멤버 (role을 설정했다면 필수)"},
     ("twitch_channel_set", "role"): {"name": "역할", "description": "라이브 중 부여할 역할 (선택)"},
     ("twitch_channel_remove", "streamer"): {"name": "스트리머", "description": "삭제할 트위치 로그인 이름"},
+
+    # ── economy.py (shop add / eco give / eco take) ──
+    ("shop add", "name"): {"name": "이름", "description": "상점에 표시될 아이템 이름"},
+    ("shop add", "price"): {"name": "가격", "description": "이 서버 화폐 기준 아이템 가격"},
+    ("shop add", "description"): {"name": "설명", "description": "아이템을 설명하는 짧은 한 줄"},
+    ("eco give", "target"): {"name": "대상", "description": "포인트를 지급할 멤버"},
+    ("eco give", "amount"): {"name": "수량", "description": "지급할 포인트 수"},
+    ("eco take", "target"): {"name": "대상", "description": "포인트를 차감할 멤버"},
+    ("eco take", "amount"): {"name": "수량", "description": "차감할 포인트 수"},
+
+    # ── custom_commands.py (cc_add text / role_add / role_remove / cc_delete) ──
+    ("cc_add text", "name"): {"name": "이름", "description": "슬래시(/) 없이 입력하는 명령어 이름"},
+    ("cc_add text", "response"): {"name": "응답내용", "description": "이 명령어가 실행됐을 때 답할 텍스트"},
+    ("cc_add role_add", "name"): {"name": "이름", "description": "슬래시(/) 없이 입력하는 명령어 이름"},
+    ("cc_add role_add", "role"): {"name": "역할", "description": "실행 시 부여할 역할"},
+    ("cc_add role_remove", "name"): {"name": "이름", "description": "슬래시(/) 없이 입력하는 명령어 이름"},
+    ("cc_add role_remove", "role"): {"name": "역할", "description": "실행 시 제거할 역할"},
+    ("cc_delete", "name"): {"name": "이름", "description": "삭제할 커스텀 명령어의 이름"},
+
+    # ── anonymous_reports.py (anonymous_unban) ──
+    ("anonymous_unban", "user"): {"name": "유저", "description": "익명 제보 차단을 해제할 멤버"},
 }
 
 

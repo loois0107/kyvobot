@@ -1050,6 +1050,11 @@ class KyvoEconomy(KyvoBaseCog):
         await interaction.followup.send(embed=embed)
 
     @shop_group.command(name="add", description="Add a brand new item to the server shop.")
+    @app_commands.describe(
+        name="The item's display name.",
+        price="How much the item costs, in this server's currency.",
+        description="A short line describing what the item is or does.",
+    )
     @app_commands.default_permissions(manage_guild=True)
     async def shop_add(self, interaction: discord.Interaction, name: str, price: int, description: str):
         """Appends a dictionary entry into guild shop items array structure."""
@@ -1268,6 +1273,7 @@ class KyvoEconomy(KyvoBaseCog):
     eco_group = app_commands.Group(name="eco", description="Admin monetary allocation tools", default_permissions=discord.Permissions(manage_guild=True))
 
     @eco_group.command(name="give", description="Give points to a user.")
+    @app_commands.describe(target="The member to give points to.", amount="How many points to give.")
     async def eco_give(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Mutates user financial schema by injecting points directly."""
         await interaction.response.defer(ephemeral=True)
@@ -1302,6 +1308,7 @@ class KyvoEconomy(KyvoBaseCog):
         await interaction.followup.send(msg, ephemeral=True)
 
     @eco_group.command(name="take", description="Take points from a user.")
+    @app_commands.describe(target="The member to take points from.", amount="How many points to take.")
     async def eco_take(self, interaction: discord.Interaction, target: discord.User, amount: int):
         """Enforces administrative budget cuts/penalties onto user point structures."""
         await interaction.response.defer(ephemeral=True)
