@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from cogs.base import KyvoBaseCog
+import asyncio
 import os
 
 DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
@@ -49,6 +50,7 @@ class KyvoOnboarding(KyvoBaseCog):
             ("onboarding_field_ticket_title", "onboarding_field_ticket_desc"),
             ("onboarding_field_leveling_title", "onboarding_field_leveling_desc"),
             ("onboarding_field_automod_title", "onboarding_field_automod_desc"),
+            ("onboarding_field_language_title", "onboarding_field_language_desc"),
         ):
             field_title = await self.get_msg(guild.id, title_key)
             field_desc = await self.get_msg(guild.id, desc_key)
@@ -56,8 +58,49 @@ class KyvoOnboarding(KyvoBaseCog):
 
         return embed
 
+    async def _seed_guild_language(self, guild: discord.Guild) -> None:
+        """신규로 초대된 서버의 guild_settings.language를 디스코드 서버 자체의 언어
+        (guild.preferred_locale)로 초기화한다 - 한국어로 설정된 디스코드 서버는 "ko"로,
+        그 외는 전부 "en"으로 시작해서, 대시보드에서 아무것도 안 건드린 상태의 기본값이
+        무조건 영어였던 문제를 없앤다.
+
+        🛡️ [기존 설정 보호] guild_settings 행이 이미 존재하면(재초대, 또는 대시보드/다른
+        커맨드가 먼저 만든 행 등) 절대 건드리지 않는다 - "행이 아예 없을 때"만 신규 서버로
+        간주해서 시딩한다. language 값 자체가 비어있는지는 안 본다 - 그것까지 따지면 언제
+        만들어졌는지 모르는 행의 다른 설정을 실수로 건드릴 위험이 커진다."""
+        guild_id = str(guild.id)
+        try:
+            existing = await asyncio.to_thread(
+                lambda: self.supabase.table("guild_settings")
+                .select("guild_id")
+                .eq("guild_id", guild_id)
+                .maybe_single()
+                .execute()
+            )
+            if existing is not None and existing.data:
+                print(f"[ONBOARDING] guild_settings row already exists for guild={guild_id}, "
+                      f"leaving language untouched.", flush=True)
+                return
+
+            seeded_lang = "ko" if guild.preferred_locale == discord.Locale.korean else "en"
+            await asyncio.to_thread(
+                lambda: self.supabase.table("guild_settings")
+                .insert({"guild_id": guild_id, "language": seeded_lang})
+                .execute()
+            )
+            # 🛡️ 방금 만든 행을 get_msg가 곧바로(환영 메시지 렌더링 시점에) 볼 수 있어야 하므로,
+            # 혹시 남아있을 수 있는 캐시(빈 값 등)를 확실히 비운다.
+            await self.invalidate_settings_cache(guild.id)
+            print(f"[ONBOARDING] Seeded guild_settings.language='{seeded_lang}' for new guild={guild_id} "
+                  f"(preferred_locale={guild.preferred_locale}).", flush=True)
+        except Exception as e:
+            print(f"[ONBOARDING][WARN] Failed to seed language for guild={guild_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
+        await self._seed_guild_language(guild)
+
         channel = resolve_welcome_channel(guild)
         if channel is None:
             print(f"[ONBOARDING][WARN] No usable channel found to post the welcome message (guild={guild.id}).", flush=True)
