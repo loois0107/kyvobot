@@ -13,8 +13,23 @@ from datetime import datetime, timezone, timedelta
 GIVEAWAY_MIN_DURATION_MINUTES = 5
 GIVEAWAY_MAX_DURATION_MINUTES = 10080  # 7일
 GIVEAWAY_CHECK_INTERVAL_SECONDS = 30
+GIVEAWAY_PRIZE_MAX_LENGTH = 100  # 임베드 필드 한도 보호용 - shop_add()의 이름 50자 제한과 같은 정신
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET")
+
+# 🛡️ 위험 권한 역할 확인 - twitch.py/custom_commands.py/reaction_roles.py/party.py와 동일한
+# 목록/정신(각 코그가 자기 완결적이도록 복제). 대시보드로 생성을 이관하면서 처음 추가하는
+# 체크라, 지급 시점(_payout_role_single)에야 조용히 실패하던 기존 구멍을 생성 시점으로 당긴다 -
+# /giveaway role 커맨드도 이번에 같이 이 기준을 받는다.
+DANGEROUS_ROLE_PERMISSIONS = (
+    "manage_roles", "manage_guild", "manage_channels",
+    "ban_members", "kick_members", "manage_webhooks", "manage_messages",
+)
+
+
+def _get_dangerous_permissions(role: discord.Role) -> list[str]:
+    perms = role.permissions
+    return [name for name in DANGEROUS_ROLE_PERMISSIONS if getattr(perms, name, False)]
 
 # 응모 버튼의 custom_id - 재시작 후에도 discord.py가 이 문자열만으로 콜백을 다시 찾아
 # 연결할 수 있어야 하므로 고정 문자열이어야 한다 (giveaway_id는 여기 넣지 않는다 - 아래
@@ -52,6 +67,47 @@ class GiveawayEntryView(discord.ui.View):
         await self.cog.handle_entry(interaction)
 
 
+class RoleWarningConfirmView(discord.ui.View):
+    """twitch.py의 동명 클래스와 동일 - 위험 권한 role을 상품으로 걸기 전 인터랙티브 확인."""
+    def __init__(self, author_id: int, confirm_label: str, cancel_label: str):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.confirmed: bool | None = None
+
+        confirm_btn = discord.ui.Button(label=confirm_label, style=discord.ButtonStyle.danger)
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        cancel_btn = discord.ui.Button(label=cancel_label, style=discord.ButtonStyle.secondary)
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This confirmation is not for you.", ephemeral=True)
+            return False
+        return True
+
+    def _disable_all(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def _on_confirm(self, interaction: discord.Interaction):
+        self.confirmed = True
+        self._disable_all()
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        self.confirmed = False
+        self._disable_all()
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        self._disable_all()
+
+
 class KyvoGiveaway(KyvoBaseCog):
     def __init__(self, bot):
         super().__init__(bot)
@@ -60,10 +116,12 @@ class KyvoGiveaway(KyvoBaseCog):
     async def cog_load(self):
         if INTERNAL_API_SECRET:
             self.bot.web_app.router.add_post("/internal/giveaway/replace-winner", self.handle_replace_winner_webhook)
-            print("[⚡ GIVEAWAY] Internal replace-winner route registered at /internal/giveaway/replace-winner.", flush=True)
+            self.bot.web_app.router.add_post("/internal/giveaway/create", self.handle_create_giveaway_webhook)
+            print("[⚡ GIVEAWAY] Internal replace-winner and create routes registered at "
+                  "/internal/giveaway/replace-winner and /internal/giveaway/create.", flush=True)
         else:
-            print("[GIVEAWAY][WARN] INTERNAL_API_SECRET not set - dashboard-triggered winner replacement is disabled "
-                  "(/giveaway end still works).", flush=True)
+            print("[GIVEAWAY][WARN] INTERNAL_API_SECRET not set - dashboard-triggered winner replacement/giveaway "
+                  "creation is disabled (/giveaway points, /giveaway role, /giveaway end still work).", flush=True)
 
     async def cog_unload(self):
         self.check_expired_giveaways.cancel()
@@ -185,33 +243,127 @@ class KyvoGiveaway(KyvoBaseCog):
                                 winner_count: int, duration_minutes: int, prize_type: str,
                                 prize_amount: int | None, prize_role: discord.Role | None,
                                 channel: discord.TextChannel | None) -> None:
+        """인터랙티브 사전 검증(위험 권한 확인 포함) 후, 실제 생성은 대시보드 웹훅과 공유하는
+        _create_giveaway_core()에 위임한다 - twitch_channel_set이 _set_streamer_for_guild를
+        감싸는 것과 동일한 구조."""
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
+        bot_member = interaction.guild.me
+        target_channel = channel or interaction.channel
+
+        if prize_role is not None:
+            if prize_role.permissions.administrator:
+                msg = await self.get_msg(guild_id, "giveaway_err_role_is_admin", role=prize_role.name)
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+            if not bot_member.guild_permissions.manage_roles:
+                msg = await self.get_msg(guild_id, "giveaway_err_no_manage_roles")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+            if bot_member.top_role <= prize_role:
+                msg = await self.get_msg(guild_id, "giveaway_err_role_hierarchy", role=prize_role.name)
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+            dangerous = _get_dangerous_permissions(prize_role)
+            if dangerous:
+                confirmed = await self._confirm_dangerous_role(interaction, prize_role, dangerous)
+                if not confirmed:
+                    return
+
+        result = await self._create_giveaway_core(
+            interaction.guild, target_channel, prize, entry_cost, winner_count, duration_minutes,
+            prize_type, prize_amount, prize_role, str(interaction.user.id)
+        )
+        status = result["status"]
+
+        if status == "prize_too_long":
+            msg = await self.get_msg(guild_id, "giveaway_err_prize_too_long")
+        elif status == "invalid_metrics":
+            msg = await self.get_msg(guild_id, "giveaway_metrics_error")
+        elif status == "duration_out_of_range":
+            msg = await self.get_msg(guild_id, "giveaway_err_duration_range",
+                                      min=GIVEAWAY_MIN_DURATION_MINUTES, max=GIVEAWAY_MAX_DURATION_MINUTES)
+        elif status in ("role_is_admin", "bot_missing_manage_roles", "role_hierarchy_blocked", "role_required"):
+            # 위에서 이미 인터랙티브하게 통과된 뒤인데 core가 다시 막았다는 뜻 - 정상 흐름에서는
+            # 안 나와야 하지만(core가 authoritative하게 재검증하므로), 혹시 나오면 눈에 띄게 로그.
+            print(f"[GIVEAWAY][WARN] Unexpected role-safety status '{status}' after slash command "
+                  f"pre-checks already passed (guild={guild_id}).", flush=True)
+            msg = await self.get_msg(guild_id, "giveaway_err_save_failed")
+        elif status != "ok":
+            msg = await self.get_msg(guild_id, "giveaway_err_save_failed")
+        else:
+            ts = int(datetime.fromisoformat(result["ends_at"]).timestamp())
+            msg = await self.get_msg(guild_id, "giveaway_admin_success", timestamp=ts)
+
+        await interaction.followup.send(msg, ephemeral=True)
+
+    async def _confirm_dangerous_role(self, interaction: discord.Interaction, role: discord.Role, dangerous: list[str]) -> bool:
+        guild_id = interaction.guild_id
+        perms_text = ", ".join(f"`{p}`" for p in dangerous)
+        warning_msg = await self.get_msg(guild_id, "giveaway_warning_dangerous_role", role=role.name, permissions=perms_text)
+        confirm_label = await self.get_msg(guild_id, "cc_confirm_button")
+        cancel_label = await self.get_msg(guild_id, "cc_cancel_button")
+
+        view = RoleWarningConfirmView(interaction.user.id, confirm_label, cancel_label)
+        warning_title = await self.get_msg(guild_id, "cc_warning_dangerous_title")
+        embed = discord.Embed(title=warning_title, description=warning_msg, color=discord.Color.orange())
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        await view.wait()
+
+        if view.confirmed is True:
+            return True
+
+        cancel_key = "giveaway_action_cancelled" if view.confirmed is False else "giveaway_confirm_timeout"
+        cancel_msg = await self.get_msg(guild_id, cancel_key)
+        await interaction.followup.send(cancel_msg, ephemeral=True)
+        return False
+
+    # ══════════════════════════════════════════════════════════
+    #  추첨 생성 - /giveaway points·/giveaway role 커맨드와 대시보드(내부 웹훅) 둘 다 이 함수
+    #  하나를 공유한다. "위험 권한 역할 확인"만 호출부 책임(슬래시 커맨드는 인터랙티브 confirm
+    #  뷰, 대시보드는 프론트에서 이미 확인 다이얼로그를 거친 뒤 이 함수를 호출) - 그 외
+    #  authoritative한 안전 검증(prize 길이/수치 범위/기간/admin 차단/서열/권한)은 매번 이 함수
+    #  안에서 다시 수행한다. 웹훅 경로엔 confirm할 인터랙션 자체가 없기 때문에, 여기서 그 확인을
+    #  다시 요구하지 않는 대신 admin/서열/권한 위반은 여기서 무조건 거부한다(twitch.py의
+    #  _set_streamer_for_guild와 동일한 원칙).
+    # ══════════════════════════════════════════════════════════
+    async def _create_giveaway_core(self, guild: discord.Guild, channel: discord.TextChannel, prize: str,
+                                     entry_cost: int, winner_count: int, duration_minutes: int,
+                                     prize_type: str, prize_amount: int | None,
+                                     prize_role: discord.Role | None, created_by: str) -> dict:
+        bot_member = guild.me
+
+        if len(prize) > GIVEAWAY_PRIZE_MAX_LENGTH:
+            return {"status": "prize_too_long"}
 
         invalid_metrics = (
             entry_cost <= 0 or winner_count <= 0
             or (prize_type == "points" and (prize_amount is None or prize_amount <= 0))
         )
         if invalid_metrics:
-            msg = await self.get_msg(guild_id, "giveaway_metrics_error")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "invalid_metrics"}
 
         if not (GIVEAWAY_MIN_DURATION_MINUTES <= duration_minutes <= GIVEAWAY_MAX_DURATION_MINUTES):
-            msg = await self.get_msg(guild_id, "giveaway_err_duration_range",
-                                      min=GIVEAWAY_MIN_DURATION_MINUTES, max=GIVEAWAY_MAX_DURATION_MINUTES)
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "duration_out_of_range"}
 
-        target_channel = channel or interaction.channel
+        if prize_type == "role":
+            if prize_role is None:
+                return {"status": "role_required"}
+            if prize_role.permissions.administrator:
+                return {"status": "role_is_admin"}
+            if not bot_member.guild_permissions.manage_roles:
+                return {"status": "bot_missing_manage_roles"}
+            if bot_member.top_role <= prize_role:
+                return {"status": "role_hierarchy_blocked"}
+
         ends_at = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
 
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         try:
             insert_res = await self._db_call(
                 lambda: self.bot.supabase.table("giveaways").insert({
-                    "guild_id": str(guild_id),
-                    "channel_id": str(target_channel.id),
+                    "guild_id": str(guild.id),
+                    "channel_id": str(channel.id),
                     "prize": prize,
                     "prize_type": prize_type,
                     "prize_amount": prize_amount,
@@ -219,7 +371,7 @@ class KyvoGiveaway(KyvoBaseCog):
                     "entry_cost": entry_cost,
                     "winner_count": winner_count,
                     "ends_at": ends_at.isoformat(),
-                    "created_by": str(interaction.user.id),
+                    "created_by": created_by,
                 }).execute()
             )
             giveaway_row = insert_res.data[0] if insert_res.data else None
@@ -228,25 +380,21 @@ class KyvoGiveaway(KyvoBaseCog):
             giveaway_row = None
 
         if not giveaway_row:
-            msg = await self.get_msg(guild_id, "giveaway_err_save_failed")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "save_failed"}
 
         giveaway_id = giveaway_row["id"]
 
         # 2) 공지 임베드 + 응모 버튼 전송
         embed = await self._build_active_embed(giveaway_row)
-        enter_label = await self.get_msg(guild_id, "giveaway_btn_label")
+        enter_label = await self.get_msg(guild.id, "giveaway_btn_label")
         view = GiveawayEntryView(self, enter_label)
 
         try:
-            announce_message = await target_channel.send(embed=embed, view=view)
+            announce_message = await channel.send(embed=embed, view=view)
         except Exception as e:
             print(f"[GIVEAWAY][ERROR] Failed to post giveaway {giveaway_id} announcement: "
                   f"{type(e).__name__}: {e}", flush=True)
-            msg = await self.get_msg(guild_id, "giveaway_err_save_failed")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "post_failed", "giveaway_id": giveaway_id}
 
         # 3) message_id 기록 - 이게 있어야 버튼 클릭 시 이 행을 다시 찾을 수 있다.
         try:
@@ -258,13 +406,9 @@ class KyvoGiveaway(KyvoBaseCog):
         except Exception as e:
             print(f"[GIVEAWAY][ERROR] Failed to record message_id for giveaway {giveaway_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
-            msg = await self.get_msg(guild_id, "giveaway_err_save_failed")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "message_id_save_failed", "giveaway_id": giveaway_id}
 
-        ts = int(ends_at.timestamp())
-        msg = await self.get_msg(guild_id, "giveaway_admin_success", timestamp=ts)
-        await interaction.followup.send(msg, ephemeral=True)
+        return {"status": "ok", "giveaway_id": giveaway_id, "ends_at": ends_at.isoformat()}
 
     async def _build_active_embed(self, giveaway_row: dict) -> discord.Embed:
         guild_id = int(giveaway_row["guild_id"])
@@ -698,6 +842,77 @@ class KyvoGiveaway(KyvoBaseCog):
             "new_winner_id": str(new_winner_id), "prize_type": giveaway_row["prize_type"],
             "role_note": role_note, "payout_ok": payout_ok,
         }
+
+    async def handle_create_giveaway_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[GIVEAWAY][WARN] Rejected create-giveaway request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        channel_id = body.get("channel_id")
+        prize = body.get("prize")
+        entry_cost = body.get("entry_cost")
+        winner_count = body.get("winner_count")
+        duration_minutes = body.get("duration_minutes")
+        prize_type = body.get("prize_type")
+        prize_amount = body.get("prize_amount")
+        prize_role_id = body.get("prize_role_id")
+        created_by = body.get("created_by") or "dashboard"
+
+        if (not guild_id or not channel_id or not prize or entry_cost is None or winner_count is None
+                or duration_minutes is None or prize_type not in ("points", "role")):
+            return web.Response(status=400, text="guild_id, channel_id, prize, entry_cost, winner_count, "
+                                                  "duration_minutes, and prize_type ('points'|'role') are all required")
+
+        try:
+            entry_cost = int(entry_cost)
+            winner_count = int(winner_count)
+            duration_minutes = int(duration_minutes)
+            prize_amount = int(prize_amount) if prize_amount is not None else None
+        except (TypeError, ValueError):
+            return web.Response(status=400, text="entry_cost, winner_count, duration_minutes, and prize_amount must be integers")
+
+        guild = self.bot.get_guild(int(guild_id))
+        if guild is None:
+            return web.Response(status=404, text="guild not found (bot not in this guild, or not yet cached)")
+
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return web.Response(status=400, text="channel not found in this guild, or not a text channel")
+
+        prize_role = None
+        if prize_type == "role":
+            if not prize_role_id:
+                return web.Response(status=400, text="prize_role_id is required when prize_type is 'role'")
+            prize_role = guild.get_role(int(prize_role_id))
+            if prize_role is None:
+                return web.Response(status=400, text="prize_role not found in this guild")
+
+        result = await self._create_giveaway_core(
+            guild, channel, str(prize), entry_cost, winner_count, duration_minutes,
+            prize_type, prize_amount, prize_role, str(created_by)
+        )
+
+        status_to_http = {
+            "ok": 200,
+            "prize_too_long": 400,
+            "invalid_metrics": 400,
+            "duration_out_of_range": 400,
+            "role_required": 400,
+            "role_is_admin": 400,
+            "bot_missing_manage_roles": 400,
+            "role_hierarchy_blocked": 400,
+            "save_failed": 500,
+            "post_failed": 502,
+            "message_id_save_failed": 500,
+        }
+        return web.json_response(result, status=status_to_http.get(result["status"], 400))
 
     async def handle_replace_winner_webhook(self, request: web.Request) -> web.Response:
         secret_header = request.headers.get("X-Internal-Secret", "")
