@@ -112,10 +112,12 @@ class KyvoTwitch(KyvoBaseCog):
 
         if INTERNAL_API_SECRET:
             self.bot.web_app.router.add_post("/internal/twitch/remove", self.handle_remove_webhook)
-            print("[⚡ TWITCH] Internal streamer-removal route registered at /internal/twitch/remove.", flush=True)
+            self.bot.web_app.router.add_post("/internal/twitch/set", self.handle_set_webhook)
+            print("[⚡ TWITCH] Internal streamer set/removal routes registered at /internal/twitch/set "
+                  "and /internal/twitch/remove.", flush=True)
         else:
-            print("[TWITCH][WARN] INTERNAL_API_SECRET not set - dashboard-triggered streamer removal "
-                  "is disabled (the /twitch_channel_remove command still works).", flush=True)
+            print("[TWITCH][WARN] INTERNAL_API_SECRET not set - dashboard-triggered streamer add/removal "
+                  "is disabled (the /twitch_channel_set and /twitch_channel_remove commands still work).", flush=True)
 
     async def cog_unload(self):
         self.reconcile_streams.cancel()
@@ -210,7 +212,6 @@ class KyvoTwitch(KyvoBaseCog):
                                   member: discord.Member | None = None, role: discord.Role | None = None):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
-        streamer = streamer.strip().lstrip("@").lower()
         bot_member = interaction.guild.me
 
         if role is not None and member is None:
@@ -243,19 +244,70 @@ class KyvoTwitch(KyvoBaseCog):
                 if not confirmed:
                     return
 
+        # 🛡️ 여기까지 통과했으면(관리자 권한 확인까지 포함) 실제 등록/저장은 대시보드 내부
+        # 웹훅(handle_set_webhook)과 공유하는 _set_streamer_for_guild 하나가 전담한다 - 이 함수는
+        # 자기 나름대로도 같은 안전 검증을 다시 한 번(authoritative하게) 수행하므로, 여기서 이미
+        # 통과한 검증이 중복되는 건 의도된 방어(웹훅 경로엔 이 인터랙티브 확인 절차 자체가 없다).
+        result = await self._set_streamer_for_guild(
+            interaction.guild, channel, streamer, member, role, str(interaction.user.id)
+        )
+
+        if result["status"] == "streamer_not_found":
+            msg = await self.get_msg(guild_id, "twitch_err_streamer_not_found", streamer=result["streamer"])
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+        if result["status"] != "ok":
+            print(f"[TWITCH][WARN] Unexpected _set_streamer_for_guild status '{result['status']}' after slash "
+                  f"command pre-checks already passed (guild={guild_id}).", flush=True)
+            msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if role is not None:
+            msg = await self.get_msg(guild_id, "twitch_channel_set_success_with_role",
+                                      streamer=result["streamer"], channel=channel.mention, member=member.mention, role=role.name)
+        else:
+            msg = await self.get_msg(guild_id, "twitch_channel_set_success", streamer=result["streamer"], channel=channel.mention)
+        await interaction.followup.send(msg, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════
+    #  스트리머 등록 - /twitch_channel_set 커맨드와 대시보드(내부 웹훅) 둘 다 이 함수 하나를
+    #  공유한다. "위험 권한 역할 확인"만 호출부 책임(슬래시 커맨드는 인터랙티브 confirm 뷰,
+    #  대시보드는 프론트에서 이미 확인 다이얼로그를 거친 뒤 이 함수를 호출) - 그 외 authoritative한
+    #  안전 검증(administrator 차단/서열/권한/채널 권한)은 매번 이 함수 안에서 다시 수행한다.
+    #  웹훅 경로엔 confirm할 인터랙션 자체가 없기 때문에, 여기서 그 확인을 다시 요구하지 않는
+    #  대신 admin/서열/권한 위반은 여기서 무조건 거부한다(확인으로도 우회 불가한 것과 동일 기준).
+    # ══════════════════════════════════════════════════════════
+    async def _set_streamer_for_guild(self, guild: discord.Guild, channel: discord.TextChannel, streamer: str,
+                                       member: discord.Member | None, role: discord.Role | None,
+                                       created_by: str) -> dict:
+        streamer = streamer.strip().lstrip("@").lower()
+        bot_member = guild.me
+
+        if role is not None and member is None:
+            return {"status": "role_needs_member"}
+
+        perms = channel.permissions_for(bot_member)
+        if not (perms.send_messages and perms.embed_links):
+            return {"status": "channel_permission_denied"}
+
+        if role is not None:
+            if role.permissions.administrator:
+                return {"status": "role_is_admin"}
+            if not bot_member.guild_permissions.manage_roles:
+                return {"status": "bot_missing_manage_roles"}
+            if bot_member.top_role <= role:
+                return {"status": "role_hierarchy_blocked"}
+
         async with aiohttp.ClientSession() as session:
             try:
                 user = await self._resolve_broadcaster(session, streamer)
             except Exception as e:
                 print(f"[TWITCH][ERROR] Failed to resolve broadcaster '{streamer}': {type(e).__name__}: {e}", flush=True)
-                msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
-                await interaction.followup.send(msg, ephemeral=True)
-                return
+                return {"status": "subscription_failed"}
 
             if user is None:
-                msg = await self.get_msg(guild_id, "twitch_err_streamer_not_found", streamer=streamer)
-                await interaction.followup.send(msg, ephemeral=True)
-                return
+                return {"status": "streamer_not_found", "streamer": streamer}
 
             broadcaster_id = user["id"]
 
@@ -266,9 +318,7 @@ class KyvoTwitch(KyvoBaseCog):
                 streamer_row = existing.data[0] if existing.data else None
             except Exception as e:
                 print(f"[TWITCH][ERROR] Failed to look up streamer row for {broadcaster_id}: {type(e).__name__}: {e}", flush=True)
-                msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
-                await interaction.followup.send(msg, ephemeral=True)
-                return
+                return {"status": "subscription_failed"}
 
             if streamer_row is None:
                 sub_online_id = None
@@ -282,9 +332,7 @@ class KyvoTwitch(KyvoBaseCog):
                             await self._delete_subscription(session, sub_online_id)
                         except Exception as cleanup_e:
                             print(f"[TWITCH][ERROR] Rollback failed for subscription {sub_online_id}: {type(cleanup_e).__name__}: {cleanup_e}", flush=True)
-                    msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
-                    await interaction.followup.send(msg, ephemeral=True)
-                    return
+                    return {"status": "subscription_failed"}
 
                 try:
                     insert_res = await self._db_call(
@@ -296,33 +344,24 @@ class KyvoTwitch(KyvoBaseCog):
                     streamer_row = insert_res.data[0]
                 except Exception as e:
                     print(f"[TWITCH][ERROR] Failed to save streamer row for {broadcaster_id}: {type(e).__name__}: {e}", flush=True)
-                    msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
-                    await interaction.followup.send(msg, ephemeral=True)
-                    return
+                    return {"status": "subscription_failed"}
 
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("twitch_guild_configs").upsert({
-                    "guild_id": str(guild_id), "broadcaster_id": broadcaster_id,
+                    "guild_id": str(guild.id), "broadcaster_id": broadcaster_id,
                     "announcement_channel_id": str(channel.id),
                     "member_id": str(member.id) if member else None,
                     "live_role_id": str(role.id) if role else None,
-                    "created_by": str(interaction.user.id),
+                    "created_by": created_by,
                 }, on_conflict="guild_id,broadcaster_id").execute()
             )
         except Exception as e:
-            print(f"[TWITCH][ERROR] Failed to save guild config (guild={guild_id}, broadcaster={broadcaster_id}): "
+            print(f"[TWITCH][ERROR] Failed to save guild config (guild={guild.id}, broadcaster={broadcaster_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            msg = await self.get_msg(guild_id, "twitch_err_subscription_failed")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            return {"status": "save_failed"}
 
-        if role is not None:
-            msg = await self.get_msg(guild_id, "twitch_channel_set_success_with_role",
-                                      streamer=streamer, channel=channel.mention, member=member.mention, role=role.name)
-        else:
-            msg = await self.get_msg(guild_id, "twitch_channel_set_success", streamer=streamer, channel=channel.mention)
-        await interaction.followup.send(msg, ephemeral=True)
+        return {"status": "ok", "streamer": user["login"], "broadcaster_id": broadcaster_id}
 
     async def _confirm_dangerous_role(self, interaction: discord.Interaction, role: discord.Role, dangerous: list[str]) -> bool:
         guild_id = interaction.guild_id
@@ -423,6 +462,61 @@ class KyvoTwitch(KyvoBaseCog):
             print(f"[TWITCH][ERROR] Failed to clean up unused streamer {broadcaster_id}: {type(e).__name__}: {e}", flush=True)
 
         return {"removed": True, "subscriptions_also_removed": subscriptions_also_removed}
+
+    async def handle_set_webhook(self, request: web.Request) -> web.Response:
+        secret_header = request.headers.get("X-Internal-Secret", "")
+        if not secret_header or not hmac.compare_digest(secret_header, INTERNAL_API_SECRET):
+            print("[TWITCH][WARN] Rejected streamer-set request with invalid/missing internal secret", flush=True)
+            return web.Response(status=403)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        guild_id = body.get("guild_id")
+        channel_id = body.get("channel_id")
+        streamer = body.get("streamer")
+        member_id = body.get("member_id")
+        role_id = body.get("role_id")
+        created_by = body.get("created_by") or "dashboard"
+        if not guild_id or not channel_id or not streamer:
+            return web.Response(status=400, text="guild_id, channel_id, and streamer are all required")
+
+        guild = self.bot.get_guild(int(guild_id))
+        if guild is None:
+            return web.Response(status=404, text="guild not found (bot not in this guild, or not yet cached)")
+
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return web.Response(status=400, text="channel not found in this guild, or not a text channel")
+
+        member = None
+        if member_id:
+            member = guild.get_member(int(member_id))
+            if member is None:
+                return web.Response(status=400, text="member not found in this guild")
+
+        role = None
+        if role_id:
+            role = guild.get_role(int(role_id))
+            if role is None:
+                return web.Response(status=400, text="role not found in this guild")
+
+        result = await self._set_streamer_for_guild(guild, channel, streamer, member, role, created_by)
+
+        status_to_http = {
+            "ok": 200,
+            "role_needs_member": 400,
+            "channel_permission_denied": 400,
+            "role_is_admin": 400,
+            "bot_missing_manage_roles": 400,
+            "role_hierarchy_blocked": 400,
+            "streamer_not_found": 404,
+            "subscription_failed": 502,
+            "save_failed": 500,
+        }
+        return web.json_response(result, status=status_to_http.get(result["status"], 400))
 
     async def handle_remove_webhook(self, request: web.Request) -> web.Response:
         secret_header = request.headers.get("X-Internal-Secret", "")
