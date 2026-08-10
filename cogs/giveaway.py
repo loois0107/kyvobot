@@ -139,7 +139,7 @@ class KyvoGiveaway(KyvoBaseCog):
 
     @giveaway_group.command(name="points", description="Create a giveaway that pays out points to the winners.")
     @app_commands.describe(
-        prize="Display name for the prize.",
+        prize="Name for the prize.",
         entry_cost="Points required to enter.",
         winner_count="Number of winners.",
         duration_minutes=f"Minutes until the giveaway closes ({GIVEAWAY_MIN_DURATION_MINUTES}-{GIVEAWAY_MAX_DURATION_MINUTES}).",
@@ -156,7 +156,7 @@ class KyvoGiveaway(KyvoBaseCog):
 
     @giveaway_group.command(name="role", description="Create a giveaway that grants a role to the winners.")
     @app_commands.describe(
-        prize="Display name for the prize.",
+        prize="Name for the prize.",
         entry_cost="Points required to enter.",
         winner_count="Number of winners.",
         duration_minutes=f"Minutes until the giveaway closes ({GIVEAWAY_MIN_DURATION_MINUTES}-{GIVEAWAY_MAX_DURATION_MINUTES}).",

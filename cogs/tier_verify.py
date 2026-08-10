@@ -223,7 +223,7 @@ class KyvoTierVerify(KyvoBaseCog):
     #  /riot_region_set - 관리자 전용, 길드의 LoL 플랫폼 리전 설정 (guild_settings JSON)
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="riot_region_set", description="Set this server's League of Legends region for account verification.")
-    @app_commands.describe(region="The LoL platform region this guild's players play on.")
+    @app_commands.describe(region="The LoL platform region this server's players play on.")
     @app_commands.choices(region=[app_commands.Choice(name=r, value=r) for r in PLATFORM_CHOICES])
     @app_commands.default_permissions(administrator=True)
     async def riot_region_set(self, interaction: discord.Interaction, region: app_commands.Choice[str]):

@@ -25,7 +25,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     "eco": {"name": "이코노미", "description": "관리자용 재화 지급/차감 도구"},
     "cc_add": {"name": "명령어추가", "description": "서버 전용 커스텀 명령어를 생성하거나 수정합니다."},
     "giveaway": {"name": "추첨", "description": "포인트 기반 추첨 이벤트를 생성하고 관리합니다."},
-    "ticket-admin": {"name": "티켓관리", "description": "AI 지원 티켓 시스템의 설정과 지식 베이스를 관리합니다."},
+    "ticket-admin": {"name": "티켓관리", "description": "AI 지원 티켓 시스템의 설정과 참고 자료를 관리합니다."},
 
     # ── cs2_flex.py ──
     "steam_link": {"name": "스팀연동", "description": "CS2 인벤토리 기능을 위해 스팀 계정을 연동합니다(자진 신고 방식)."},
@@ -68,7 +68,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     "twitch_channel_remove": {"name": "트위치채널삭제", "description": "이 서버에서 트위치 채널 알림을 중단합니다."},
 
     # ── reaction_roles.py ──
-    "reaction_role_add": {"name": "반응역할추가", "description": "메시지의 이모지 반응에 역할을 연결합니다(토글: 반응하면 획득, 반응 취소하면 제거). /dashboard에서 더 쉽게 설정할 수 있습니다."},
+    "reaction_role_add": {"name": "반응역할추가", "description": "메시지의 이모지 반응에 역할을 연결합니다(반응하면 획득, 반응 취소하면 제거). /dashboard에서 더 쉽게 설정할 수 있습니다."},
 
     # ── gg_rsvp.py ──
     "gg": {"name": "같이해", "description": "'같이 할 사람?' RSVP 카드를 즉시 게시합니다."},
@@ -85,7 +85,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     # ── party.py ──
     "party_recruit": {"name": "파티모집", "description": "파티 모집 게시글을 엽니다."},
     "party_close": {"name": "파티마감", "description": "모집을 취소하거나, 파티 채널을 조기 종료합니다."},
-    "tier_role_set": {"name": "티어역할설정", "description": "파티 모집 자진 신고용으로 티어와 역할을 매핑합니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
+    "tier_role_set": {"name": "티어역할설정", "description": "파티 모집에서 티어마다 부여할 역할을 설정합니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
     "tier_set": {"name": "티어설정", "description": "본인의 랭크 티어를 자진 신고합니다."},
 
     # ── ticket_ai.py ──
@@ -124,7 +124,7 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
     ("giveaway end", "giveaway"): {"name": "추첨", "description": "조기 종료할 진행 중인 추첨"},
     ("party_recruit", "game"): {"name": "게임", "description": "선택 - 모집 카드 디자인에 쓸 저장된 게임 프리셋 선택"},
     ("party_recruit", "min_tier"): {"name": "최소티어", "description": "선택 - 카드에 참고용으로만 표시되며 강제되지 않음"},
-    ("tier_role_set", "tier"): {"name": "티어", "description": "매핑할 티어"},
+    ("tier_role_set", "tier"): {"name": "티어", "description": "역할을 설정할 티어"},
     ("tier_role_set", "role"): {"name": "역할", "description": "이 티어를 자진 신고하면 부여될 역할"},
     ("tier_set", "tier"): {"name": "티어", "description": "현재 랭크 티어"},
     ("reaction_role_add", "message_id"): {"name": "메시지아이디", "description": "반응을 걸 메시지의 ID (반드시 이 채널에 있어야 함)"},

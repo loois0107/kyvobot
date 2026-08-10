@@ -208,12 +208,12 @@ class KyvoTicketAI(KyvoBaseCog):
 
     ticket_admin = app_commands.Group(
         name="ticket-admin",
-        description="Manage the AI support ticket system's settings and knowledge base.",
+        description="Manage the AI support ticket system's settings and reference info.",
         default_permissions=discord.Permissions(manage_guild=True)
     )
 
     @ticket_admin.command(name="add-knowledge", description="Teach the AI new information for ticket support.")
-    @app_commands.describe(content="The actual guidelines, server rules, or FAQ text chunk to teach the AI.")
+    @app_commands.describe(content="The actual guidelines, server rules, or FAQ text to teach the AI.")
     async def add_knowledge(self, interaction: discord.Interaction, content: str):
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id)

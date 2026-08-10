@@ -1008,7 +1008,7 @@ class KyvoEconomy(KyvoBaseCog):
     # [DYNAMIC SHOP & INVENTORY MODULE]
     # ========================================================
 
-    shop_group = app_commands.Group(name="shop", description="Server custom shop interface commands")
+    shop_group = app_commands.Group(name="shop", description="Server custom shop commands")
 
     @shop_group.command(name="view", description="Browse items available in the server shop.")
     async def shop_view(self, interaction: discord.Interaction):
@@ -1051,7 +1051,7 @@ class KyvoEconomy(KyvoBaseCog):
 
     @shop_group.command(name="add", description="Add a brand new item to the server shop.")
     @app_commands.describe(
-        name="The item's display name.",
+        name="The item's name.",
         price="How much the item costs, in this server's currency.",
         description="A short line describing what the item is or does.",
     )
@@ -1277,7 +1277,7 @@ class KyvoEconomy(KyvoBaseCog):
     # [ADMINISTRATIVE CASH FLOW OVERRIDES]
     # ========================================================
 
-    eco_group = app_commands.Group(name="eco", description="Admin monetary allocation tools", default_permissions=discord.Permissions(manage_guild=True))
+    eco_group = app_commands.Group(name="eco", description="Admin tools to give or take a user's points", default_permissions=discord.Permissions(manage_guild=True))
 
     @eco_group.command(name="give", description="Give points to a user.")
     @app_commands.describe(target="The member to give points to.", amount="How many points to give.")
