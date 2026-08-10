@@ -172,6 +172,22 @@ class KyvoScrim(KyvoBaseCog):
             print(f"[SCRIM][ERROR] Failed to fetch full participants for scrim {scrim_id}: {type(e).__name__}: {e}", flush=True)
             return []
 
+    async def _leader_has_active_scrim(self, guild_id, leader_id: str) -> bool:
+        """/scrim_start 중복 방지용 - 조회 자체가 실패하면(일시적 DB 오류 등) 막지 않고 통과시킨다
+        (다른 조회 헬퍼들과 동일하게 fail-open - 이 서버의 다른 기능들도 DB 오류를 최대한 사용자에게
+        전파하지 않는 쪽으로 일관되게 처리한다)."""
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("scrims").select("id")
+                        .eq("guild_id", str(guild_id)).eq("leader_id", leader_id)
+                        .in_("status", ["recruiting", "in_progress"]).limit(1).execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            print(f"[SCRIM][ERROR] Failed to check for existing active scrim for leader={leader_id} "
+                  f"(guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            return False
+
     async def _get_verified_tiers(self, guild_id, user_ids: list[str]) -> dict[str, str | None]:
         try:
             res = await self._db_call(
@@ -187,6 +203,10 @@ class KyvoScrim(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  /scrim_start - 모집 시작. gg_rsvp.py와 동일한 흐름(모달 없이 즉시 카드) + 10명 고정.
     #  (예전엔 /내전이었음 - 다른 모든 명령어와 영문 snake_case 컨벤션을 맞추기 위해 개명)
+    #  🛡️ 같은 리더가 이미 진행 중인(recruiting 또는 in_progress) 내전을 갖고 있으면 새로 만들지
+    #  못하게 막는다 - 리더 한 명이 카드 여러 개를 동시에 굴리면 어느 쪽에 "경기 시작"을 눌러야
+    #  할지, /scrim_end가 어느 걸 종료해야 할지 애매해진다. party_recruit/gg는 여러 개 동시
+    #  진행이 자연스러운 시나리오라 이 제약을 걸지 않는다(의도적으로 그대로 둠).
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="scrim_start", description="Start recruiting a balanced 5v5 scrim.")
     async def scrim_start_recruit(self, interaction: discord.Interaction):
@@ -194,6 +214,11 @@ class KyvoScrim(KyvoBaseCog):
         guild_id = interaction.guild_id
         leader_id = str(interaction.user.id)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=SCRIM_RECRUIT_DURATION_MINUTES)
+
+        if await self._leader_has_active_scrim(guild_id, leader_id):
+            msg = await self.get_msg(guild_id, "scrim_err_already_active")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
 
         try:
             insert_res = await self._db_call(
@@ -574,8 +599,12 @@ class KyvoScrim(KyvoBaseCog):
         return results
 
     # ══════════════════════════════════════════════════════════
-    #  /scrim_end - 리더 또는 서버 관리 권한자만. 자동 종료(auto_end_at)와 이 함수 둘 다
-    #  _end_scrim 하나를 공유한다(원자적 클레임으로 중복 처리 방지).
+    #  /scrim_end - 리더 또는 서버 관리 권한자만. status에 따라 두 갈래로 나뉜다:
+    #  ① status=='recruiting' -> 아직 시작 안 한 모집을 취소(_cancel_recruiting과 동일 - 카드를
+    #     취소 표시로 갱신하고 DB를 cancelled로). 아직 팀 음성 채널이 없는 단계라 되돌릴 것도 없다.
+    #  ② status=='in_progress' -> 기존 동작(_end_scrim - 원래 채널 복귀 + 팀 채널 삭제 + ended).
+    #  자동 종료(auto_end_at)와는 ②만 _end_scrim 하나를 공유한다(원자적 클레임으로 중복 처리 방지).
+    #  party.py의 /party_close가 status별로 분기하는 것과 동일한 패턴.
     #  (예전엔 /내전종료였음 - 다른 모든 명령어와 영문 snake_case 컨벤션을 맞추기 위해 개명)
     # ══════════════════════════════════════════════════════════
     # 🛡️ app_commands.checks.has_permissions(manage_guild=True)를 데코레이터로 걸면 Discord
@@ -600,6 +629,19 @@ class KyvoScrim(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
+        if row["status"] == "recruiting":
+            result = await self._cancel_recruiting(row)
+            if result != "claimed":
+                # 🛡️ 그 사이 자동 타임아웃이나 다른 요청이 먼저 처리했음(recruiting 조건부
+                # UPDATE라 정확히 하나만 통과한다) - "이미 끝남" 메시지를 그대로 재사용한다.
+                msg = await self.get_msg(guild_id, "scrim_err_already_ended")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+
+            msg = await self.get_msg(guild_id, "scrim_end_cancelled_success")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
         summary = await self._end_scrim(row)
         if summary is None:
             msg = await self.get_msg(guild_id, "scrim_err_already_ended")
@@ -611,11 +653,14 @@ class KyvoScrim(KyvoBaseCog):
         await interaction.followup.send(msg, ephemeral=True)
 
     async def _find_active_scrim_for_end(self, guild_id, user_id: str, is_admin: bool) -> dict | None:
+        """recruiting과 in_progress를 모두 "활성"으로 보고 찾는다 - /scrim_start에서 리더당
+        하나만 허용하므로(중복 방지), 정상적인 경우 리더당 최대 한 건만 걸린다. 여러 건이 남아있는
+        예외적인 경우(과거 데이터 등)를 대비해 id 내림차순으로 가장 최근 것을 고른다."""
         try:
             res = await self._db_call(
                 lambda: self.bot.supabase.table("scrims").select("*")
-                        .eq("guild_id", str(guild_id)).eq("status", "in_progress")
-                        .eq("leader_id", user_id).order("started_at", desc=True).limit(1).execute()
+                        .eq("guild_id", str(guild_id)).in_("status", ["recruiting", "in_progress"])
+                        .eq("leader_id", user_id).order("id", desc=True).limit(1).execute()
             )
             if res.data:
                 return res.data[0]
@@ -628,12 +673,12 @@ class KyvoScrim(KyvoBaseCog):
         try:
             res = await self._db_call(
                 lambda: self.bot.supabase.table("scrims").select("*")
-                        .eq("guild_id", str(guild_id)).eq("status", "in_progress")
-                        .order("started_at", desc=True).limit(1).execute()
+                        .eq("guild_id", str(guild_id)).in_("status", ["recruiting", "in_progress"])
+                        .order("id", desc=True).limit(1).execute()
             )
             return res.data[0] if res.data else None
         except Exception as e:
-            print(f"[SCRIM][ERROR] Failed to look up any in-progress scrim (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            print(f"[SCRIM][ERROR] Failed to look up any active scrim (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             return None
 
     async def _end_scrim(self, row: dict) -> dict | None:
