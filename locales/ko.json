@@ -327,6 +327,7 @@
   "party_close_use_party_channel": "❌ 이미 인원이 다 찬 모집입니다. 파티 채널 안에서 이 명령어를 실행해주세요.",
   "party_cancelled_notice": "🚫 모집자가 이 모집을 취소했습니다.",
   "party_tier_role_saved": "✅ `{tier}` 티어가 **{role}** 역할에 매핑되었습니다.",
+  "party_tier_role_saved_incomplete": "✅ `{tier}` 티어가 **{role}** 역할에 매핑되었습니다. 아직 안 정해진 티어 {count}개: {missing} — /dashboard에서 한 번에 설정할 수 있어요.",
   "party_tier_set_success": "✅ 티어가 **{tier}**(으)로 설정되었습니다.",
   "party_tier_not_configured": "❌ 이 서버엔 아직 `{tier}` 티어에 매핑된 역할이 없습니다. 관리자에게 `/tier_role_set` 실행을 요청하세요.",
   "party_tier_err_hierarchy": "❌ 봇의 역할이 티어 역할보다 낮은 위치에 있어서 지금은 부여할 수 없습니다. 서버 관리자에게 문의해주세요.",

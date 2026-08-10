@@ -135,7 +135,7 @@ class ReactionRoles(KyvoBaseCog):
     #  /reaction_role_add - 관리자 명령어
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="reaction_role_add",
-                           description="Bind an emoji reaction on a message to a role (toggle: react to gain, unreact to lose).")
+                           description="Bind an emoji reaction on a message to a role (react to gain, unreact to lose). Try /dashboard.")
     @app_commands.describe(
         message_id="ID of the message to react to (must be in this channel).",
         emoji="The emoji members will react with.",

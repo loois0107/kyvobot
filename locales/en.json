@@ -327,6 +327,7 @@
   "party_close_use_party_channel": "❌ This recruitment is already full. Please run this command inside the party channel instead.",
   "party_cancelled_notice": "🚫 The recruiter cancelled this recruitment.",
   "party_tier_role_saved": "✅ `{tier}` is now mapped to the **{role}** role.",
+  "party_tier_role_saved_incomplete": "✅ `{tier}` is now mapped to the **{role}** role. {count} tier(s) still unmapped: {missing} — set them all at once via /dashboard.",
   "party_tier_set_success": "✅ Your tier is now set to **{tier}**.",
   "party_tier_not_configured": "❌ This server hasn't set up a role for the `{tier}` tier yet. Ask an admin to run `/tier_role_set`.",
   "party_tier_err_hierarchy": "❌ The bot's role is positioned below the tier role, so it can't be assigned right now. Please contact a server administrator.",
