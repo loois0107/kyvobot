@@ -1069,7 +1069,14 @@ class KyvoEconomy(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        if len(name) > 50 or len(description) > 200:
+        # 🛡️ 대시보드(leveling 페이지)가 아이템 이름의 공백을 저장 시 자동으로 _로 치환하는 게
+        # 이미 대시보드 UI에 명시된 사양이라(itemTitleHelp), 명령어 쪽을 거기에 맞춘다 - 안 그러면
+        # 같은 이름을 명령어로 만드느냐 대시보드로 만드느냐에 따라 실제 저장되는 표기가 달라져서
+        # (공백 vs 언더스코어) /shop buy에서 서로 다른 문자열을 기대하게 되는 혼란이 생긴다.
+        # split()이 연속 공백까지 하나로 접어주므로 TS의 replace(/\s+/g, '_')와 동일하게 동작한다.
+        normalized_name = "_".join(name.strip().split())
+
+        if len(normalized_name) > 50 or len(description) > 200:
             msg = await self.get_msg(interaction.guild_id, "shop_add_err_bounds_overflow")
             await interaction.followup.send(msg, ephemeral=True)
             return
@@ -1080,12 +1087,12 @@ class KyvoEconomy(KyvoBaseCog):
         economy_set = nested_settings.get("economy_settings") or {}
         shop_items = economy_set.get("shop_items", [])
 
-        if any(isinstance(item, dict) and item.get('name', '').lower() == name.lower() for item in shop_items):
+        if any(isinstance(item, dict) and item.get('name', '').lower() == normalized_name.lower() for item in shop_items):
             msg = await self.get_msg(guild_id, "shop_add_err_duplicate")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        new_item = {"name": name.strip(), "price": price, "description": description.strip()}
+        new_item = {"name": normalized_name, "price": price, "description": description.strip()}
         shop_items.append(new_item)
 
         economy_set["shop_items"] = shop_items
@@ -1098,7 +1105,7 @@ class KyvoEconomy(KyvoBaseCog):
         # 캐시를 무효화해야 다음 조회가 최대 5분간 옛날 상점 목록을 보여주는 걸 막을 수 있다.
         await self.invalidate_settings_cache(guild_id)
 
-        msg = await self.get_msg(guild_id, "shop_add_success", name=name, price=f"{price:,}")
+        msg = await self.get_msg(guild_id, "shop_add_success", name=normalized_name, price=f"{price:,}")
         await interaction.followup.send(msg, ephemeral=True)
 
     async def _process_purchase(self, user_id: str, guild_id, item_name: str) -> dict:
