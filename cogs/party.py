@@ -1313,7 +1313,7 @@ class KyvoParty(KyvoBaseCog):
     @app_commands.command(name="tier_role_set", description="Map a rank tier to a role for party recruitment self-reporting.")
     @app_commands.describe(tier="The tier to map.", role="The role members get when they self-report this tier.")
     @app_commands.choices(tier=[app_commands.Choice(name=t, value=t) for t in TIER_CHOICES])
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def tier_role_set(self, interaction: discord.Interaction, tier: app_commands.Choice[str], role: discord.Role):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

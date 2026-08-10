@@ -141,7 +141,7 @@ class ReactionRoles(KyvoBaseCog):
         emoji="The emoji members will react with.",
         role="The role granted on react / removed on unreact.",
     )
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def reaction_role_add(self, interaction: discord.Interaction, message_id: str, emoji: str, role: discord.Role):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

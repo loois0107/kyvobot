@@ -76,7 +76,8 @@ class KyvoGiveaway(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  /giveaway points / /giveaway role - 관리자 명령어 (서브커맨드로 분리)
     # ══════════════════════════════════════════════════════════
-    giveaway_group = app_commands.Group(name="giveaway", description="Create and manage point-based giveaways.")
+    giveaway_group = app_commands.Group(name="giveaway", description="Create and manage point-based giveaways.",
+                                         default_permissions=discord.Permissions(administrator=True))
 
     @giveaway_group.command(name="points", description="Create a giveaway that pays out points to the winners.")
     @app_commands.describe(
@@ -87,7 +88,6 @@ class KyvoGiveaway(KyvoBaseCog):
         prize_amount="Points each winner receives.",
         channel="Channel to post the giveaway in (defaults to the current channel).",
     )
-    @app_commands.checks.has_permissions(administrator=True)
     async def giveaway_points(self, interaction: discord.Interaction, prize: str, entry_cost: int,
                                winner_count: int, duration_minutes: int, prize_amount: int,
                                channel: discord.TextChannel | None = None):
@@ -105,7 +105,6 @@ class KyvoGiveaway(KyvoBaseCog):
         prize_role="Role each winner receives.",
         channel="Channel to post the giveaway in (defaults to the current channel).",
     )
-    @app_commands.checks.has_permissions(administrator=True)
     async def giveaway_role(self, interaction: discord.Interaction, prize: str, entry_cost: int,
                              winner_count: int, duration_minutes: int, prize_role: discord.Role,
                              channel: discord.TextChannel | None = None):
@@ -143,7 +142,6 @@ class KyvoGiveaway(KyvoBaseCog):
     @giveaway_group.command(name="end", description="End an active giveaway immediately and draw winners now.")
     @app_commands.describe(giveaway="The active giveaway to end early.")
     @app_commands.autocomplete(giveaway=_active_giveaway_autocomplete)
-    @app_commands.checks.has_permissions(administrator=True)
     async def giveaway_end(self, interaction: discord.Interaction, giveaway: str):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

@@ -225,7 +225,7 @@ class KyvoTierVerify(KyvoBaseCog):
     @app_commands.command(name="riot_region_set", description="Set this server's League of Legends region for account verification.")
     @app_commands.describe(region="The LoL platform region this guild's players play on.")
     @app_commands.choices(region=[app_commands.Choice(name=r, value=r) for r in PLATFORM_CHOICES])
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def riot_region_set(self, interaction: discord.Interaction, region: app_commands.Choice[str]):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

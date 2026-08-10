@@ -205,7 +205,7 @@ class KyvoTwitch(KyvoBaseCog):
         member="Discord member to grant the live role to (required if role is set)",
         role="Role to grant while they're live (optional)",
     )
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def twitch_channel_set(self, interaction: discord.Interaction, streamer: str, channel: discord.TextChannel,
                                   member: discord.Member | None = None, role: discord.Role | None = None):
         await interaction.response.defer(ephemeral=True)
@@ -350,7 +350,7 @@ class KyvoTwitch(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="twitch_channel_remove", description="Stop notifications for a Twitch channel in this server.")
     @app_commands.describe(streamer="Twitch login name to remove")
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def twitch_channel_remove(self, interaction: discord.Interaction, streamer: str):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

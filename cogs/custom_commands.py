@@ -214,7 +214,8 @@ class CustomCommands(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  슬래시 관리자 명령어 (추가) - text / role_add / role_remove 서브커맨드로 분리
     # ══════════════════════════════════════════════════════════
-    cc_add_group = app_commands.Group(name="cc_add", description="Create or update a server-specific custom command.")
+    cc_add_group = app_commands.Group(name="cc_add", description="Create or update a server-specific custom command.",
+                                       default_permissions=discord.Permissions(administrator=True))
 
     async def _resolve_cmd_name(self, interaction: discord.Interaction, name: str) -> str | None:
         """이름 정규화 + 검증. 실패 시 에러 메시지를 보내고 None을 반환한다."""
@@ -227,7 +228,6 @@ class CustomCommands(KyvoBaseCog):
 
     @cc_add_group.command(name="text", description="Create a custom command that replies with text.")
     @app_commands.describe(name="The command's name, without the slash prefix.", response="The text this command replies with when triggered.")
-    @app_commands.checks.has_permissions(administrator=True)
     async def cc_add_text(self, interaction: discord.Interaction, name: str, response: str):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -305,13 +305,11 @@ class CustomCommands(KyvoBaseCog):
 
     @cc_add_group.command(name="role_add", description="Create a self-service custom command that grants a role to whoever triggers it.")
     @app_commands.describe(name="The command's name, without the slash prefix.", role="The role this command grants when triggered.")
-    @app_commands.checks.has_permissions(administrator=True)
     async def cc_add_role_add(self, interaction: discord.Interaction, name: str, role: discord.Role):
         await self._create_role_command(interaction, name, role, action="role_add")
 
     @cc_add_group.command(name="role_remove", description="Create a self-service custom command that removes a role from whoever triggers it.")
     @app_commands.describe(name="The command's name, without the slash prefix.", role="The role this command removes when triggered.")
-    @app_commands.checks.has_permissions(administrator=True)
     async def cc_add_role_remove(self, interaction: discord.Interaction, name: str, role: discord.Role):
         await self._create_role_command(interaction, name, role, action="role_remove")
 
@@ -320,7 +318,7 @@ class CustomCommands(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="cc_delete", description="Permanently delete a custom command from the server configuration.")
     @app_commands.describe(name="The name of the custom command to delete.")
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def cc_delete(self, interaction: discord.Interaction, name: str):
         await interaction.response.defer(ephemeral=True)
         try:
