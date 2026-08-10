@@ -471,7 +471,7 @@ class KyvoAnonymousReports(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="anonymous_unban", description="Remove a user's anonymous-report block.")
     @app_commands.describe(user="The member to lift the anonymous-report block from.")
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def anonymous_unban(self, interaction: discord.Interaction, user: discord.User):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id

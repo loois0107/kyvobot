@@ -1310,10 +1310,10 @@ class KyvoParty(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  /tier_role_set - 관리자 전용, 티어 <-> 역할 매핑 등록
     # ══════════════════════════════════════════════════════════
-    @app_commands.command(name="tier_role_set", description="Map a rank tier to a role for party recruitment self-reporting.")
+    @app_commands.command(name="tier_role_set", description="Map a rank tier to a role for party recruitment self-reporting. Try /dashboard.")
     @app_commands.describe(tier="The tier to map.", role="The role members get when they self-report this tier.")
     @app_commands.choices(tier=[app_commands.Choice(name=t, value=t) for t in TIER_CHOICES])
-    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def tier_role_set(self, interaction: discord.Interaction, tier: app_commands.Choice[str], role: discord.Role):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -1342,15 +1342,25 @@ class KyvoParty(KyvoBaseCog):
 
         # 🛡️ 재매핑(이미 이 티어에 다른 역할이 매핑돼 있던 경우) 감지 - upsert 전에 이전 값을
         # 미리 알아둬야, 저장 후 그 이전 역할을 실제로 갖고 있는 멤버들을 정리할 수 있다.
+        # 🔗 길드 전체 매핑을 한 번에 가져온다(tier로 좁히지 않음) - 재매핑 감지와 "아직 안 정해진
+        # 티어" 안내(아래) 둘 다 이 결과 하나로 해결한다 - 쿼리를 추가로 늘리지 않는다. 이 테이블은
+        # 길드당 최대 10행(티어 개수)뿐이라 전체 조회 비용은 무시할 수 있는 수준이다.
         try:
             existing_res = await self._db_call(
-                lambda: self.bot.supabase.table("party_tier_roles").select("role_id")
-                        .eq("guild_id", str(guild_id)).eq("tier", tier.value).execute()
+                lambda: self.bot.supabase.table("party_tier_roles").select("tier, role_id")
+                        .eq("guild_id", str(guild_id)).execute()
             )
-            old_role_id = existing_res.data[0]["role_id"] if existing_res.data else None
+            all_rows = existing_res.data or []
+            old_role_id = next((r["role_id"] for r in all_rows if r["tier"] == tier.value), None)
+            fetched_all_rows = True
         except Exception as e:
-            print(f"[PARTY][WARN] Failed to check existing tier role mapping before upsert: {type(e).__name__}: {e}", flush=True)
+            print(f"[PARTY][WARN] Failed to check existing tier role mappings before upsert: {type(e).__name__}: {e}", flush=True)
+            all_rows = []
             old_role_id = None
+            # 🛡️ 조회가 실패하면 all_rows가 실제로 텅 빈 건지 못 가져온 건지 구분이 안 된다 - 아래
+            # "몇 개 남았는지" 계산에 그대로 쓰면 다 채워놓고도 "9개 남음"처럼 틀린 안내가 나갈 수
+            # 있다. 이 플래그로 그 경우엔 안내 자체를 건너뛰고 기존 성공 메시지로 폴백한다.
+            fetched_all_rows = False
 
         try:
             await self._db_call(
@@ -1363,7 +1373,16 @@ class KyvoParty(KyvoBaseCog):
             await interaction.followup.send(f"❌ {type(e).__name__}: {e}", ephemeral=True)
             return
 
-        msg = await self.get_msg(guild_id, "party_tier_role_saved", tier=tier.value, role=role.name)
+        # 🔗 방금 저장한 티어까지 합쳐서(upsert가 성공했으니 확정) 아직 안 정해진 티어를 계산한다.
+        # 다 찼으면(0개 남음) 안내 없이 기존 성공 메시지 그대로 - /dashboard로 유도할 이유가 없다.
+        mapped_tiers = {r["tier"] for r in all_rows} | {tier.value}
+        missing_tiers = [t for t in TIER_CHOICES if t not in mapped_tiers] if fetched_all_rows else []
+
+        if missing_tiers:
+            msg = await self.get_msg(guild_id, "party_tier_role_saved_incomplete", tier=tier.value, role=role.name,
+                                      count=len(missing_tiers), missing=", ".join(missing_tiers))
+        else:
+            msg = await self.get_msg(guild_id, "party_tier_role_saved", tier=tier.value, role=role.name)
         await interaction.followup.send(msg, ephemeral=True)
 
         if old_role_id and old_role_id != str(role.id):

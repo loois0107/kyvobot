@@ -50,10 +50,10 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     "eco take": {"name": "차감", "description": "유저의 포인트를 차감합니다."},
 
     # ── custom_commands.py ──
-    "cc_add text": {"name": "텍스트", "description": "텍스트로 응답하는 커스텀 명령어를 만듭니다."},
-    "cc_add role_add": {"name": "역할추가", "description": "실행한 사람에게 역할을 부여하는 셀프서비스 커스텀 명령어를 만듭니다."},
-    "cc_add role_remove": {"name": "역할제거", "description": "실행한 사람의 역할을 제거하는 셀프서비스 커스텀 명령어를 만듭니다."},
-    "cc_delete": {"name": "명령어삭제", "description": "서버 설정에서 커스텀 명령어를 영구적으로 삭제합니다."},
+    "cc_add text": {"name": "텍스트", "description": "텍스트로 응답하는 커스텀 명령어를 만듭니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
+    "cc_add role_add": {"name": "역할추가", "description": "실행한 사람에게 역할을 부여하는 셀프서비스 커스텀 명령어를 만듭니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
+    "cc_add role_remove": {"name": "역할제거", "description": "실행한 사람의 역할을 제거하는 셀프서비스 커스텀 명령어를 만듭니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
+    "cc_delete": {"name": "명령어삭제", "description": "서버 설정에서 커스텀 명령어를 영구적으로 삭제합니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
     "cc_list": {"name": "명령어목록", "description": "이 서버의 모든 커스텀 명령어를 나열합니다."},
 
     # ── scrim.py ──
@@ -68,7 +68,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     "twitch_channel_remove": {"name": "트위치채널삭제", "description": "이 서버에서 트위치 채널 알림을 중단합니다."},
 
     # ── reaction_roles.py ──
-    "reaction_role_add": {"name": "반응역할추가", "description": "메시지의 이모지 반응에 역할을 연결합니다(토글: 반응하면 획득, 반응 취소하면 제거)."},
+    "reaction_role_add": {"name": "반응역할추가", "description": "메시지의 이모지 반응에 역할을 연결합니다(토글: 반응하면 획득, 반응 취소하면 제거). /dashboard에서 더 쉽게 설정할 수 있습니다."},
 
     # ── gg_rsvp.py ──
     "gg": {"name": "같이해", "description": "'같이 할 사람?' RSVP 카드를 즉시 게시합니다."},
@@ -85,7 +85,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     # ── party.py ──
     "party_recruit": {"name": "파티모집", "description": "파티 모집 게시글을 엽니다."},
     "party_close": {"name": "파티마감", "description": "모집을 취소하거나, 파티 채널을 조기 종료합니다."},
-    "tier_role_set": {"name": "티어역할설정", "description": "파티 모집 자진 신고용으로 티어와 역할을 매핑합니다."},
+    "tier_role_set": {"name": "티어역할설정", "description": "파티 모집 자진 신고용으로 티어와 역할을 매핑합니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
     "tier_set": {"name": "티어설정", "description": "본인의 랭크 티어를 자진 신고합니다."},
 
     # ── ticket_ai.py ──
