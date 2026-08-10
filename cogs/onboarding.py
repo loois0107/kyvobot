@@ -101,16 +101,53 @@ class KyvoOnboarding(KyvoBaseCog):
     async def on_guild_join(self, guild: discord.Guild):
         await self._seed_guild_language(guild)
 
+        embed = await self.build_welcome_embed(guild)
+
         channel = resolve_welcome_channel(guild)
         if channel is None:
             print(f"[ONBOARDING][WARN] No usable channel found to post the welcome message (guild={guild.id}).", flush=True)
-            return
+        else:
+            try:
+                await channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[ONBOARDING][ERROR] Failed to send welcome message (guild={guild.id}, channel={channel.id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
 
-        embed = await self.build_welcome_embed(guild)
+        # 🛡️ 채널 공지가 끝난 뒤에 별도로 시도한다 - 이 블록에서 뭘 하든(audit log 조회 실패,
+        # 권한 없음, DM 차단 등) 위 채널 공지 흐름에는 이미 영향을 줄 수 없는 시점이다.
+        await self._notify_inviter_dm(guild, embed)
+
+    async def _notify_inviter_dm(self, guild: discord.Guild, embed: discord.Embed) -> None:
+        """가능하면 이 서버에 봇을 초대한 사람을 Audit Log(BOT_ADD)에서 찾아 같은 온보딩 임베드를
+        DM으로도 보낸다. 채널 공지가 이미 주 통지 수단이라 이건 어디까지나 보너스 - 권한이 없거나,
+        조회에 실패하거나, 초대자를 못 찾거나, DM이 막혀 있어도 전부 조용히 넘어간다(재시도 없음)."""
         try:
-            await channel.send(embed=embed)
+            bot_member = guild.me
+            if bot_member is None or not bot_member.guild_permissions.view_audit_log:
+                print(f"[ONBOARDING] Skipping inviter DM (no view_audit_log permission, guild={guild.id}).", flush=True)
+                return
+
+            # Discord가 BOT_ADD 감사 로그 엔트리를 기록할 시간을 짧게 준다 - on_guild_join
+            # 발화 시점엔 아직 안 써져 있을 수 있다. 길게 재시도하지 않고 한 번만 조회한다.
+            await asyncio.sleep(1.5)
+
+            inviter: discord.User | discord.Member | None = None
+            async for entry in guild.audit_logs(action=discord.AuditLogAction.bot_add, limit=5):
+                if entry.target and entry.target.id == self.bot.user.id:
+                    inviter = entry.user  # audit_logs는 최신순이라 첫 매치가 가장 최근 것
+                    break
+
+            if inviter is None:
+                print(f"[ONBOARDING] No matching bot_add audit log entry found (guild={guild.id}).", flush=True)
+                return
+
+            await inviter.send(embed=embed)
+            print(f"[ONBOARDING] Sent onboarding DM to inviter user={inviter.id} (guild={guild.id}).", flush=True)
         except (discord.Forbidden, discord.HTTPException) as e:
-            print(f"[ONBOARDING][ERROR] Failed to send welcome message (guild={guild.id}, channel={channel.id}): "
+            print(f"[ONBOARDING][WARN] Failed to DM this guild's inviter (guild={guild.id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+        except Exception as e:
+            print(f"[ONBOARDING][WARN] Unexpected error while notifying inviter (guild={guild.id}): "
                   f"{type(e).__name__}: {e}", flush=True)
 
     # 🛡️ default_permissions(administrator=True)는 has_permissions()와 달리 "권한 없으면 에러"가
