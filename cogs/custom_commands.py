@@ -283,6 +283,21 @@ class CustomCommands(KyvoBaseCog):
                 await interaction.followup.send(msg, ephemeral=True)
                 return
 
+            # 🛡️ [생성 시점으로 당김] manage_roles 보유/역할 위계는 원래 실행 시점(_execute_role_action)
+            # 에만 체크돼서, 나중에 트리거를 실행한 유저에게만 "사용 불가" 메시지가 조용히 나가고
+            # 정작 만든 관리자는 문제를 몰랐다 - 대시보드 통합을 계기로 생성 시점에도 authoritative하게
+            # 재확인한다(트위치 giveaway와 동일한 원칙). role_add/role_remove 둘 다 해당 - 역할을
+            # 부여하든 회수하든 봇이 그 역할보다 위에 있어야 하고 manage_roles가 있어야 하는 건 같다.
+            bot_member = interaction.guild.me
+            if not bot_member.guild_permissions.manage_roles:
+                msg = await self.get_msg(guild_id, "cc_err_no_manage_roles")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+            if bot_member.top_role <= role:
+                msg = await self.get_msg(guild_id, "cc_err_role_hierarchy", role=role.name)
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+
             # A/2: 위험 권한 보유 시 2차 확인 (role_add에만 해당)
             if action == "role_add":
                 dangerous = _get_dangerous_permissions(role)

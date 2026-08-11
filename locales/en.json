@@ -202,6 +202,8 @@
   "clear_spam_success": "✅ Successfully cleared spam counter for {mention}.",
   "clear_spam_fail": "⚠️ Failed to connect to Redis. Counter will auto-reset after window expiration.",
   "cc_err_admin_role_blocked": "❌ `{role}` cannot be used - it has Administrator permissions, which are never allowed as a custom-command reward.",
+  "cc_err_no_manage_roles": "❌ The bot doesn't have the **Manage Roles** permission on this server, so this custom command can't be created.",
+  "cc_err_role_hierarchy": "❌ The bot's role is positioned below `{role}`, so it can't assign or remove that role. Please move the bot's role above `{role}` in Server Settings and try again.",
   "cc_warning_dangerous_role": "⚠️ The role **{role}** grants the following elevated permissions: {permissions}\n\nAnyone who triggers this command will receive **all of these permissions**. Are you sure you want to continue?",
   "cc_confirm_button": "Confirm",
   "cc_cancel_button": "Cancel",

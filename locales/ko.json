@@ -202,6 +202,8 @@
   "clear_spam_success": "✅ {mention}님의 도배 카운터를 즉시 초기화했습니다.",
   "clear_spam_fail": "⚠️ Redis 연결 실패. 윈도우 만료 후 자동 초기화됩니다.",
   "cc_err_admin_role_blocked": "❌ `{role}`은 Administrator 권한을 가진 역할이라 커스텀 명령어 보상으로 사용할 수 없습니다.",
+  "cc_err_no_manage_roles": "❌ 이 서버에서 봇에게 **역할 관리** 권한이 없어서 이 커스텀 명령어를 만들 수 없습니다.",
+  "cc_err_role_hierarchy": "❌ 봇의 역할이 `{role}`보다 낮은 위치에 있어서 이 역할을 부여하거나 제거할 수 없습니다. 서버 설정에서 봇 역할을 `{role}`보다 위로 옮긴 뒤 다시 시도해주세요.",
   "cc_warning_dangerous_role": "⚠️ **{role}** 역할은 다음 상위 권한을 갖고 있습니다: {permissions}\n\n이 명령어를 실행하는 누구든 **이 권한을 전부** 받게 됩니다. 계속하시겠습니까?",
   "cc_confirm_button": "확인",
   "cc_cancel_button": "취소",
