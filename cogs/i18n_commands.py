@@ -94,6 +94,9 @@ COMMAND_KO: dict[str, dict[str, str]] = {
 
     # ── onboarding.py ──
     "dashboard": {"name": "대시보드", "description": "이 서버의 관리자 대시보드 링크를 받습니다."},
+
+    # ── help.py ──
+    "help": {"name": "도움말", "description": "Kyvo가 할 수 있는 일을 카테고리별로 확인합니다."},
 }
 
 # (qualified_name, 파라미터의 파이썬 식별자) -> {"name": ..., "description": ...}

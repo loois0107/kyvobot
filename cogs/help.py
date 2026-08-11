@@ -78,7 +78,11 @@ class KyvoHelp(KyvoBaseCog):
 
         title = await self.get_msg(guild_id, "help_title")
         intro = await self.get_msg(guild_id, "help_intro")
-        quickstart = await self.get_msg(guild_id, "help_quickstart")
+        # 관리자에겐 /dashboard로, 일반 유저에겐 아래 버튼(프로필 페이지)으로 안내한다 - 일반
+        # 유저는 애초에 /dashboard를 실행할 권한이 없어서(default_permissions administrator=True),
+        # "언제든 /dashboard를 실행하세요"라고 안내하면 본인은 못 쓰는 명령어를 안내받는 셈이 된다.
+        quickstart_key = "help_quickstart_admin" if is_admin else "help_quickstart_member"
+        quickstart = await self.get_msg(guild_id, quickstart_key)
         embed = discord.Embed(title=title, description=f"{intro}\n\n{quickstart}", color=HELP_EMBED_COLOR)
 
         for category_key, qualified_names in HELP_CATEGORIES:
@@ -111,12 +115,20 @@ class KyvoHelp(KyvoBaseCog):
 
         view = None
         if DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
-            button_label = await self.get_msg(guild.id, "dashboard_link_button")
+            # 관리자는 서버 관리자 대시보드로, 일반 유저는 본인 프로필 페이지로 - 관리자 대시보드는
+            # 어차피 requireGuildAdmin(대시보드 쪽)에 막혀서 일반 유저가 눌러봤자 403만 볼 뿐이다.
+            if is_admin:
+                button_label = await self.get_msg(guild.id, "dashboard_link_button")
+                target_path = f"dashboard/{guild.id}"
+            else:
+                button_label = await self.get_msg(guild.id, "help_profile_button")
+                target_path = f"profile/{guild.id}"
+
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label=button_label,
                 style=discord.ButtonStyle.link,
-                url=f"{DASHBOARD_BASE_URL}/dashboard/{guild.id}",
+                url=f"{DASHBOARD_BASE_URL}/{target_path}",
             ))
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
