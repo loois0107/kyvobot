@@ -402,8 +402,6 @@
   "onboarding_field_leveling_desc": "대시보드에서 XP 배율, 역할 보상, 서버 상점을 설정할 수 있어요.",
   "onboarding_field_automod_title": "🛡️ 자동 관리",
   "onboarding_field_automod_desc": "스팸/욕설 필터링, 익명 제보함 등을 대시보드에서 켜고 끌 수 있어요.",
-  "onboarding_field_language_title": "🌐 언어",
-  "onboarding_field_language_desc": "KyvoBot이 응답하는 언어(영어 또는 한국어)는 대시보드의 설정 페이지에서 언제든 바꿀 수 있어요.",
   "automod_log_title": "🚨 자동 관리 조치 발생",
   "automod_log_field_offender": "대상 유저",
   "automod_log_field_channel": "채널",

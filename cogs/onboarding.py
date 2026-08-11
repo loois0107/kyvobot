@@ -11,6 +11,18 @@ DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
 DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
 ONBOARDING_EMBED_COLOR = 0x5865F2
 
+# 🛡️ [항상 이중언어] 이 서버의 최초 language는 guild.preferred_locale로 자동 시딩되는데,
+# 이 값은 서버 관리자가 디스코드 서버 설정에서 일부러 "서버 언어"를 지정해야만 정확해서
+# (대부분의 서버는 안 건드려서 기본값인 영어로 남는다) 실제 서버 사용 언어와 다를 수 있다.
+# "언어를 어떻게 바꾸는지" 안내가 잘못 시딩된 언어로만 나가면, 그 안내 자체를 못 읽어서
+# 못 고치는 역설이 생긴다 - 그래서 이 필드만은 guild_settings.language와 무관하게 항상
+# 한국어+영어를 동시에 보여준다(get_msg를 거치지 않는 고정 상수).
+ONBOARDING_LANGUAGE_FIELD_TITLE = "🌐 Language / 언어"
+ONBOARDING_LANGUAGE_FIELD_DESC = (
+    "이 봇의 언어를 대시보드에서 바꿀 수 있어요.\n"
+    "You can change the bot's language in the dashboard."
+)
+
 
 def resolve_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
     """온보딩 메시지를 보낼 채널을 고른다: system_channel(봇이 실제로 쓸 수 있으면) -> 없거나
@@ -50,11 +62,13 @@ class KyvoOnboarding(KyvoBaseCog):
             ("onboarding_field_ticket_title", "onboarding_field_ticket_desc"),
             ("onboarding_field_leveling_title", "onboarding_field_leveling_desc"),
             ("onboarding_field_automod_title", "onboarding_field_automod_desc"),
-            ("onboarding_field_language_title", "onboarding_field_language_desc"),
         ):
             field_title = await self.get_msg(guild.id, title_key)
             field_desc = await self.get_msg(guild.id, desc_key)
             embed.add_field(name=field_title, value=field_desc, inline=False)
+
+        # 언어 필드는 위 루프와 달리 get_msg(시딩된 언어)를 거치지 않고 항상 고정 이중언어로 표시
+        embed.add_field(name=ONBOARDING_LANGUAGE_FIELD_TITLE, value=ONBOARDING_LANGUAGE_FIELD_DESC, inline=False)
 
         return embed
 
