@@ -79,6 +79,8 @@
   "music_error": "❌ Audio player engine exception logged: `{error}`",
   "welcome_title": "👋 Welcome!",
   "welcome_desc": "Welcome {mention} to **{guild}**!",
+  "welcome_card_title": "WELCOME TO THE SERVER",
+  "welcome_card_count": "Member #{count}",
   "goodbye_title": "👋 Goodbye",
   "goodbye_desc": "**{member}** has left **{guild}**.\n👥 {count} members remaining.",
   "goodbye_default_message": "Hope to see you again!",

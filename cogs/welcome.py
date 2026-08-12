@@ -8,26 +8,35 @@ import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
 class Welcome(KyvoBaseCog):
+    # 🛡️ [한글 지원] Font.ttf(Roboto Bold)는 한글 글리프가 아예 없어서(실측 확인: 서로 다른
+    # 한글 글자를 그려도 전부 같은 "글리프 없음" 박스로 렌더링됨) 한국어 서버에서 카드 이미지에
+    # 한글을 그리면 깨진다. FontKR.otf(Pretendard Bold, SIL OFL 라이선스)를 언어별로 별도 로드해서
+    # 해결한다 - 기존 Roboto와 굵기/톤이 비슷하게 맞춰지도록 고른 폰트다.
+    FONT_PATHS = {"en": "Font.ttf", "ko": "FontKR.otf"}
+    FONT_SIZES = {"title": 36, "sub": 42, "count": 20}
+
     def __init__(self, bot):
         super().__init__(bot)
-        self.font_path = "Font.ttf"
-        self.fonts = {}
+        self.fonts: dict[str, dict[str, ImageFont.FreeTypeFont]] = {}
         self.preload_fonts()
 
     def preload_fonts(self):
-        if os.path.exists(self.font_path):
-            try:
-                self.fonts["title"] = ImageFont.truetype(self.font_path, 36)
-                self.fonts["sub"] = ImageFont.truetype(self.font_path, 42)
-                self.fonts["count"] = ImageFont.truetype(self.font_path, 20)
-            except Exception:
-                self.set_default_fonts()
-        else:
-            self.set_default_fonts()
+        for lang, path in self.FONT_PATHS.items():
+            self.fonts[lang] = self._load_font_set(path)
 
-    def set_default_fonts(self):
+    def _load_font_set(self, path: str) -> dict:
+        if os.path.exists(path):
+            try:
+                return {key: ImageFont.truetype(path, size) for key, size in self.FONT_SIZES.items()}
+            except Exception:
+                pass
+        # 폰트 파일이 없거나 로드에 실패하면 언어별로 각각 안전하게 폴백한다(다른 언어 폰트를
+        # 대신 쓰지 않음 - 그것도 결국 그 언어 글리프가 없을 수 있어 동일한 문제가 재발한다).
         default = ImageFont.load_default()
-        self.fonts = {"title": default, "sub": default, "count": default}
+        return {key: default for key in self.FONT_SIZES}
+
+    def get_fonts(self, lang: str) -> dict:
+        return self.fonts.get(lang, self.fonts["en"])
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
@@ -98,9 +107,18 @@ class Welcome(KyvoBaseCog):
             card = Image.alpha_composite(card.convert("RGBA"), overlay)
             draw = ImageDraw.Draw(card)
 
-            draw.text((240, 55), "WELCOME TO THE SERVER", fill="#b5bac1", font=self.fonts["title"])
-            draw.text((240, 100), f"{member.display_name}", fill=card_color, font=self.fonts["sub"])
-            draw.text((240, 160), f"Operative #{len(member.guild.members):,}", fill="#ffffff", font=self.fonts["count"])
+            # 🛡️ [한글 지원 + 평문화] 예전엔 "WELCOME TO THE SERVER"/"Operative #..."가 서버 언어와
+            # 무관하게 항상 하드코딩된 영어로 그려졌다 - 이미 위에서 불러온 row에 language가 최상위
+            # 필드로 있으므로 추가 쿼리 없이 바로 꺼내 쓴다. 폰트도 언어에 맞는 걸 골라야 실제로
+            # 화면에 제대로 보인다(get_fonts 참고).
+            lang = row.get("language", "en")
+            fonts = self.get_fonts(lang)
+            welcome_line = await self.get_msg(guild_id, "welcome_card_title")
+            count_line = await self.get_msg(guild_id, "welcome_card_count", count=f"{len(member.guild.members):,}")
+
+            draw.text((240, 55), welcome_line, fill="#b5bac1", font=fonts["title"])
+            draw.text((240, 100), f"{member.display_name}", fill=card_color, font=fonts["sub"])
+            draw.text((240, 160), count_line, fill="#ffffff", font=fonts["count"])
 
             draw.ellipse((42, 42, 198, 198), outline=card_color, width=3)
 

@@ -79,6 +79,8 @@
   "music_error": "❌ 음악 내부 오류 발생: `{error}`",
   "welcome_title": "👋 환영합니다!",
   "welcome_desc": "{mention}님, **{guild}**에 오신 걸 환영해요!",
+  "welcome_card_title": "서버에 오신 것을 환영합니다",
+  "welcome_card_count": "멤버 #{count}",
   "goodbye_title": "👋 안녕히 가세요",
   "goodbye_desc": "**{member}**님이 **{guild}**에서 나갔어요.\n👥 남은 멤버: {count}명",
   "goodbye_default_message": "다음에 또 만나요!",
