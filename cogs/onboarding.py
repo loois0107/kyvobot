@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from cogs.base import KyvoBaseCog
 from locales import get_locale_message
+import aiohttp
 import asyncio
 import os
 
@@ -11,6 +12,19 @@ DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
 # 잘못된 값(스킴 누락 등)을 그대로 Discord API에 보내면 응답 자체가 HTTPException으로 실패한다.
 DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
 ONBOARDING_EMBED_COLOR = 0x5865F2
+
+# 🛡️ [운영자 전용 알림] 서버 초대/퇴장을 서포트 서버 관리자 채널로 알리는 웹훅 - 하드코딩 금지,
+# .env에서만 읽는다. 미설정이면 cog_load에서 한 번만 경고를 남기고, 이후 호출부는 매번 조용히
+# 스킵한다(길드가 들고날 때마다 반복 로그가 쌓이는 걸 피함) - INTERNAL_API_SECRET(ticket_ai.py)과
+# 동일한 패턴.
+SERVER_LOG_WEBHOOK_URL = os.getenv("SERVER_LOG_WEBHOOK_URL") or ""
+SERVER_LOG_JOIN_COLOR = 0x2ECC71
+SERVER_LOG_REMOVE_COLOR = 0xE74C3C
+# 이 알림은 초대/퇴장한 길드가 아니라 운영자 본인이 보는 화면이라, 그 길드의 guild_settings.language로
+# 번역할 이유가 없다 - ONBOARDING_LANGUAGE_FIELD_TITLE/DESC와 동일한 이유로 get_msg를 거치지 않는
+# 고정 텍스트로 둔다.
+SERVER_LOG_JOIN_TITLE = "📥 새로운 서버에 봇이 초대되었습니다!"
+SERVER_LOG_REMOVE_TITLE = "📤 서버에서 봇이 퇴장되었습니다."
 
 # 🛡️ [항상 이중언어] 이 서버의 최초 language는 guild.preferred_locale로 자동 시딩되는데,
 # 이 값은 서버 관리자가 디스코드 서버 설정에서 일부러 "서버 언어"를 지정해야만 정확해서
@@ -49,6 +63,11 @@ def resolve_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
 
 
 class KyvoOnboarding(KyvoBaseCog):
+    async def cog_load(self):
+        if not SERVER_LOG_WEBHOOK_URL:
+            print("[ONBOARDING][WARN] SERVER_LOG_WEBHOOK_URL not set - guild join/leave "
+                  "notifications to the support server are disabled.", flush=True)
+
     async def build_welcome_embed(self, guild: discord.Guild) -> discord.Embed:
         title = await self.get_msg(guild.id, "onboarding_welcome_title")
         desc = await self.get_msg(guild.id, "onboarding_welcome_desc")
@@ -132,6 +151,56 @@ class KyvoOnboarding(KyvoBaseCog):
         # 🛡️ 채널 공지가 끝난 뒤에 별도로 시도한다 - 이 블록에서 뭘 하든(audit log 조회 실패,
         # 권한 없음, DM 차단 등) 위 채널 공지 흐름에는 이미 영향을 줄 수 없는 시점이다.
         await self._notify_inviter_dm(guild, embed)
+
+        # 🛡️ 운영자 알림도 맨 마지막에 시도한다 - 여기서 뭐가 실패하든 위의 언어 시딩/채널 공지/
+        # DM은 이미 다 끝난 뒤라 전혀 영향받지 않는다.
+        await self._send_server_log_webhook(self._build_join_log_embed(guild))
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        """🛡️ [순수 알림 전용] 이 리스너는 운영자에게 퇴장 사실을 알리는 것 하나만 한다 -
+        guild_settings 삭제, 캐시 정리, 그 밖의 어떤 데이터 정리 로직도 여기 넣지 않는다.
+        (그런 정리가 필요하다면 별도로 신중하게 설계해야 할 완전히 다른 작업이다.)"""
+        await self._send_server_log_webhook(self._build_remove_log_embed(guild))
+
+    def _build_join_log_embed(self, guild: discord.Guild) -> discord.Embed:
+        owner = guild.owner
+        owner_text = f"{owner.mention} (`{guild.owner_id}`)" if owner else f"`{guild.owner_id}`"
+
+        embed = discord.Embed(
+            title=SERVER_LOG_JOIN_TITLE,
+            color=SERVER_LOG_JOIN_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="서버", value=f"{guild.name} (`{guild.id}`)", inline=False)
+        embed.add_field(name="멤버 수", value=f"{guild.member_count:,}명", inline=True)
+        embed.add_field(name="서버 소유자", value=owner_text, inline=True)
+        embed.add_field(name="봇의 총 서버 수", value=f"{len(self.bot.guilds):,}개", inline=True)
+        return embed
+
+    def _build_remove_log_embed(self, guild: discord.Guild) -> discord.Embed:
+        embed = discord.Embed(
+            title=SERVER_LOG_REMOVE_TITLE,
+            color=SERVER_LOG_REMOVE_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="서버", value=f"{guild.name} (`{guild.id}`)", inline=False)
+        embed.add_field(name="남은 총 서버 수", value=f"{len(self.bot.guilds):,}개", inline=True)
+        return embed
+
+    async def _send_server_log_webhook(self, embed: discord.Embed) -> None:
+        """서포트 서버 관리자 채널로 길드 join/remove 알림을 보낸다 - 실패해도(URL 미설정,
+        형식 오류, 네트워크 문제, 웹훅 삭제 등) 호출부 흐름엔 절대 영향을 주지 않는다."""
+        if not SERVER_LOG_WEBHOOK_URL:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                webhook = discord.Webhook.from_url(SERVER_LOG_WEBHOOK_URL, session=session)
+                await webhook.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException, ValueError) as e:
+            print(f"[ONBOARDING][WARN] Failed to send server log webhook: {type(e).__name__}: {e}", flush=True)
+        except Exception as e:
+            print(f"[ONBOARDING][WARN] Unexpected error sending server log webhook: {type(e).__name__}: {e}", flush=True)
 
     async def _notify_inviter_dm(self, guild: discord.Guild, embed: discord.Embed) -> None:
         """가능하면 이 서버에 봇을 초대한 사람을 Audit Log(BOT_ADD)에서 찾아 같은 온보딩 임베드를
