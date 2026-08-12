@@ -245,7 +245,11 @@ class CustomCommands(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"❌ cc_add 에러 발생: `{type(e).__name__}: {e}`", ephemeral=True)
+            # 🛡️ [사용자 대면 예외 노출 제거] 예외 클래스명/메시지를 그대로 유저에게 보내던 걸 로케일
+            # 기반 일반 메시지로 교체 - traceback.print_exc()가 이미 서버 로그에 상세를 남기므로
+            # 디버깅 정보는 그대로 보존되고, 유저는 알아들을 수 있는 안내만 받는다.
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg, ephemeral=True)
 
     async def _confirm_dangerous_role(self, interaction: discord.Interaction, role: discord.Role, dangerous: list[str]) -> bool:
         """위험 권한 역할일 때 Confirm/Cancel 뷰를 보여주고 응답을 기다린다."""
@@ -316,7 +320,11 @@ class CustomCommands(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"❌ cc_add 에러 발생: `{type(e).__name__}: {e}`", ephemeral=True)
+            # 🛡️ [사용자 대면 예외 노출 제거] 예외 클래스명/메시지를 그대로 유저에게 보내던 걸 로케일
+            # 기반 일반 메시지로 교체 - traceback.print_exc()가 이미 서버 로그에 상세를 남기므로
+            # 디버깅 정보는 그대로 보존되고, 유저는 알아들을 수 있는 안내만 받는다.
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg, ephemeral=True)
 
     @cc_add_group.command(name="role_add", description="Create a self-service custom command that grants a role to whoever triggers it. Try /dashboard.")
     @app_commands.describe(name="The command's name, without the slash prefix.", role="The role this command grants when triggered.")
@@ -355,7 +363,8 @@ class CustomCommands(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"❌ cc_delete 에러 발생: `{type(e).__name__}: {e}`", ephemeral=True)
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
     #  슬래시 관리자 명령어 (목록 조회)
@@ -390,7 +399,8 @@ class CustomCommands(KyvoBaseCog):
             await interaction.followup.send(embed=embed)
         except Exception as e:
             traceback.print_exc()
-            await interaction.followup.send(f"⚠️ 에러 발생: `{type(e).__name__}: {e}`")
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg)
 
 async def setup(bot):
     await bot.add_cog(CustomCommands(bot))

@@ -485,7 +485,10 @@ class KyvoAnonymousReports(KyvoBaseCog):
             )
         except Exception as e:
             print(f"[ANON_REPORT][ERROR] Unban failed: {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send(f"❌ {type(e).__name__}: {e}", ephemeral=True)
+            # 🛡️ [사용자 대면 예외 노출 제거] 예외 상세는 위 print()로 이미 서버 로그에 남았으므로,
+            # 유저에게는 로케일 기반 일반 메시지만 보낸다.
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         if res.data:

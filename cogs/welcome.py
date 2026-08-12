@@ -122,9 +122,16 @@ class Welcome(KyvoBaseCog):
                 image_binary.seek(0)
                 file = discord.File(fp=image_binary, filename="welcome_card.png")
 
+                # 🛡️ [i18n 배선] goodbye(on_member_remove)와 동일한 방식으로 서버 언어(guild_settings.language)를
+                # 따르도록 get_msg로 교체 - 예전엔 이 임베드만 언어 설정과 무관하게 항상 영어로 하드코딩돼 있었다.
+                # (카드 이미지 위에 PIL로 직접 그리는 "WELCOME TO THE SERVER"/"Operative #..." 텍스트는 폰트
+                # 렌더링이 걸린 별도 범위라 이번엔 건드리지 않는다 - 3단계에서 별도로 다룰 것)
+                embed_title = await self.get_msg(guild_id, "welcome_title")
+                embed_desc = await self.get_msg(guild_id, "welcome_desc", mention=member.mention, guild=member.guild.name)
+
                 welcome_embed = discord.Embed(
-                    title=f"📥 SYSTEM ACCESS GRANTED",
-                    description=f"Welcome {member.mention} to **{member.guild.name}**!",
+                    title=embed_title,
+                    description=embed_desc,
                     color=discord.Color.from_str(card_color)
                 )
                 welcome_embed.set_image(url="attachment://welcome_card.png")
@@ -148,38 +155,35 @@ class Welcome(KyvoBaseCog):
             channel = member.guild.get_channel(int(channel_id))
             if not channel: return
 
+            # 🛡️ [i18n 배선 수리] 죽은 self.bot.locale_manager 대신, 서버 설정 언어(guild_settings.language) 기반
+            # KyvoBaseCog.get_msg로 교체 - 예전엔 매번 AttributeError가 나서 이 임베드가 아예 발송된 적이 없었다.
+            #
+            # 🛡️ [기본 문구도 로케일화] 관리자가 대시보드에서 퇴장 메시지를 안 적었을 때 쓰던 기본값이
+            # "Has disconnected from the grid."로 하드코딩돼 있었다 - 서버 언어와 무관하게 항상 영어였고
+            # 톤도 이 참에 같이 정리한다.
+            default_msg = await self.get_msg(guild_id, "goodbye_default_message")
+
             # 🛡️ 대시보드에서 필드를 비워서 "기본값으로 리셋"하면 빈 문자열("")이 저장될 수 있다 -
             # .get(key, default)는 키가 존재하면 그 값(빈 문자열)을 그대로 쓰므로, or로 falsy(빈 문자열
             # 포함)까지 기본값으로 대체해야 실제로 리셋처럼 동작한다.
-            raw_msg = nested_settings.get("goodbye_message") or "Has disconnected from the grid."
+            raw_msg = nested_settings.get("goodbye_message") or default_msg
             formatted_msg = raw_msg.replace("{username}", member.name)\
                                    .replace("{server}", member.guild.name)\
                                    .replace("{member_count}", str(member.guild.member_count))
 
-            # 🛡️ [i18n 배선 수리] 죽은 self.bot.locale_manager 대신, 서버 설정 언어(guild_settings.language) 기반
-            # KyvoBaseCog.get_msg로 교체 - 예전엔 매번 AttributeError가 나서 이 임베드가 아예 발송된 적이 없었다.
             title = await self.get_msg(guild_id, "goodbye_title")
-            header = await self.get_msg(guild_id, "goodbye_manifest_header")
-            lbl_target = await self.get_msg(guild_id, "goodbye_offline_target")
-            lbl_pool = await self.get_msg(guild_id, "goodbye_remaining_pool")
-            lbl_alert = await self.get_msg(guild_id, "goodbye_alert_system")
+            desc = await self.get_msg(
+                guild_id, "goodbye_desc",
+                member=member.name, guild=member.guild.name, count=f"{member.guild.member_count:,}",
+            )
             footer_text = await self.get_msg(guild_id, "goodbye_footer")
 
             embed = discord.Embed(
                 title=title,
+                description=f"{desc}\n\n> {formatted_msg}",
                 color=discord.Color.from_str("#FF0055"),
                 timestamp=discord.utils.utcnow()
             )
-
-            manifest_data = (
-                f"**{header}**\n\n"
-                f"📡 **CLUSTER NODE:** `{member.guild.name}`\n"
-                f"{lbl_target} `{member.name}`\n"
-                f"{lbl_pool} {member.guild.member_count:,} Active Nodes\n\n"
-                f"{lbl_alert}\n"
-                f"> {formatted_msg}"
-            )
-            embed.description = manifest_data
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.set_footer(text=footer_text)
 

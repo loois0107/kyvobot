@@ -1370,7 +1370,8 @@ class KyvoParty(KyvoBaseCog):
             )
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to save tier role mapping: {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send(f"❌ {type(e).__name__}: {e}", ephemeral=True)
+            msg = await self.get_msg(guild_id, "errors_internal")
+            await interaction.followup.send(msg, ephemeral=True)
             return
 
         # 🔗 방금 저장한 티어까지 합쳐서(upsert가 성공했으니 확정) 아직 안 정해진 티어를 계산한다.
@@ -1476,7 +1477,8 @@ class KyvoParty(KyvoBaseCog):
                 return
             except discord.HTTPException as e:
                 print(f"[PARTY][ERROR] HTTPException while granting tier role: {type(e).__name__}: {e}", flush=True)
-                await interaction.followup.send(f"❌ {type(e).__name__}: {e}", ephemeral=True)
+                msg = await self.get_msg(guild_id, "errors_internal")
+                await interaction.followup.send(msg, ephemeral=True)
                 return
 
         msg = await self.get_msg(guild_id, "party_tier_set_success", tier=tier.value)
