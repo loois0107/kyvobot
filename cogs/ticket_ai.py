@@ -227,7 +227,9 @@ class KyvoTicketAI(KyvoBaseCog):
             msg = await self.get_msg(guild_id, "tai_admin_err_too_long", max=TICKET_KNOWLEDGE_MAX_LENGTH)
             await interaction.followup.send(msg, ephemeral=True)
         elif result["status"] != "ok":
-            msg = await self.get_msg(guild_id, "tai_admin_err_failed", detail=result.get('detail', result['status']))
+            # 🛡️ [사용자 대면 예외 노출 제거] result["detail"](원시 예외 타입/메시지)는 더 이상
+            # 유저에게 보내지 않는다 - _add_knowledge()가 이미 print()로 서버 로그에 상세를 남긴다.
+            msg = await self.get_msg(guild_id, "tai_admin_err_failed")
             await interaction.followup.send(msg, ephemeral=True)
         else:
             msg = await self.get_msg(guild_id, "tai_admin_success")
@@ -325,7 +327,9 @@ class KyvoTicketAI(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             print(f"[TICKET CREATION EXCEPTION] Pipeline failed: {e}")
-            msg = await self.get_msg(interaction.guild_id, "tai_err_internal_exception", error=e)
+            # 🛡️ [사용자 대면 예외 노출 제거] 원시 예외 메시지는 더 이상 유저에게 보내지 않는다 -
+            # 위 print()가 이미 서버 로그에 상세를 남긴다.
+            msg = await self.get_msg(interaction.guild_id, "tai_err_internal_exception")
             await interaction.followup.send(msg, ephemeral=True)
 
     async def _resolve_admin_log_channel(self, guild: discord.Guild, guild_id: str) -> discord.TextChannel | None:
@@ -777,8 +781,11 @@ class KyvoTicketAI(KyvoBaseCog):
 
         except Exception as e:
             print(f"[RAG ENGINE EXCEPTION] Pipeline failed: {e}")
+            # 🛡️ [사용자 대면 예외 노출 제거] 이전엔 이 임베드에 원시 예외 메시지와 "OpenAI billing
+            # balance limits" 같은 내부 인프라 안내까지 그대로 노출됐다(일반 티켓 유저가 보는
+            # 화면인데도) - 위 print()가 이미 서버 로그에 상세를 남기므로 유저에게는 일반 메시지만 보낸다.
             error_title = await self.get_msg(guild_id, "tai_error_title")
-            error_desc = await self.get_msg(guild_id, "tai_error_desc", error=e)
+            error_desc = await self.get_msg(guild_id, "tai_error_desc")
             error_embed = discord.Embed(
                 title=error_title,
                 description=error_desc,
