@@ -6,6 +6,8 @@
   "rank_card_leaderboard_button": "🏆 리더보드 보기",
   "dashboard_link_button": "🎛️ 관리자 대시보드 열기",
   "dashboard_link_unavailable": "⚠️ 현재 봇에 관리자 대시보드 링크가 설정되어 있지 않습니다.",
+  "language_set_success": "✅ 서버 언어가 **한국어**로 설정되었습니다.",
+  "language_err_save_failed": "❌ 데이터베이스 오류로 서버 언어를 저장하지 못했습니다. 다시 시도해주세요.",
   "help_title": "🤖 Kyvo 명령어",
   "help_intro": "Kyvo가 할 수 있는 일들을 카테고리별로 간단히 모아봤어요.",
   "help_quickstart_admin": "⚡ **빠른 시작:** 언제든 `/dashboard`를 실행하면 이 서버의 관리자 대시보드로 바로 이동할 수 있어요.",

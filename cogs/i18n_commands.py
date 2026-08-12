@@ -94,6 +94,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
 
     # ── onboarding.py ──
     "dashboard": {"name": "대시보드", "description": "이 서버의 관리자 대시보드 링크를 받습니다."},
+    "language": {"name": "언어", "description": "이 서버의 언어를 변경합니다 (영어 또는 한국어)."},
 
     # ── help.py ──
     "help": {"name": "도움말", "description": "Kyvo가 할 수 있는 일을 카테고리별로 확인합니다."},
@@ -161,6 +162,9 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
 
     # ── anonymous_reports.py (anonymous_unban) ──
     ("anonymous_unban", "user"): {"name": "유저", "description": "익명 제보 차단을 해제할 멤버"},
+
+    # ── onboarding.py ──
+    ("language", "language"): {"name": "언어", "description": "이제부터 Kyvo가 응답할 언어"},
 }
 
 

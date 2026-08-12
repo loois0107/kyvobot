@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from cogs.base import KyvoBaseCog
+from locales import get_locale_message
 import asyncio
 import os
 
@@ -16,11 +17,12 @@ ONBOARDING_EMBED_COLOR = 0x5865F2
 # (대부분의 서버는 안 건드려서 기본값인 영어로 남는다) 실제 서버 사용 언어와 다를 수 있다.
 # "언어를 어떻게 바꾸는지" 안내가 잘못 시딩된 언어로만 나가면, 그 안내 자체를 못 읽어서
 # 못 고치는 역설이 생긴다 - 그래서 이 필드만은 guild_settings.language와 무관하게 항상
-# 한국어+영어를 동시에 보여준다(get_msg를 거치지 않는 고정 상수).
+# 한국어+영어를 동시에 보여준다(get_msg를 거치지 않는 고정 상수). /language 명령어가
+# 생긴 뒤로는 대시보드보다 이 명령어를 먼저 안내한다 - 즉시 실행 가능하기 때문.
 ONBOARDING_LANGUAGE_FIELD_TITLE = "🌐 Language / 언어"
 ONBOARDING_LANGUAGE_FIELD_DESC = (
-    "이 봇의 언어를 대시보드에서 바꿀 수 있어요.\n"
-    "You can change the bot's language in the dashboard."
+    "이 봇의 언어는 /language 명령어로 바로 바꿀 수 있어요.\n"
+    "You can change the bot's language instantly with the /language command."
 )
 
 
@@ -187,6 +189,43 @@ class KyvoOnboarding(KyvoBaseCog):
             # 않도록, 버튼 없이 텍스트 응답만이라도 나가게 한다.
             msg = await self.get_msg(guild_id, "dashboard_link_unavailable")
             await interaction.followup.send(msg, ephemeral=True)
+
+    # 🛡️ 대시보드의 "일반 설정" 언어 드롭다운과 완전히 동일한 기능을 디스코드 안에서 제공한다 -
+    # 같은 guild_settings.language 컬럼, 같은 Redis 캐시 키(guild:{guild_id}:settings)를 쓰므로
+    # 대시보드/이 명령어 어느 쪽에서 바꿔도 서로 꼬이지 않는다. default_permissions는 /dashboard와
+    # 동일한 이유로 administrator 전용.
+    @app_commands.command(name="language", description="Change this server's language (English or Korean).")
+    @app_commands.describe(language="The language Kyvo should reply in from now on.")
+    @app_commands.choices(language=[
+        app_commands.Choice(name="English", value="en"),
+        app_commands.Choice(name="한국어", value="ko"),
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def language(self, interaction: discord.Interaction, language: app_commands.Choice[str]):
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild_id
+        new_lang = language.value
+
+        try:
+            await asyncio.to_thread(
+                lambda: self.supabase.table("guild_settings")
+                .upsert({"guild_id": str(guild_id), "language": new_lang}, on_conflict="guild_id")
+                .execute()
+            )
+            await self.invalidate_settings_cache(guild_id)
+        except Exception as e:
+            print(f"[ONBOARDING][ERROR] Failed to save language for guild={guild_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            # 🛡️ 저장이 실패했으니 new_lang은 반영되지 않았다 - 이 에러 메시지는 (아직 유효한)
+            # 서버의 기존 언어로 보여준다(get_msg), 방금 실패한 선택값(get_locale_message)이 아니라.
+            msg = await self.get_msg(guild_id, "language_err_save_failed")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        # 🛡️ 저장이 방금 성공했으니 new_lang이 곧 이 서버의 현재 언어다 - get_msg로 다시
+        # guild_settings를 조회할 필요 없이, 이미 아는 값으로 바로 get_locale_message를 부른다.
+        msg = get_locale_message(new_lang, "language_set_success")
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot):

@@ -6,6 +6,8 @@
   "rank_card_leaderboard_button": "🏆 View Leaderboard",
   "dashboard_link_button": "🎛️ Open Admin Dashboard",
   "dashboard_link_unavailable": "⚠️ The admin dashboard link isn't configured on this bot right now.",
+  "language_set_success": "✅ Server language set to **English**.",
+  "language_err_save_failed": "❌ Failed to save the server language due to a database error. Please try again.",
   "help_title": "🤖 Kyvo Commands",
   "help_intro": "Here's a quick look at what Kyvo can do, grouped by category.",
   "help_quickstart_admin": "⚡ **Quick Start:** Run `/dashboard` anytime for a direct link to this server's admin dashboard.",
