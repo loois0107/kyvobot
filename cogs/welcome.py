@@ -111,6 +111,11 @@ class Welcome(KyvoBaseCog):
             # 무관하게 항상 하드코딩된 영어로 그려졌다 - 이미 위에서 불러온 row에 language가 최상위
             # 필드로 있으므로 추가 쿼리 없이 바로 꺼내 쓴다. 폰트도 언어에 맞는 걸 골라야 실제로
             # 화면에 제대로 보인다(get_fonts 참고).
+            #
+            # 🛡️ [대시보드와 문구 동기화 필수] welcome_card_title/welcome_card_count(locales/en.json,
+            # ko.json)는 kyvobot-dashboard의 lib/i18n/en.ts, ko.ts의 welcomePage.welcomeToServer/
+            # memberNumber(대시보드 웰컴 설정 페이지의 카드 미리보기)와 반드시 같은 문구여야 한다 -
+            # 자동 동기화 없음, 여기 값을 고치면 대시보드 쪽도 같이 확인할 것.
             lang = row.get("language", "en")
             fonts = self.get_fonts(lang)
             welcome_line = await self.get_msg(guild_id, "welcome_card_title")
