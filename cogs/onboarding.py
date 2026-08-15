@@ -205,8 +205,20 @@ class KyvoOnboarding(KyvoBaseCog):
     async def _notify_inviter_dm(self, guild: discord.Guild, embed: discord.Embed) -> None:
         """가능하면 이 서버에 봇을 초대한 사람을 Audit Log(BOT_ADD)에서 찾아 같은 온보딩 임베드를
         DM으로도 보낸다. 채널 공지가 이미 주 통지 수단이라 이건 어디까지나 보너스 - 권한이 없거나,
-        조회에 실패하거나, 초대자를 못 찾거나, DM이 막혀 있어도 전부 조용히 넘어간다(재시도 없음)."""
+        조회에 실패하거나, 초대자를 못 찾거나, DM이 막혀 있어도 전부 조용히 넘어간다(재시도 없음).
+
+        🛡️ [한디리 가이드라인] "명령어 사용이 아닌 입장/퇴장 등 이벤트로 유저에게 DM을 보내는 경우,
+        관리자가 켜고 끌 수 있어야 하며 기본값은 비허용"이어야 한다. 이 DM은 정확히 그 범주(on_guild_join
+        이벤트가 트리거, 명령어 아님)라 guild_settings.settings.inviter_dm_enabled로 게이팅한다 - 키가
+        아예 없는(기존/신규 불문) 모든 행은 .get(..., False)로 안전하게 기본 꺼짐이 된다. 이 가드는
+        audit_logs 조회나 sleep보다 먼저 와야 "꺼져 있으면 아예 시도하지 않는다"가 성립한다."""
         try:
+            row = await self.get_guild_settings(guild.id)
+            nested_settings = row.get("settings") or {}
+            if not nested_settings.get("inviter_dm_enabled", False):
+                print(f"[ONBOARDING] Skipping inviter DM (disabled by guild settings, guild={guild.id}).", flush=True)
+                return
+
             bot_member = guild.me
             if bot_member is None or not bot_member.guild_permissions.view_audit_log:
                 print(f"[ONBOARDING] Skipping inviter DM (no view_audit_log permission, guild={guild.id}).", flush=True)
