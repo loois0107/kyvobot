@@ -22,7 +22,7 @@ class KyvoPresence(commands.Cog):
         # 캐시가 아직 덜 찬 길드가 있을 경우를 대비해 None은 0으로 취급한다.
         user_count = sum(guild.member_count or 0 for guild in self.bot.guilds)
         activity = discord.Activity(type=discord.ActivityType.watching,
-                                     name=f"{user_count:,} users | /inquiry (/문의)")
+                                     name=f"{user_count:,} users • /inquiry (/문의)")
         try:
             await self.bot.change_presence(activity=activity)
         except Exception as e:
