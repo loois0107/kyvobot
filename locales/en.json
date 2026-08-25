@@ -515,5 +515,12 @@
   "tai_archive_field_executor": "Closed By",
   "tai_archive_field_executor_value": "{mention} (`ID: {id}`)",
   "tai_archive_field_summary": "Summary",
-  "tai_archive_footer": "Server ID: {guild_id}"
+  "tai_archive_footer": "Server ID: {guild_id}",
+  "inquiry_modal_title": "Contact KyvoBot",
+  "inquiry_modal_label": "What would you like to ask?",
+  "inquiry_submitted": "✅ Your inquiry has been submitted successfully!\nThe developer will follow up as soon as they review it.\n\n💬 Want a faster reply, or to be the first to hear about bot updates? Come visit the [KyvoBot Support Server]({invite_url})!",
+  "inquiry_err_cooldown": "⏳ You're sending inquiries too quickly. Please wait **{minutes}m {seconds}s** before trying again.",
+  "inquiry_send_failed": "❌ Something went wrong while delivering your inquiry. Please try again in a moment.",
+  "inquiry_reply_dm_title": "💌 A reply to your inquiry has arrived",
+  "inquiry_reply_dm_footer": "Sent from {guild_name} via KyvoBot"
 }

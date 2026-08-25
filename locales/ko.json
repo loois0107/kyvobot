@@ -515,5 +515,12 @@
   "tai_archive_field_executor": "닫은 사람",
   "tai_archive_field_executor_value": "{mention}님 (`ID: {id}`)",
   "tai_archive_field_summary": "요약",
-  "tai_archive_footer": "서버 ID: {guild_id}"
+  "tai_archive_footer": "서버 ID: {guild_id}",
+  "inquiry_modal_title": "KyvoBot 문의하기",
+  "inquiry_modal_label": "문의하실 내용을 입력해주세요",
+  "inquiry_submitted": "✅ 문의가 성공적으로 전달되었습니다!\n개발자가 내용을 확인하는 대로 처리해 드릴 예정입니다.\n\n💬 더 빠른 답변을 원하시거나 봇 업데이트 소식을 가장 먼저 받아보고 싶다면 [KyvoBot 서포트 서버]({invite_url})에 방문해 보세요!",
+  "inquiry_err_cooldown": "⏳ 문의를 너무 빠르게 보내고 있어요. **{minutes}분 {seconds}초** 후 다시 시도해주세요.",
+  "inquiry_send_failed": "❌ 문의를 전달하는 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.",
+  "inquiry_reply_dm_title": "💌 문의하신 내용에 답변이 도착했어요",
+  "inquiry_reply_dm_footer": "{guild_name}에서 KyvoBot을 통해 보낸 문의입니다"
 }
