@@ -522,5 +522,5 @@
   "inquiry_err_cooldown": "⏳ 문의를 너무 빠르게 보내고 있어요. **{minutes}분 {seconds}초** 후 다시 시도해주세요.",
   "inquiry_send_failed": "❌ 문의를 전달하는 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "inquiry_reply_dm_title": "💌 문의하신 내용에 답변이 도착했어요",
-  "inquiry_reply_dm_footer": "{guild_name}에서 KyvoBot을 통해 보낸 문의입니다"
+  "inquiry_reply_dm_footer": "KyvoBot 문의 답변"
 }

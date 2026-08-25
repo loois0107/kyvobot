@@ -522,5 +522,5 @@
   "inquiry_err_cooldown": "⏳ You're sending inquiries too quickly. Please wait **{minutes}m {seconds}s** before trying again.",
   "inquiry_send_failed": "❌ Something went wrong while delivering your inquiry. Please try again in a moment.",
   "inquiry_reply_dm_title": "💌 A reply to your inquiry has arrived",
-  "inquiry_reply_dm_footer": "Sent from {guild_name} via KyvoBot"
+  "inquiry_reply_dm_footer": "KyvoBot Inquiry Reply"
 }

@@ -270,10 +270,8 @@ class KyvoInquiry(KyvoBaseCog):
         # DM 발송 - 실패 시(DM 차단 등) 선점을 되돌려 재시도 가능하게 하고, 서포트 채널에 알림을 남긴다.
         try:
             target_user = await self.bot.fetch_user(int(reporter_user_id))
-            source_guild = self.bot.get_guild(int(guild_id))
-            guild_name = source_guild.name if source_guild else str(guild_id)
             dm_title = await self.get_msg(int(guild_id), "inquiry_reply_dm_title")
-            dm_footer = await self.get_msg(int(guild_id), "inquiry_reply_dm_footer", guild_name=guild_name)
+            dm_footer = await self.get_msg(int(guild_id), "inquiry_reply_dm_footer")
             dm_embed = discord.Embed(title=dm_title, description=reply_content, color=discord.Color.blurple(),
                                       timestamp=datetime.now(timezone.utc))
             dm_embed.set_footer(text=dm_footer)
