@@ -58,6 +58,7 @@ class KyvoBot(commands.Bot):
             'cogs.help',
             'cogs.koreanbots',
             'cogs.inquiry',
+            'cogs.presence',
         ]
         print(">>> Loading extensions... <<<", flush=True)
 

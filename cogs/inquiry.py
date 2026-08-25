@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from cogs.base import KyvoBaseCog
+from locales import get_locale_message
 import asyncio
 import os
 import time
@@ -17,6 +18,21 @@ INQUIRY_COOLDOWN_SECONDS = 300  # 유저 1명당 5분 - 개발자에게 스팸�
 INQUIRY_REPLY_ID = "kyvo_inquiry:reply"
 
 INQUIRY_EMBED_COLOR = 0x5865F2  # ticket_ai.py 설정 패널과 동일한 블러플 - "지원/서포트" 계열 임베드 관례
+
+
+def _msg(lang: str, key: str, **kwargs) -> str:
+    """cogs/base.py의 get_msg()와 동일한 포맷팅 로직이지만, "서버 설정 언어"(guild_settings.language)가
+    아니라 호출부에서 넘겨준 언어 문자열을 그대로 쓴다. /inquiry는 유저가 명령어를 실행하는 서버가
+    아니라 유저 개인의 Discord 클라이언트 언어(interaction.locale)를 기준으로 문구를 골라야 하므로
+    guild_id 기반 조회(Redis/DB 왕복)가 필요 없다 - 그래서 동기 함수다."""
+    template = get_locale_message(lang, key)
+    if kwargs:
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError) as e:
+            print(f"[LOCALES][WARN] '{key}' format failed: {type(e).__name__}")
+            return template
+    return template
 
 
 class InquiryModal(discord.ui.Modal):
@@ -116,9 +132,9 @@ class KyvoInquiry(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="inquiry", description="Send an inquiry directly to the KyvoBot developer.")
     async def inquiry(self, interaction: discord.Interaction):
-        guild_id = interaction.guild_id
-        title = await self.get_msg(guild_id, "inquiry_modal_title")
-        label = await self.get_msg(guild_id, "inquiry_modal_label")
+        lang = interaction.locale.value
+        title = _msg(lang, "inquiry_modal_title")
+        label = _msg(lang, "inquiry_modal_label")
         modal = InquiryModal(self, title, label)
         await interaction.response.send_modal(modal)
 
@@ -129,12 +145,13 @@ class KyvoInquiry(KyvoBaseCog):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
         user_id = interaction.user.id
+        lang = interaction.locale.value  # 유저 개인의 Discord 클라이언트 언어 - 서버 설정 언어(get_msg)가 아니다
         now = time.time()
 
         if user_id in self.cooldowns and now - self.cooldowns[user_id] < INQUIRY_COOLDOWN_SECONDS:
             remaining = INQUIRY_COOLDOWN_SECONDS - (now - self.cooldowns[user_id])
             minutes, seconds = int(remaining // 60), int(remaining % 60)
-            msg = await self.get_msg(guild_id, "inquiry_err_cooldown", minutes=minutes, seconds=seconds)
+            msg = _msg(lang, "inquiry_err_cooldown", minutes=minutes, seconds=seconds)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -142,11 +159,12 @@ class KyvoInquiry(KyvoBaseCog):
         if support_channel is None:
             print(f"[INQUIRY][ERROR] Support channel unavailable (SUPPORT_CHANNEL_ID={SUPPORT_CHANNEL_ID!r}) - "
                   f"dropping inquiry from user={user_id} guild={guild_id}.", flush=True)
-            msg = await self.get_msg(guild_id, "inquiry_send_failed")
+            msg = _msg(lang, "inquiry_send_failed")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
         # 1) DB에 먼저 기록한다 (support_message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
+        # locale은 나중에 [답변하기]로 DM을 보낼 때 그 DM의 언어를 고르는 데 쓴다(guild_id 기준이 아님).
         try:
             insert_res = await self._db_call(
                 lambda: self.bot.supabase.table("inquiries").insert({
@@ -154,6 +172,7 @@ class KyvoInquiry(KyvoBaseCog):
                     "user_id": str(user_id),
                     "content": content,
                     "status": "pending",
+                    "locale": lang,
                 }).execute()
             )
             inquiry_row = insert_res.data[0] if insert_res.data else None
@@ -162,7 +181,7 @@ class KyvoInquiry(KyvoBaseCog):
             inquiry_row = None
 
         if not inquiry_row:
-            msg = await self.get_msg(guild_id, "inquiry_send_failed")
+            msg = _msg(lang, "inquiry_send_failed")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -184,7 +203,7 @@ class KyvoInquiry(KyvoBaseCog):
                   f"{type(e).__name__}: {e}", flush=True)
             # DB 행은 support_message_id 없이 pending으로 남는다 - anonymous_reports와 동일한 정책으로,
             # 심각한 문제 발생 시 봇 운영자가 DB에서 직접 확인 가능하다.
-            msg = await self.get_msg(guild_id, "inquiry_send_failed")
+            msg = _msg(lang, "inquiry_send_failed")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -198,7 +217,7 @@ class KyvoInquiry(KyvoBaseCog):
         except Exception as e:
             print(f"[INQUIRY][ERROR] Failed to record support_message_id for inquiry {inquiry_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
-            msg = await self.get_msg(guild_id, "inquiry_send_failed")
+            msg = _msg(lang, "inquiry_send_failed")
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -206,7 +225,7 @@ class KyvoInquiry(KyvoBaseCog):
         # (실패했는데 묶어두면 문의도 못 보내고 재시도도 못 함).
         self.cooldowns[user_id] = now
 
-        msg = await self.get_msg(guild_id, "inquiry_submitted", invite_url=SUPPORT_SERVER_INVITE_URL or "")
+        msg = _msg(lang, "inquiry_submitted", invite_url=SUPPORT_SERVER_INVITE_URL or "")
         confirm_embed = discord.Embed(description=msg, color=discord.Color.green())
         await interaction.followup.send(embed=confirm_embed, ephemeral=True)
 
@@ -246,7 +265,6 @@ class KyvoInquiry(KyvoBaseCog):
                                                 reply_content: str) -> None:
         await interaction.response.defer(ephemeral=True)
         inquiry_id = inquiry_row["id"]
-        guild_id = inquiry_row["guild_id"]
         reporter_user_id = inquiry_row["user_id"]
         answered_at = datetime.now(timezone.utc).isoformat()
 
@@ -270,8 +288,12 @@ class KyvoInquiry(KyvoBaseCog):
         # DM 발송 - 실패 시(DM 차단 등) 선점을 되돌려 재시도 가능하게 하고, 서포트 채널에 알림을 남긴다.
         try:
             target_user = await self.bot.fetch_user(int(reporter_user_id))
-            dm_title = await self.get_msg(int(guild_id), "inquiry_reply_dm_title")
-            dm_footer = await self.get_msg(int(guild_id), "inquiry_reply_dm_footer")
+            # 문의자가 /inquiry를 제출한 시점의 개인 클라이언트 언어(제출 시 inquiries.locale에 저장됨)를
+            # 그대로 쓴다 - 답변하는 관리자나 서포트 채널의 언어와는 무관하다. 컬럼이 없던 옛 문의 행은
+            # locale이 NULL이라 en으로 폴백한다.
+            inquirer_lang = inquiry_row.get("locale") or "en"
+            dm_title = _msg(inquirer_lang, "inquiry_reply_dm_title")
+            dm_footer = _msg(inquirer_lang, "inquiry_reply_dm_footer")
             dm_embed = discord.Embed(title=dm_title, description=reply_content, color=discord.Color.blurple(),
                                       timestamp=datetime.now(timezone.utc))
             dm_embed.set_footer(text=dm_footer)
