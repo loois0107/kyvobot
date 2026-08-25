@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 MEMBER_COUNT_REFRESH_INTERVAL_MINUTES = 10  # 전체 서버 유저 수 재계산 주기 - 무거운 쪽(길드 순회)
 PRESENCE_TOGGLE_INTERVAL_SECONDS = 20  # 화면 표시 전환 주기 - 가벼운 쪽(캐시값 읽기만)
 
-INQUIRY_HINT_TEXT = "/inquiry (/문의)로 문의하기"
+INQUIRY_HINT_TEXT = "/inquiry to contact us | /문의 로 문의하기"
 
 
 class KyvoPresence(commands.Cog):
@@ -50,7 +50,7 @@ class KyvoPresence(commands.Cog):
         if self._show_inquiry_hint:
             name = INQUIRY_HINT_TEXT
         else:
-            name = f"{self.cached_user_count:,} users online"
+            name = f"{self.cached_user_count:,} users online | {self.cached_user_count:,}명 접속 중"
         self._show_inquiry_hint = not self._show_inquiry_hint
 
         activity = discord.Activity(type=discord.ActivityType.watching, name=name)
