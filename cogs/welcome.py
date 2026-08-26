@@ -59,11 +59,25 @@ class Welcome(KyvoBaseCog):
             autorole_id = nested_settings.get("autorole_id")
             if autorole_id:
                 role = member.guild.get_role(int(autorole_id))
-                if role:
-                    try:
-                        await member.add_roles(role, reason="KYVO AUTOMOD: New member autorole injection.")
-                    except discord.Forbidden:
-                        pass
+                if role is not None:
+                    # 🛡️ [사전 체크] twitch.py의 라이브 역할 부여와 동일한 이유 - 권한/위계가 안 맞으면
+                    # add_roles가 Forbidden을 던지기 전에 미리 걸러서 원인을 로그로 남긴다. 여기서
+                    # return하면 아래 웰컴 카드 발송까지 통째로 막히므로, 이 자동역할 블록만 건너뛰고
+                    # 나머지는 그대로 진행한다(twitch.py는 자기 함수 전체가 역할 부여 하나뿐이라 return해도
+                    # 되지만, on_member_join은 여러 단계 중 하나일 뿐이라 다르다).
+                    bot_member = member.guild.me
+                    if bot_member is None or not bot_member.guild_permissions.manage_roles or bot_member.top_role <= role:
+                        print(f"[WELCOME][ERROR] Cannot grant autorole '{role.name}' to user={member.id} - "
+                              f"permission/hierarchy issue (guild={guild_id})", flush=True)
+                    else:
+                        try:
+                            await member.add_roles(role, reason="KYVO AUTOMOD: New member autorole injection.")
+                        except discord.Forbidden:
+                            print(f"[WELCOME][ERROR] Forbidden while granting autorole '{role.name}' to "
+                                  f"user={member.id} (guild={guild_id})", flush=True)
+                        except discord.HTTPException as e:
+                            print(f"[WELCOME][ERROR] HTTPException while granting autorole '{role.name}': "
+                                  f"{type(e).__name__}: {e} (guild={guild_id})", flush=True)
 
             welcome_set = nested_settings.get("welcome_settings") or {}
             if not welcome_set.get("enabled", False):
