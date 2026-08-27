@@ -38,6 +38,17 @@ TIER_CHOICES = [
     "Emerald", "Diamond", "Master", "Grandmaster", "Challenger",
 ]
 
+# 고도화 1단계 - LoL 5개 포지션 하드코딩. party_game_presets 프리셋 연동(게임별로 다른 포지션 목록)은
+# 2단계 이후 범위다 - 지금은 모든 모집이 이 고정 목록을 그대로 쓴다.
+POSITION_CHOICES = ["Top", "Jungle", "Mid", "ADC", "Support"]
+POSITION_SELECT_TIMEOUT_SECONDS = 60
+
+# MMR 점수 계산 - 확정된 사양: Iron(서수 0) IV(0점) 0LP = 0점 기준. 티어 한 단계당 +400,
+# 디비전(IV->I) 한 칸당 +100, LP는 그대로 합산. 이번 1단계는 계산 함수 + 우선순위(인증 우선/
+# 자기신고 폴백) 로직까지만 준비하고, 실제 팀 밸런싱에 쓰는 건 2단계 범위다.
+MMR_TIER_STEP = 400
+DIVISION_TO_SCORE = {"IV": 0, "III": 100, "II": 200, "I": 300}
+
 # 🛡️ 부여했을 때 2차 확인을 받아야 하는 위험 권한 - custom_commands.py/reaction_roles.py와 동일한
 # 목록/정신. 티어 역할도 결국 "역할을 부여 가능하게 만드는" 관리자 명령어라 같은 위협 모델이다.
 DANGEROUS_ROLE_PERMISSIONS = (
@@ -186,6 +197,19 @@ def meets_min_tier_requirement(min_tier: str | None, verified_tier: str | None) 
     return actual_rank >= required_rank
 
 
+def calculate_mmr_score(tier: str | None, rank: str | None, league_points: int | None) -> int | None:
+    """확정된 사양의 MMR 점수 계산 - Iron(서수 0) IV(0점) 0LP를 0점 기준으로 삼는다:
+    tier_index * 400 + 디비전(IV->I) 점수(0/100/200/300) + league_points 그대로 합산.
+    rank가 없거나(자기신고 - 디비전 정보 자체가 없음) DIVISION_TO_SCORE에 없는 값이면 그 부분은
+    0으로 취급한다(Master 이상 티어는 Riot API가 디비전 없이 "I" 고정값을 주는 경우가 흔하다).
+    tier가 TIER_CHOICES에 없으면(미인증/미신고, 즉 비교 재료 자체가 없음) None을 반환한다 -
+    0점으로 취급하면 "Iron IV"와 "정보 없음"이 똑같아져 버려서 절대 섞으면 안 된다."""
+    tier_index = _tier_rank(tier)
+    if tier_index is None:
+        return None
+    return tier_index * MMR_TIER_STEP + DIVISION_TO_SCORE.get(rank, 0) + (league_points or 0)
+
+
 def reorder_favorite_first(names: list[str], favorite: str | None) -> list[str]:
     """자동완성 후보 목록에서 즐겨찾기를 맨 앞으로 올린다. 즐겨찾기가 없거나(None) 지금 후보
     목록에 없으면(현재 입력과 안 맞거나, 관리자가 그 사이 프리셋을 지웠으면) 원래 순서 그대로."""
@@ -241,6 +265,48 @@ class RoleWarningConfirmView(discord.ui.View):
 
     async def on_timeout(self):
         self._disable_all()
+
+
+class PositionSelectView(discord.ui.View):
+    """RoleWarningConfirmView와 완전히 동일한 "followup으로 보내고 view.wait()로 대기" 패턴이지만,
+    버튼 2개 대신 Select 하나로 포지션을 고른다 - PartyRecruitmentModal 주석에서 예고했던 그
+    확장 경로다.
+
+    🛡️ [절대 공유 인스턴스가 아님] PartyCardView(참여 버튼)와 달리 이건 재시작 후에도 살아남을
+    필요가 없는 일회성 확인 UI라 timeout이 있고 bot.add_view()로 등록되지 않는다 - 카드를
+    새로 게시하거나 누군가 참가를 시도할 때마다 그 시점에 아직 비어있는 포지션만 담아서 매번
+    새 인스턴스를 만든다. 절대 재사용하면 안 된다(재사용하면 먼저 만든 인스턴스의 옵션이
+    나중 호출에도 그대로 남아 다른 모집/다른 시점의 빈 자리 현황과 섞인다)."""
+
+    def __init__(self, author_id: int, available_positions: list[str], placeholder: str):
+        super().__init__(timeout=POSITION_SELECT_TIMEOUT_SECONDS)
+        self.author_id = author_id
+        self.selected_position: str | None = None
+
+        select = discord.ui.Select(
+            placeholder=placeholder,
+            options=[discord.SelectOption(label=pos, value=pos) for pos in available_positions],
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This selection is not for you.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_select(self, interaction: discord.Interaction):
+        select: discord.ui.Select = self.children[0]
+        self.selected_position = select.values[0]
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ {self.selected_position}", view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
 
 
 class PartyRecruitmentModal(discord.ui.Modal):
@@ -572,6 +638,11 @@ class KyvoParty(KyvoBaseCog):
         party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=party_settings["card_lifetime_minutes"])
 
+        # 🛡️ [1단계 고도화] 이번 모집의 포지션 목록을 생성 시점에 스냅샷한다 - 나중에 POSITION_CHOICES가
+        # 바뀌어도(2단계에서 게임별 프리셋 연동 시) 이미 만들어진 모집엔 소급 적용되지 않는다
+        # (expires_at을 여기서 절대시각으로 스냅샷하는 것과 동일한 이유).
+        required_positions = POSITION_CHOICES
+
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         try:
             insert_res = await self._db_call(
@@ -586,6 +657,7 @@ class KyvoParty(KyvoBaseCog):
                     "selected_game": selected_game or None,
                     "min_tier": normalize_min_tier(min_tier),
                     "looking_for_role": (looking_for_role or "").strip()[:PARTY_LOOKING_FOR_ROLE_MAX_LENGTH] or None,
+                    "required_positions": required_positions,
                 }).execute()
             )
             recruitment_row = insert_res.data[0] if insert_res.data else None
@@ -600,16 +672,35 @@ class KyvoParty(KyvoBaseCog):
 
         recruitment_id = recruitment_row["id"]
 
+        # 🛡️ [1단계 고도화] 모집자 본인도 참가자라 자신의 포지션을 골라야 한다 - 아직 아무도
+        # 참가 전이라 전체 포지션이 다 열려 있다. 타임아웃/실패해도(60초 안에 응답 없음 등)
+        # 모집 자체는 계속 진행한다 - position=None으로 남고, 카드에는 그 포지션이 "빈 자리"로
+        # 보인다(리더가 나중에 직접 참가 버튼으로 다시 고를 수는 없다 - 이미 참가자라 재선택
+        # UI는 2단계 이후 범위).
+        select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
+        select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
+        leader_position_view = PositionSelectView(interaction.user.id, required_positions, select_placeholder)
+        await interaction.followup.send(select_prompt, view=leader_position_view, ephemeral=True)
+        await leader_position_view.wait()
+
+        leader_position = leader_position_view.selected_position
+        if leader_position is None:
+            print(f"[PARTY][WARN] Leader did not pick a position in time (recruitment={recruitment_id}), "
+                  f"proceeding with position=None.", flush=True)
+
         # 모집자 본인도 참가자 1명으로 자동 등록한다 (needed_count는 모집자 포함 총원).
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_participants").insert({
                     "recruitment_id": recruitment_id, "user_id": str(interaction.user.id),
+                    "position": leader_position,
                 }).execute()
             )
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to auto-register leader as participant "
                   f"(recruitment={recruitment_id}): {type(e).__name__}: {e}", flush=True)
+
+        leader_participants = [{"user_id": str(interaction.user.id), "position": leader_position}]
 
         # 2) 티어 자기신고 역할 멘션 준비 - "실제로 알림이 갈지"만 확인한다(권한 남용 방지 체크와는 다름).
         tier_role = await self._resolve_leader_tier_role(guild_id, interaction.user)
@@ -624,7 +715,7 @@ class KyvoParty(KyvoBaseCog):
             if not can_mention:
                 mention_notice = await self.get_msg(guild_id, "party_mention_notice_unmentionable", role=tier_role.name)
 
-        embed = await self._build_card_embed(recruitment_row, current_count=1)
+        embed = await self._build_card_embed(recruitment_row, participants=leader_participants)
         join_label = await self.get_msg(guild_id, "party_btn_join")
         view = PartyCardView(self, join_label)
 
@@ -637,7 +728,7 @@ class KyvoParty(KyvoBaseCog):
             print(f"[PARTY][WARN] Failed to post recruitment card {recruitment_id}, retrying without thumbnail: "
                   f"{type(e).__name__}: {e}", flush=True)
             try:
-                fallback_embed = await self._build_card_embed(recruitment_row, current_count=1, skip_thumbnail=True)
+                fallback_embed = await self._build_card_embed(recruitment_row, participants=leader_participants, skip_thumbnail=True)
                 card_message = await interaction.channel.send(content=content, embed=fallback_embed, view=view, allowed_mentions=allowed_mentions)
             except Exception as e2:
                 print(f"[PARTY][ERROR] Failed to post recruitment card {recruitment_id} even without thumbnail: "
@@ -681,14 +772,95 @@ class KyvoParty(KyvoBaseCog):
                 return role
         return None
 
-    async def _build_card_embed(self, row: dict, current_count: int, finished: bool = False,
+    # ══════════════════════════════════════════════════════════
+    #  MMR 우선순위 로직 (2단계 팀 밸런싱에서 쓸 재료 - 이번 1단계는 계산/폴백 로직까지만 준비)
+    # ══════════════════════════════════════════════════════════
+    async def _resolve_self_reported_tier(self, guild_id, member: discord.Member) -> str | None:
+        """/tier_set은 DB에 티어를 직접 저장하지 않고 Discord 역할 부여가 유일한 기록이다 -
+        _resolve_leader_tier_role과 동일한 조회를 하되, role_id 집합이 아니라 role_id -> tier
+        딕셔너리로 만들어서 실제 티어 문자열까지 역산해 돌려준다."""
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("party_tier_roles").select("tier, role_id")
+                        .eq("guild_id", str(guild_id)).execute()
+            )
+            role_id_to_tier = {row["role_id"]: row["tier"] for row in (res.data or [])}
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch tier role mappings for self-reported lookup "
+                  f"(guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            return None
+
+        for role in member.roles:
+            tier = role_id_to_tier.get(str(role.id))
+            if tier:
+                return tier
+        return None
+
+    async def _get_participant_mmr(self, guild_id, member: discord.Member) -> int | None:
+        """확정된 사양: riot_verifications(인증)에 값이 있으면 무조건 그걸 쓰고, 없을 때만
+        자기신고(/tier_set) 값으로 폴백한다. 자기신고는 디비전/LP 정보가 없어(Discord 역할 하나뿐)
+        티어만으로 계산한다. 어느 쪽도 없으면 None(비교 불가 - 2단계 밸런싱에서 별도로 처리할 몫)."""
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("riot_verifications").select("tier, rank, league_points")
+                        .eq("guild_id", str(guild_id)).eq("user_id", str(member.id)).execute()
+            )
+            verified_row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch verified tier for MMR (guild={guild_id}, user={member.id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            verified_row = None
+
+        if verified_row:
+            return calculate_mmr_score(verified_row.get("tier"), verified_row.get("rank"), verified_row.get("league_points"))
+
+        self_tier = await self._resolve_self_reported_tier(guild_id, member)
+        if self_tier:
+            return calculate_mmr_score(self_tier, None, None)
+
+        return None
+
+    # ══════════════════════════════════════════════════════════
+    #  포지션 슬롯 (고도화 1단계)
+    # ══════════════════════════════════════════════════════════
+    async def _get_available_positions(self, recruitment_id, required_positions: list[str]) -> list[str]:
+        """이 모집에서 아직 아무도 신청하지 않은 포지션만 순서 그대로 골라 돌려준다 - 조회 실패 시
+        빈 집합(=아무것도 안 찬 것)으로 취급해서 fail-open으로 흐른다(min_tier와 달리 포지션 슬롯이
+        하나 잘못 열려도 보안/악용 문제가 아니라 단순 UX 이슈라 fail-closed까지는 필요 없다고 판단)."""
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants").select("position")
+                        .eq("recruitment_id", recruitment_id).execute()
+            )
+            taken = {r["position"] for r in (res.data or []) if r.get("position")}
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to fetch taken positions (recruitment={recruitment_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            taken = set()
+        return [p for p in required_positions if p not in taken]
+
+    async def _build_position_field_value(self, guild_id, required_positions: list[str],
+                                            participants: list[dict]) -> str:
+        """카드 임베드에 들어갈 "✅ Mid: @유저" / "🔲 ADC: 빈 자리" 줄들을 만든다. required_positions
+        순서 그대로 나열하고, position이 없는 참가자(레거시 데이터 등)는 이 목록에 안 나타난다."""
+        open_label = await self.get_msg(guild_id, "party_position_open")
+        position_to_user = {p["position"]: p["user_id"] for p in participants if p.get("position")}
+        lines = []
+        for pos in required_positions:
+            uid = position_to_user.get(pos)
+            emoji = "✅" if uid else "🔲"
+            value = f"<@{uid}>" if uid else open_label
+            lines.append(f"{emoji} **{pos}**: {value}")
+        return "\n".join(lines)
+
+    async def _build_card_embed(self, row: dict, participants: list[dict], finished: bool = False,
                                  party_channel: discord.TextChannel | None = None, expired: bool = False,
                                  cancelled: bool = False, skip_thumbnail: bool = False) -> discord.Embed:
         guild_id = int(row["guild_id"])
         title = await self.get_msg(guild_id, "party_card_title", queue_type=row["queue_type"])
         leader_label = await self.get_msg(guild_id, "party_field_leader")
         queue_label = await self.get_msg(guild_id, "party_field_queue_type")
-        count_label = await self.get_msg(guild_id, "party_field_count")
+        positions_label = await self.get_msg(guild_id, "party_field_positions")
         expires_label = await self.get_msg(guild_id, "party_field_expires")
         looking_for_label = await self.get_msg(guild_id, "party_field_looking_for")
 
@@ -753,7 +925,12 @@ class KyvoParty(KyvoBaseCog):
         if looking_for_line:
             embed.add_field(name=looking_for_label, value=looking_for_line, inline=True)
 
-        embed.add_field(name=count_label, value=f"`{current_count}/{row['needed_count']}`", inline=True)
+        # 🛡️ [1단계 고도화] 단일 진행률 필드 대신 포지션별 줄("✅ Mid: @유저" / "🔲 ADC: 빈 자리")로
+        # 보여준다 - required_positions는 생성 시점에 스냅샷된 값(없으면 지금 전역 상수로 폴백,
+        # 레거시 행 대비).
+        required_positions = row.get("required_positions") or POSITION_CHOICES
+        positions_value = await self._build_position_field_value(guild_id, required_positions, participants)
+        embed.add_field(name=positions_label, value=positions_value, inline=False)
         if not finished and not expired and not cancelled:
             ends_at = datetime.fromisoformat(row["expires_at"])
             ts = int(ends_at.timestamp())
@@ -840,15 +1017,42 @@ class KyvoParty(KyvoBaseCog):
                 await interaction.followup.send(msg, ephemeral=True)
                 return
 
+        # 🛡️ [1단계 고도화] 포지션 슬롯 - 이미 찬 포지션은 옵션에서 아예 뺀 Select를 매번 새로
+        # 만들어서 보여준다(PositionSelectView는 절대 재사용 안 함, 클래스 docstring 참고).
+        required_positions = row.get("required_positions") or POSITION_CHOICES
+        available_positions = await self._get_available_positions(recruitment_id, required_positions)
+        if not available_positions:
+            msg = await self.get_msg(guild_id, "party_err_all_positions_filled")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
+        select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
+        position_view = PositionSelectView(interaction.user.id, available_positions, select_placeholder)
+        await interaction.followup.send(select_prompt, view=position_view, ephemeral=True)
+        await position_view.wait()
+
+        if position_view.selected_position is None:
+            msg = await self.get_msg(guild_id, "party_position_select_timeout")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        selected_position = position_view.selected_position
+
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_participants").insert({
-                    "recruitment_id": recruitment_id, "user_id": str(user_id),
+                    "recruitment_id": recruitment_id, "user_id": str(user_id), "position": selected_position,
                 }).execute()
             )
         except Exception as e:
             err_str = str(e)
-            if "duplicate key" in err_str or "23505" in err_str:
+            # 🛡️ 두 유니크 제약이 같은 테이블에 있어 "duplicate key"만으로는 어느 쪽인지 구분이
+            # 안 된다 - 마이그레이션 SQL에서 이 이름으로 명시적으로 만든 부분 유니크 인덱스
+            # (party_participants_position_unique)가 포함돼 있는지부터 먼저 확인한다.
+            if "party_participants_position_unique" in err_str:
+                msg = await self.get_msg(guild_id, "party_err_position_taken", position=selected_position)
+            elif "duplicate key" in err_str or "23505" in err_str:
                 msg = await self.get_msg(guild_id, "party_err_already_joined")
             else:
                 print(f"[PARTY][ERROR] Entry insert failed for user={user_id} recruitment={recruitment_id}: "
@@ -857,15 +1061,16 @@ class KyvoParty(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        msg = await self.get_msg(guild_id, "party_join_success")
+        msg = await self.get_msg(guild_id, "party_join_success_position", position=selected_position)
         await interaction.followup.send(msg, ephemeral=True)
 
         try:
             count_res = await self._db_call(
-                lambda: self.bot.supabase.table("party_participants").select("user_id")
+                lambda: self.bot.supabase.table("party_participants").select("user_id, position")
                         .eq("recruitment_id", recruitment_id).execute()
             )
-            participant_ids = [r["user_id"] for r in (count_res.data or [])]
+            participants = count_res.data or []
+            participant_ids = [r["user_id"] for r in participants]
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to re-count participants for recruitment {recruitment_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
@@ -886,22 +1091,22 @@ class KyvoParty(KyvoBaseCog):
                 return
 
             if claim_res.data:
-                await self._create_party_channel(row, participant_ids, interaction.message)
+                await self._create_party_channel(row, participants, interaction.message)
         else:
             try:
-                updated_embed = await self._build_card_embed(row, current_count=len(participant_ids))
+                updated_embed = await self._build_card_embed(row, participants=participants)
                 await interaction.message.edit(embed=updated_embed)
             except Exception as e:
                 print(f"[PARTY][WARN] Failed to update recruitment card {recruitment_id}, retrying without "
                       f"thumbnail: {type(e).__name__}: {e}", flush=True)
                 try:
-                    fallback_embed = await self._build_card_embed(row, current_count=len(participant_ids), skip_thumbnail=True)
+                    fallback_embed = await self._build_card_embed(row, participants=participants, skip_thumbnail=True)
                     await interaction.message.edit(embed=fallback_embed)
                 except Exception as e2:
                     print(f"[PARTY][ERROR] Failed to update recruitment card {recruitment_id} even without "
                           f"thumbnail: {type(e2).__name__}: {e2}", flush=True)
 
-    async def _create_party_channel(self, row: dict, participant_ids: list[str], card_message: discord.Message) -> None:
+    async def _create_party_channel(self, row: dict, participants: list[dict], card_message: discord.Message) -> None:
         guild_id = int(row["guild_id"])
         recruitment_id = row["id"]
         guild = self.bot.get_guild(guild_id)
@@ -909,6 +1114,8 @@ class KyvoParty(KyvoBaseCog):
             print(f"[PARTY][ERROR] Guild {guild_id} not in cache, cannot create party channel "
                   f"(recruitment={recruitment_id})", flush=True)
             return
+
+        participant_ids = [p["user_id"] for p in participants]
 
         # 비공개 채널: @everyone 차단, 모집자+참여자만 허용. 매번 참가자 조합이 달라서 카테고리
         # 레벨 공유 설정 대신 채널 생성 시점에 개별 오버라이드를 명시한다.
@@ -993,7 +1200,7 @@ class KyvoParty(KyvoBaseCog):
             print(f"[PARTY][ERROR] Failed to send welcome message in party channel {party_channel.id}: "
                   f"{type(e).__name__}: {e}", flush=True)
 
-        finished_embed = await self._build_card_embed(row, current_count=len(participant_ids), finished=True, party_channel=party_channel)
+        finished_embed = await self._build_card_embed(row, participants=participants, finished=True, party_channel=party_channel)
         try:
             await card_message.edit(embed=finished_embed, view=None)
         except Exception as e:
@@ -1154,13 +1361,13 @@ class KyvoParty(KyvoBaseCog):
         # 카드 갱신 - 버튼 제거, "모집자가 취소함" 표시. 삭제할 채널은 애초에 없다(아직 안 만들어짐).
         try:
             count_res = await self._db_call(
-                lambda: self.bot.supabase.table("party_participants").select("user_id")
+                lambda: self.bot.supabase.table("party_participants").select("user_id, position")
                         .eq("recruitment_id", row["id"]).execute()
             )
-            current_count = len(count_res.data or [])
+            participants = count_res.data or []
         except Exception as e:
             print(f"[PARTY][WARN] Failed to re-count participants for recruitment {row['id']}: {type(e).__name__}: {e}", flush=True)
-            current_count = 1
+            participants = [{"user_id": row["leader_id"], "position": None}]
 
         channel = self.bot.get_channel(int(row["channel_id"]))
         message_id = row.get("message_id")
@@ -1168,7 +1375,7 @@ class KyvoParty(KyvoBaseCog):
             return
         try:
             message = await channel.fetch_message(int(message_id))
-            embed = await self._build_card_embed(row, current_count=current_count, cancelled=True)
+            embed = await self._build_card_embed(row, participants=participants, cancelled=True)
             await message.edit(embed=embed, view=None)
         except Exception as e:
             print(f"[PARTY][WARN] Failed to update recruitment card {message_id} after cancellation: "
@@ -1226,13 +1433,13 @@ class KyvoParty(KyvoBaseCog):
             message = await channel.fetch_message(int(message_id))
             try:
                 count_res = await self._db_call(
-                    lambda: self.bot.supabase.table("party_participants").select("user_id")
+                    lambda: self.bot.supabase.table("party_participants").select("user_id, position")
                             .eq("recruitment_id", row["id"]).execute()
                 )
-                current_count = len(count_res.data or [])
+                participants = count_res.data or []
             except Exception:
-                current_count = 1
-            embed = await self._build_card_embed(row, current_count=current_count, expired=True)
+                participants = [{"user_id": row["leader_id"], "position": None}]
+            embed = await self._build_card_embed(row, participants=participants, expired=True)
             await message.edit(embed=embed, view=None)
         except Exception as e:
             print(f"[PARTY][WARN] Failed to mark recruitment card {message_id} as expired: {type(e).__name__}: {e}", flush=True)
