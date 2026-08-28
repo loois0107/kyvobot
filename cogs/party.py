@@ -762,12 +762,17 @@ class KyvoParty(KyvoBaseCog):
             # 🛡️ [단순 흐름 되돌리기] 포지션 불필요 - 예전처럼 선택 단계 자체를 건너뛰고 바로 등록한다.
             leader_position = None
 
+        # 🛡️ [2단계 고도화] 팀 편성 페이지의 자동 밸런스가 쓸 mmr_score를 여기서 같이 계산해 저장한다 -
+        # handle_join과 마찬가지로 리더도 결국 party_participants의 참가자 1명이라, 여기서 안 채우면
+        # 리더만 영원히 mmr_score가 None으로 남아 팀 평균/자동 밸런스에서 항상 열외 취급된다.
+        leader_mmr_score = await self._get_participant_mmr(guild_id, interaction.user)
+
         # 모집자 본인도 참가자 1명으로 자동 등록한다 (needed_count는 모집자 포함 총원).
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_participants").insert({
                     "recruitment_id": recruitment_id, "user_id": str(interaction.user.id),
-                    "position": leader_position,
+                    "position": leader_position, "mmr_score": leader_mmr_score,
                 }).execute()
             )
         except Exception as e:
@@ -1138,10 +1143,16 @@ class KyvoParty(KyvoBaseCog):
         else:
             selected_position = None
 
+        # 🛡️ [2단계 고도화] 대시보드 팀 편성 페이지가 쓸 MMR 점수를 참가 시점에 계산해 저장한다 -
+        # _get_participant_mmr가 인증값 우선/자기신고 폴백을 이미 다 해결해서 정수 하나로 확정해주므로,
+        # 대시보드는 이 값만 읽으면 되고 Discord API나 이 우선순위 로직을 따로 가질 필요가 없다.
+        mmr_score = await self._get_participant_mmr(guild_id, interaction.user)
+
         try:
             await self._db_call(
                 lambda: self.bot.supabase.table("party_participants").insert({
                     "recruitment_id": recruitment_id, "user_id": str(user_id), "position": selected_position,
+                    "mmr_score": mmr_score,
                 }).execute()
             )
         except Exception as e:
