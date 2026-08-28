@@ -328,6 +328,7 @@
   "party_err_all_positions_filled": "❌ All positions for this party have already been filled.",
   "party_err_position_taken": "❌ **{position}** was just taken by someone else. Please try again.",
   "party_position_mode_prompt": "🎯 Does this recruitment need position slots (Top/Jungle/Mid/ADC/Support)?",
+  "party_position_mode_prompt_game": "🎯 Does this recruitment need position slots? No positions are registered for **{game}** - choosing Yes will fall back to the default League of Legends-style slots (Top/Jungle/Mid/ADC/Support), which may not fit this game.",
   "party_position_mode_yes": "Yes, need positions",
   "party_position_mode_no": "No, just headcount",
   "party_field_expires": "⏳ **Closes**",

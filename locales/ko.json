@@ -328,6 +328,7 @@
   "party_err_all_positions_filled": "❌ 이 파티의 모든 포지션이 이미 찼습니다.",
   "party_err_position_taken": "❌ **{position}** 포지션은 방금 다른 분이 선점했습니다. 다시 시도해주세요.",
   "party_position_mode_prompt": "🎯 이번 모집에 포지션(Top/Jungle/Mid/ADC/Support) 슬롯이 필요한가요?",
+  "party_position_mode_prompt_game": "🎯 이번 모집에 포지션 슬롯이 필요한가요? **{game}**에는 등록된 포지션이 없어요 - '네'를 선택하면 이 게임과 안 맞을 수도 있는 기본 롤 스타일 포지션(Top/Jungle/Mid/ADC/Support)이 적용돼요.",
   "party_position_mode_yes": "네, 포지션 필요해요",
   "party_position_mode_no": "아니요, 인원수만요",
   "party_field_expires": "⏳ **마감**",

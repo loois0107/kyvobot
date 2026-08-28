@@ -689,29 +689,51 @@ class KyvoParty(KyvoBaseCog):
         party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=party_settings["card_lifetime_minutes"])
 
-        # 🛡️ [1단계 고도화 + 되돌리기] 포지션 슬롯을 쓸지 매 모집마다 직접 묻는다 - Discord Modal은
-        # TextInput만 지원해서(PartyRecruitmentModal docstring 참고) 모달 안에 못 넣고, 제출 직후
-        # 버튼 2개짜리 확인창으로 받는다. 타임아웃 시에는 안전한 기본값인 "포지션 없음"으로
-        # fail-open 처리한다 - 포지션 슬롯은 이번에 새로 추가된 기능이라, 응답이 없을 때 새 기능
-        # 쪽으로 강제하기보다 오랫동안 써온 기존 흐름을 기본값으로 삼는다.
-        yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
-        no_label = await self.get_msg(guild_id, "party_position_mode_no")
-        mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
-        mode_view = PositionModeConfirmView(interaction.user.id, yes_label, no_label)
-        await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
-        await mode_view.wait()
+        # 🛡️ [프리셋 우선] selected_game에 등록된 프리셋이 포지션 목록을 명시해뒀으면 그걸 그대로
+        # 쓰고 Yes/No 확인창 자체를 생략한다 - 게임이 이미 답을 갖고 있는데 매번 다시 묻는 건
+        # 불필요하고, 발로란트처럼 포지션이 없는 게임에 롤 포지션이 잘못 붙는 걸 원천 차단한다.
+        # party_recruit()에서 이미 한 번 조회했지만(자동완성 값 존재 확인용) 그 결과는 넘어오지
+        # 않으므로(모달은 문자열만 담을 수 있음) 여기서 다시 조회한다 - _build_card_embed도
+        # 이미 매번 독립적으로 재조회하는 동일한 패턴이다.
+        preset_row = await self._get_game_preset(guild_id, selected_game) if selected_game else None
+        preset_positions = preset_row.get("positions") if preset_row else None
 
-        needs_positions = mode_view.needs_positions
-        if needs_positions is None:
-            print(f"[PARTY][WARN] Leader did not answer the position-mode prompt in time "
-                  f"(guild={guild_id}), defaulting to no positions.", flush=True)
-            needs_positions = False
+        if preset_positions:
+            required_positions = preset_positions
+        else:
+            # 🛡️ [1단계 고도화 + 되돌리기] 프리셋에 포지션이 없으면(프리셋 자체가 없거나, 있어도
+            # positions가 비어있음) 기존처럼 매 모집마다 직접 묻는다 - Discord Modal은 TextInput만
+            # 지원해서(PartyRecruitmentModal docstring 참고) 모달 안에 못 넣고, 제출 직후 버튼
+            # 2개짜리 확인창으로 받는다. 타임아웃 시에는 안전한 기본값인 "포지션 없음"으로
+            # fail-open 처리한다 - 포지션 슬롯은 이번에 새로 추가된 기능이라, 응답이 없을 때 새
+            # 기능 쪽으로 강제하기보다 오랫동안 써온 기존 흐름을 기본값으로 삼는다.
+            #
+            # 🛡️ [게임별 문구 분기] 게임을 골랐는데 그 프리셋에 포지션이 없는 경우엔, 어떤 게임인지
+            # 밝혀서 "예"를 누르면 이 게임과 안 맞을 수 있는 롤 포지션이 적용된다는 걸 미리
+            # 알려준다(발로란트에 롤 포지션이 잘못 붙던 원래 문제를 리더가 스스로 피할 수 있게) -
+            # 게임 자체를 안 골랐으면(순수 캐주얼 모집) 기존 문구 그대로 둔다.
+            if selected_game and preset_row:
+                mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt_game", game=selected_game)
+            else:
+                mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
 
-        # 🛡️ [1단계 고도화] 이번 모집의 포지션 목록을 생성 시점에 스냅샷한다 - 나중에 POSITION_CHOICES가
-        # 바뀌어도(2단계에서 게임별 프리셋 연동 시) 이미 만들어진 모집엔 소급 적용되지 않는다
-        # (expires_at을 여기서 절대시각으로 스냅샷하는 것과 동일한 이유). 위에서 "아니요"를 골랐으면
-        # None으로 저장해서 예전의 단순 인원수 흐름을 그대로 쓴다.
-        required_positions = POSITION_CHOICES if needs_positions else None
+            yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
+            no_label = await self.get_msg(guild_id, "party_position_mode_no")
+            mode_view = PositionModeConfirmView(interaction.user.id, yes_label, no_label)
+            await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
+            await mode_view.wait()
+
+            needs_positions = mode_view.needs_positions
+            if needs_positions is None:
+                print(f"[PARTY][WARN] Leader did not answer the position-mode prompt in time "
+                      f"(guild={guild_id}), defaulting to no positions.", flush=True)
+                needs_positions = False
+
+            # 🛡️ 이번 모집의 포지션 목록을 생성 시점에 스냅샷한다 - 나중에 POSITION_CHOICES가
+            # 바뀌어도 이미 만들어진 이 모집엔 소급 적용되지 않는다(expires_at을 여기서 절대시각으로
+            # 스냅샷하는 것과 동일한 이유). "아니요"를 골랐으면 None으로 저장해서 예전의 단순
+            # 인원수 흐름을 그대로 쓴다.
+            required_positions = POSITION_CHOICES if needs_positions else None
 
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         try:
