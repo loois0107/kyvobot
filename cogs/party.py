@@ -309,6 +309,51 @@ class PositionSelectView(discord.ui.View):
             item.disabled = True
 
 
+class PositionModeConfirmView(discord.ui.View):
+    """RoleWarningConfirmView와 동일한 버튼 2개 확인 패턴 - /party_recruit 모달 제출 직후, 이번
+    모집에 포지션 슬롯(Top/Jungle/Mid/ADC/Support)이 필요한지 묻는다. Discord Modal은 TextInput만
+    지원해서(PartyRecruitmentModal docstring 참고) 이 질문은 모달 안에 못 넣고 모달 뒤에 별도
+    확인창으로 둔다."""
+
+    def __init__(self, author_id: int, yes_label: str, no_label: str):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.needs_positions: bool | None = None
+
+        yes_btn = discord.ui.Button(label=yes_label, style=discord.ButtonStyle.primary)
+        yes_btn.callback = self._on_yes
+        self.add_item(yes_btn)
+
+        no_btn = discord.ui.Button(label=no_label, style=discord.ButtonStyle.secondary)
+        no_btn.callback = self._on_no
+        self.add_item(no_btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This confirmation is not for you.", ephemeral=True)
+            return False
+        return True
+
+    def _disable_all(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def _on_yes(self, interaction: discord.Interaction):
+        self.needs_positions = True
+        self._disable_all()
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    async def _on_no(self, interaction: discord.Interaction):
+        self.needs_positions = False
+        self._disable_all()
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        self._disable_all()
+
+
 class PartyRecruitmentModal(discord.ui.Modal):
     """/party_recruit의 입력 모달. 디스코드 Modal은 TextInput만 지원하고 Select는 못 넣으므로
     라인 선택도 자유 텍스트로 받는다 (다중선택 UI가 꼭 필요해지면 모달 뒤에 별도 Select 단계를
@@ -638,10 +683,29 @@ class KyvoParty(KyvoBaseCog):
         party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=party_settings["card_lifetime_minutes"])
 
+        # 🛡️ [1단계 고도화 + 되돌리기] 포지션 슬롯을 쓸지 매 모집마다 직접 묻는다 - Discord Modal은
+        # TextInput만 지원해서(PartyRecruitmentModal docstring 참고) 모달 안에 못 넣고, 제출 직후
+        # 버튼 2개짜리 확인창으로 받는다. 타임아웃 시에는 안전한 기본값인 "포지션 없음"으로
+        # fail-open 처리한다 - 포지션 슬롯은 이번에 새로 추가된 기능이라, 응답이 없을 때 새 기능
+        # 쪽으로 강제하기보다 오랫동안 써온 기존 흐름을 기본값으로 삼는다.
+        yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
+        no_label = await self.get_msg(guild_id, "party_position_mode_no")
+        mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
+        mode_view = PositionModeConfirmView(interaction.user.id, yes_label, no_label)
+        await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
+        await mode_view.wait()
+
+        needs_positions = mode_view.needs_positions
+        if needs_positions is None:
+            print(f"[PARTY][WARN] Leader did not answer the position-mode prompt in time "
+                  f"(guild={guild_id}), defaulting to no positions.", flush=True)
+            needs_positions = False
+
         # 🛡️ [1단계 고도화] 이번 모집의 포지션 목록을 생성 시점에 스냅샷한다 - 나중에 POSITION_CHOICES가
         # 바뀌어도(2단계에서 게임별 프리셋 연동 시) 이미 만들어진 모집엔 소급 적용되지 않는다
-        # (expires_at을 여기서 절대시각으로 스냅샷하는 것과 동일한 이유).
-        required_positions = POSITION_CHOICES
+        # (expires_at을 여기서 절대시각으로 스냅샷하는 것과 동일한 이유). 위에서 "아니요"를 골랐으면
+        # None으로 저장해서 예전의 단순 인원수 흐름을 그대로 쓴다.
+        required_positions = POSITION_CHOICES if needs_positions else None
 
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         try:
@@ -672,21 +736,25 @@ class KyvoParty(KyvoBaseCog):
 
         recruitment_id = recruitment_row["id"]
 
-        # 🛡️ [1단계 고도화] 모집자 본인도 참가자라 자신의 포지션을 골라야 한다 - 아직 아무도
-        # 참가 전이라 전체 포지션이 다 열려 있다. 타임아웃/실패해도(60초 안에 응답 없음 등)
-        # 모집 자체는 계속 진행한다 - position=None으로 남고, 카드에는 그 포지션이 "빈 자리"로
-        # 보인다(리더가 나중에 직접 참가 버튼으로 다시 고를 수는 없다 - 이미 참가자라 재선택
-        # UI는 2단계 이후 범위).
-        select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
-        select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
-        leader_position_view = PositionSelectView(interaction.user.id, required_positions, select_placeholder)
-        await interaction.followup.send(select_prompt, view=leader_position_view, ephemeral=True)
-        await leader_position_view.wait()
+        if required_positions:
+            # 🛡️ [1단계 고도화] 모집자 본인도 참가자라 자신의 포지션을 골라야 한다 - 아직 아무도
+            # 참가 전이라 전체 포지션이 다 열려 있다. 타임아웃/실패해도(60초 안에 응답 없음 등)
+            # 모집 자체는 계속 진행한다 - position=None으로 남고, 카드에는 그 포지션이 "빈 자리"로
+            # 보인다(리더가 나중에 직접 참가 버튼으로 다시 고를 수는 없다 - 이미 참가자라 재선택
+            # UI는 2단계 이후 범위).
+            select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
+            select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
+            leader_position_view = PositionSelectView(interaction.user.id, required_positions, select_placeholder)
+            await interaction.followup.send(select_prompt, view=leader_position_view, ephemeral=True)
+            await leader_position_view.wait()
 
-        leader_position = leader_position_view.selected_position
-        if leader_position is None:
-            print(f"[PARTY][WARN] Leader did not pick a position in time (recruitment={recruitment_id}), "
-                  f"proceeding with position=None.", flush=True)
+            leader_position = leader_position_view.selected_position
+            if leader_position is None:
+                print(f"[PARTY][WARN] Leader did not pick a position in time (recruitment={recruitment_id}), "
+                      f"proceeding with position=None.", flush=True)
+        else:
+            # 🛡️ [단순 흐름 되돌리기] 포지션 불필요 - 예전처럼 선택 단계 자체를 건너뛰고 바로 등록한다.
+            leader_position = None
 
         # 모집자 본인도 참가자 1명으로 자동 등록한다 (needed_count는 모집자 포함 총원).
         try:
@@ -861,6 +929,7 @@ class KyvoParty(KyvoBaseCog):
         leader_label = await self.get_msg(guild_id, "party_field_leader")
         queue_label = await self.get_msg(guild_id, "party_field_queue_type")
         positions_label = await self.get_msg(guild_id, "party_field_positions")
+        count_label = await self.get_msg(guild_id, "party_field_count")
         expires_label = await self.get_msg(guild_id, "party_field_expires")
         looking_for_label = await self.get_msg(guild_id, "party_field_looking_for")
 
@@ -925,12 +994,16 @@ class KyvoParty(KyvoBaseCog):
         if looking_for_line:
             embed.add_field(name=looking_for_label, value=looking_for_line, inline=True)
 
-        # 🛡️ [1단계 고도화] 단일 진행률 필드 대신 포지션별 줄("✅ Mid: @유저" / "🔲 ADC: 빈 자리")로
-        # 보여준다 - required_positions는 생성 시점에 스냅샷된 값(없으면 지금 전역 상수로 폴백,
-        # 레거시 행 대비).
-        required_positions = row.get("required_positions") or POSITION_CHOICES
-        positions_value = await self._build_position_field_value(guild_id, required_positions, participants)
-        embed.add_field(name=positions_label, value=positions_value, inline=False)
+        # 🛡️ [1단계 고도화 + 되돌리기] required_positions가 있으면 포지션별 줄("✅ Mid: @유저" /
+        # "🔲 ADC: 빈 자리")로, 없으면(모집 생성 시 "아니요"를 고른 경우) 예전 그대로 단순 진행률
+        # 필드("3/8명")로 보여준다.
+        required_positions = row.get("required_positions")
+        if required_positions:
+            positions_value = await self._build_position_field_value(guild_id, required_positions, participants)
+            embed.add_field(name=positions_label, value=positions_value, inline=False)
+        else:
+            current_count = len(participants)
+            embed.add_field(name=count_label, value=f"`{current_count}/{row['needed_count']}`", inline=True)
         if not finished and not expired and not cancelled:
             ends_at = datetime.fromisoformat(row["expires_at"])
             ts = int(ends_at.timestamp())
@@ -1017,27 +1090,33 @@ class KyvoParty(KyvoBaseCog):
                 await interaction.followup.send(msg, ephemeral=True)
                 return
 
-        # 🛡️ [1단계 고도화] 포지션 슬롯 - 이미 찬 포지션은 옵션에서 아예 뺀 Select를 매번 새로
-        # 만들어서 보여준다(PositionSelectView는 절대 재사용 안 함, 클래스 docstring 참고).
-        required_positions = row.get("required_positions") or POSITION_CHOICES
-        available_positions = await self._get_available_positions(recruitment_id, required_positions)
-        if not available_positions:
-            msg = await self.get_msg(guild_id, "party_err_all_positions_filled")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+        # 🛡️ [1단계 고도화 + 되돌리기] required_positions가 없으면(모집 생성 시 "아니요"를 고른 경우)
+        # 예전처럼 Select 없이 바로 참가시킨다(position=NULL). 있으면 이미 찬 포지션은 옵션에서
+        # 아예 뺀 Select를 매번 새로 만들어서 보여준다(PositionSelectView는 절대 재사용 안 함,
+        # 클래스 docstring 참고).
+        required_positions = row.get("required_positions")
 
-        select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
-        select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
-        position_view = PositionSelectView(interaction.user.id, available_positions, select_placeholder)
-        await interaction.followup.send(select_prompt, view=position_view, ephemeral=True)
-        await position_view.wait()
+        if required_positions:
+            available_positions = await self._get_available_positions(recruitment_id, required_positions)
+            if not available_positions:
+                msg = await self.get_msg(guild_id, "party_err_all_positions_filled")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
 
-        if position_view.selected_position is None:
-            msg = await self.get_msg(guild_id, "party_position_select_timeout")
-            await interaction.followup.send(msg, ephemeral=True)
-            return
+            select_prompt = await self.get_msg(guild_id, "party_position_select_prompt")
+            select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
+            position_view = PositionSelectView(interaction.user.id, available_positions, select_placeholder)
+            await interaction.followup.send(select_prompt, view=position_view, ephemeral=True)
+            await position_view.wait()
 
-        selected_position = position_view.selected_position
+            if position_view.selected_position is None:
+                msg = await self.get_msg(guild_id, "party_position_select_timeout")
+                await interaction.followup.send(msg, ephemeral=True)
+                return
+
+            selected_position = position_view.selected_position
+        else:
+            selected_position = None
 
         try:
             await self._db_call(
@@ -1049,7 +1128,9 @@ class KyvoParty(KyvoBaseCog):
             err_str = str(e)
             # 🛡️ 두 유니크 제약이 같은 테이블에 있어 "duplicate key"만으로는 어느 쪽인지 구분이
             # 안 된다 - 마이그레이션 SQL에서 이 이름으로 명시적으로 만든 부분 유니크 인덱스
-            # (party_participants_position_unique)가 포함돼 있는지부터 먼저 확인한다.
+            # (party_participants_position_unique, position이 NULL이 아닐 때만 적용되는 부분
+            # 인덱스라 포지션 없는 모집에서 여러 명이 전부 position=NULL로 들어와도 이 분기를
+            # 안 탄다)가 포함돼 있는지부터 먼저 확인한다.
             if "party_participants_position_unique" in err_str:
                 msg = await self.get_msg(guild_id, "party_err_position_taken", position=selected_position)
             elif "duplicate key" in err_str or "23505" in err_str:
@@ -1061,7 +1142,10 @@ class KyvoParty(KyvoBaseCog):
             await interaction.followup.send(msg, ephemeral=True)
             return
 
-        msg = await self.get_msg(guild_id, "party_join_success_position", position=selected_position)
+        if selected_position:
+            msg = await self.get_msg(guild_id, "party_join_success_position", position=selected_position)
+        else:
+            msg = await self.get_msg(guild_id, "party_join_success")
         await interaction.followup.send(msg, ephemeral=True)
 
         try:
