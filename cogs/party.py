@@ -43,6 +43,12 @@ TIER_CHOICES = [
 POSITION_CHOICES = ["Top", "Jungle", "Mid", "ADC", "Support"]
 POSITION_SELECT_TIMEOUT_SECONDS = 60
 
+# 🔗 leveling.py와 동일한 패턴(각 cog가 자기 완결적이도록 복제) - 팀 편성 페이지(/party/{id})로
+# 가는 딥링크 버튼용. Button(url=...)의 스킴을 discord.py가 검사하지 않아서, 잘못된 값(스킴
+# 누락 등)을 그대로 Discord API에 보내면 카드 전송 자체가 HTTPException으로 실패한다.
+DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
+DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
+
 # MMR 점수 계산 - 확정된 사양: Iron(서수 0) IV(0점) 0LP = 0점 기준. 티어 한 단계당 +400,
 # 디비전(IV->I) 한 칸당 +100, LP는 그대로 합산. 이번 1단계는 계산 함수 + 우선순위(인증 우선/
 # 자기신고 폴백) 로직까지만 준비하고, 실제 팀 밸런싱에 쓰는 건 2단계 범위다.
@@ -786,6 +792,20 @@ class KyvoParty(KyvoBaseCog):
         embed = await self._build_card_embed(recruitment_row, participants=leader_participants)
         join_label = await self.get_msg(guild_id, "party_btn_join")
         view = PartyCardView(self, join_label)
+
+        # 🔗 [팀 편성 페이지 딥링크] 이 recruitment_id는 지금 이 함수 스코프에만 있고, 재시작 후
+        # 참여 버튼 콜백을 되살리려고 setup()에서 등록하는 범용 PartyCardView 인스턴스(어떤
+        # 모집인지 모름, PartyCardView docstring 참고)에는 넣을 수 없다 - 그래서 여기, 카드를
+        # 실제로 전송하는 이 인스턴스에만 매번 새로 추가한다. 링크 버튼은 클릭해도 봇 콜백을
+        # 안 타고(디스코드 클라이언트가 URL을 직접 여는 것뿐) 그래서 bot.add_view() 재등록
+        # 대상일 필요가 아예 없다 - 참여 버튼과 달리 재시작 생존성 문제가 없다.
+        if DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
+            dashboard_button_label = await self.get_msg(guild_id, "party_dashboard_button")
+            view.add_item(discord.ui.Button(
+                label=dashboard_button_label,
+                style=discord.ButtonStyle.link,
+                url=f"{DASHBOARD_BASE_URL}/party/{recruitment_id}",
+            ))
 
         try:
             card_message = await interaction.channel.send(content=content, embed=embed, view=view, allowed_mentions=allowed_mentions)

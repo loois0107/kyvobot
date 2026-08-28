@@ -333,6 +333,7 @@
   "party_field_expires": "⏳ **마감**",
   "party_field_looking_for": "🔍 **찾는 조건**",
   "party_btn_join": "참여하기",
+  "party_dashboard_button": "🧩 팀 편성하기",
   "party_mention_notice_unmentionable": "⚠️ 참고: **{role}** 역할은 멘션 가능(mentionable) 설정이 꺼져 있고 봇에게도 '모든 역할 멘션' 권한이 없어서, 이번 멘션은 아무에게도 알림이 안 갔을 수 있습니다.",
   "party_create_success": "✅ 파티 모집글이 게시되었습니다!",
   "party_join_success": "✅ 파티에 참여했습니다!",
