@@ -172,10 +172,19 @@ class KyvoOnboarding(KyvoBaseCog):
             color=SERVER_LOG_JOIN_COLOR,
             timestamp=discord.utils.utcnow(),
         )
+        # 🛡️ intents.members는 켰지만 presences는 안 켜서(main.py), 새로 들어간 길드는 항상
+        # 청킹 대상이다(discord/state.py의 _guild_needs_chunking) - parse_guild_create가 청킹을
+        # 끝낸 뒤에야 on_guild_join을 dispatch하므로, 이 시점의 guild.members는 이미 다 차 있어
+        # 추가 API 호출이나 guild.chunk() 없이 바로 세도 된다.
+        bot_count = sum(1 for m in guild.members if m.bot)
+
         embed.add_field(name="서버", value=f"{guild.name} (`{guild.id}`)", inline=False)
         embed.add_field(name="멤버 수", value=f"{guild.member_count:,}명", inline=True)
         embed.add_field(name="서버 소유자", value=owner_text, inline=True)
-        embed.add_field(name="봇의 총 서버 수", value=f"{len(self.bot.guilds):,}개", inline=True)
+        # 🛡️ [혼동 방지] 바로 아래 "Kyvo가 함께하는 전체 서버 수"(len(self.bot.guilds))와
+        # 이름이 헷갈리기 쉬워서 라벨을 명확히 구분한다 - 이건 "이 서버 하나" 안의 봇 계정 수다.
+        embed.add_field(name="이 서버의 봇 수", value=f"{bot_count:,}개", inline=True)
+        embed.add_field(name="Kyvo가 함께하는 전체 서버 수", value=f"{len(self.bot.guilds):,}개", inline=True)
         return embed
 
     def _build_remove_log_embed(self, guild: discord.Guild) -> discord.Embed:
