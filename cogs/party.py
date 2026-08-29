@@ -38,10 +38,16 @@ TIER_CHOICES = [
     "Emerald", "Diamond", "Master", "Grandmaster", "Challenger",
 ]
 
-# 고도화 1단계 - LoL 5개 포지션 하드코딩. party_game_presets 프리셋 연동(게임별로 다른 포지션 목록)은
-# 2단계 이후 범위다 - 지금은 모든 모집이 이 고정 목록을 그대로 쓴다.
-POSITION_CHOICES = ["Top", "Jungle", "Mid", "ADC", "Support"]
 POSITION_SELECT_TIMEOUT_SECONDS = 60
+
+# 🛡️ [즉석 포지션 입력] 프리셋에 포지션이 없는 게임(또는 게임 미지정)에서 "예"를 선택하면
+# 더 이상 LoL 5개 포지션으로 강제 폴백하지 않고, 리더가 이 모집에 쓸 포지션 목록을 직접 입력한다.
+# 상한/자릿수는 대시보드 party-presets 페이지의 PARTY_PRESET_POSITION_MAX_COUNT/
+# PARTY_PRESET_POSITION_NAME_MAX_LENGTH(lib/partyPresets.ts)와 동일한 감각으로 맞춘다 -
+# 즉석 입력이든 프리셋 등록이든 결국 같은 required_positions(text[]) 컬럼에 들어가는 값이다.
+PARTY_ADHOC_POSITION_MIN_COUNT = 2
+PARTY_ADHOC_POSITION_MAX_COUNT = 10
+PARTY_ADHOC_POSITION_NAME_MAX_LENGTH = 20
 
 # 🔗 leveling.py와 동일한 패턴(각 cog가 자기 완결적이도록 복제) - 팀 편성 페이지(/party/{id})로
 # 가는 딥링크 버튼용. Button(url=...)의 스킴을 discord.py가 검사하지 않아서, 잘못된 값(스킴
@@ -315,16 +321,117 @@ class PositionSelectView(discord.ui.View):
             item.disabled = True
 
 
+class PositionListModal(discord.ui.Modal):
+    """[즉석 포지션 입력] PositionModeConfirmView에서 "예"를 선택했지만 프리셋에 포지션이 없을 때,
+    리더가 이번 모집 한정으로 쓸 포지션 목록을 직접 입력하는 모달. 대시보드 party-presets
+    페이지(positionsText.split(',')...)와 동일한 관례로 쉼표 구분 자유 텍스트를 trim/빈 값
+    제거해서 파싱한다 - 다만 그쪽은 TypeScript라 함수 자체를 공유할 순 없고 관례만 그대로 옮긴다.
+
+    🛡️ [컴포넌트 인터랙션에서만 연다] Discord는 인터랙션당 응답을 한 번만 허용해서, 이 모달은
+    항상 "새 컴포넌트 인터랙션"(PositionModeConfirmView의 Yes 버튼, 또는 검증 실패 후
+    PositionListRetryView의 재입력 버튼)의 유일한 응답으로만 열린다 - 절대 모달 제출 응답으로
+    또 다른 모달을 여는 방식은 쓰지 않는다(그 경로가 실제로 되는지 이 세션에서 검증하지
+    못했으므로, 이미 확인된 "버튼 클릭 → 모달" 경로만 재사용한다)."""
+
+    def __init__(self, cog: "KyvoParty", title: str, label: str, placeholder: str, finalize_kwargs: dict):
+        super().__init__(title=title[:45])
+        self.cog = cog
+        self.finalize_kwargs = finalize_kwargs
+        # 🛡️ label/placeholder를 따로 저장해둔다 - TextInput 생성 이후 .label/.placeholder를
+        # 다시 읽는 건 이 discord.py 버전에서 DeprecationWarning 대상이라(discord.ui.Label로의
+        # 이행 예고), 재입력 모달을 다시 만들 때(_send_retry) 컴포넌트에서 되읽지 않고 이 값을 쓴다.
+        self._label = label
+        self._placeholder = placeholder
+        self.positions_input = discord.ui.TextInput(
+            label=label[:45], style=discord.TextStyle.short,
+            placeholder=placeholder[:100], max_length=250, required=True,
+        )
+        self.add_item(self.positions_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id = self.finalize_kwargs["guild_id"]
+        positions = [p.strip() for p in self.positions_input.value.split(",") if p.strip()]
+
+        if not (PARTY_ADHOC_POSITION_MIN_COUNT <= len(positions) <= PARTY_ADHOC_POSITION_MAX_COUNT):
+            msg = await self.cog.get_msg(guild_id, "party_err_position_count",
+                                          min=PARTY_ADHOC_POSITION_MIN_COUNT, max=PARTY_ADHOC_POSITION_MAX_COUNT)
+            await self._send_retry(interaction, msg)
+            return
+
+        too_long = next((p for p in positions if len(p) > PARTY_ADHOC_POSITION_NAME_MAX_LENGTH), None)
+        if too_long:
+            msg = await self.cog.get_msg(guild_id, "party_err_position_name_too_long",
+                                          max=PARTY_ADHOC_POSITION_NAME_MAX_LENGTH, name=too_long)
+            await self._send_retry(interaction, msg)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await self.cog._finalize_recruitment(interaction, required_positions=positions, **self.finalize_kwargs)
+
+    async def _send_retry(self, interaction: discord.Interaction, error_msg: str):
+        guild_id = self.finalize_kwargs["guild_id"]
+        retry_label = await self.cog.get_msg(guild_id, "party_position_list_retry_button")
+        retry_view = PositionListRetryView(
+            interaction.user.id, retry_label, self.cog,
+            self.title, self._label, self._placeholder, self.finalize_kwargs,
+        )
+        await interaction.response.send_message(error_msg, view=retry_view, ephemeral=True)
+
+
+class PositionListRetryView(discord.ui.View):
+    """PositionListModal 검증 실패 시 재입력을 유도하는 버튼 하나짜리 View. 모달 제출 인터랙션의
+    응답은 이미 에러 메시지(send_message)에 써버렸으므로, 그 응답으로 곧장 새 모달을 열 수는
+    없다 - 대신 이 버튼을 눌러 만들어지는 "새" 컴포넌트 인터랙션으로 PositionListModal을 다시
+    연다(PositionModeConfirmView의 Yes 버튼과 완전히 동일한 패턴)."""
+
+    def __init__(self, author_id: int, retry_label: str, cog: "KyvoParty",
+                 modal_title: str, modal_label: str, modal_placeholder: str, finalize_kwargs: dict):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.cog = cog
+        self._modal_title = modal_title
+        self._modal_label = modal_label
+        self._modal_placeholder = modal_placeholder
+        self._finalize_kwargs = finalize_kwargs
+
+        btn = discord.ui.Button(label=retry_label, style=discord.ButtonStyle.primary)
+        btn.callback = self._on_retry
+        self.add_item(btn)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ This isn't for you.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_retry(self, interaction: discord.Interaction):
+        modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
+                                   self._modal_placeholder, self._finalize_kwargs)
+        await interaction.response.send_modal(modal)
+        self.stop()
+
+
 class PositionModeConfirmView(discord.ui.View):
     """RoleWarningConfirmView와 동일한 버튼 2개 확인 패턴 - /party_recruit 모달 제출 직후, 이번
-    모집에 포지션 슬롯(Top/Jungle/Mid/ADC/Support)이 필요한지 묻는다. Discord Modal은 TextInput만
-    지원해서(PartyRecruitmentModal docstring 참고) 이 질문은 모달 안에 못 넣고 모달 뒤에 별도
-    확인창으로 둔다."""
+    모집에 포지션 슬롯이 필요한지 묻는다. Discord Modal은 TextInput만 지원해서(PartyRecruitmentModal
+    docstring 참고) 이 질문은 모달 안에 못 넣고 모달 뒤에 별도 확인창으로 둔다.
 
-    def __init__(self, author_id: int, yes_label: str, no_label: str):
+    🛡️ [즉석 포지션 입력] "예"를 고르면 더 이상 이 자리에서 바로 required_positions를 확정하지
+    않는다 - PositionListModal을 열어 리더의 입력을 받아야 하므로, 그 모달의 on_submit이 최종
+    확정과 모집 생성을 이어받는다. 이 View는 그래서 finalize_kwargs(handle_recruitment_submit이
+    모아둔, required_positions만 빼고 나머지 전부)를 그대로 들고 있다가 Yes 버튼 콜백에서
+    PositionListModal에 넘겨준다. "아니요"는 예전과 동일하게 여기서 바로 끝난다(모달 불필요)."""
+
+    def __init__(self, cog: "KyvoParty", author_id: int, yes_label: str, no_label: str,
+                 modal_title: str, modal_label: str, modal_placeholder: str, finalize_kwargs: dict):
         super().__init__(timeout=60)
+        self.cog = cog
         self.author_id = author_id
         self.needs_positions: bool | None = None
+        self._modal_title = modal_title
+        self._modal_label = modal_label
+        self._modal_placeholder = modal_placeholder
+        self._finalize_kwargs = finalize_kwargs
 
         yes_btn = discord.ui.Button(label=yes_label, style=discord.ButtonStyle.primary)
         yes_btn.callback = self._on_yes
@@ -347,8 +454,18 @@ class PositionModeConfirmView(discord.ui.View):
     async def _on_yes(self, interaction: discord.Interaction):
         self.needs_positions = True
         self._disable_all()
-        await interaction.response.edit_message(view=self)
         self.stop()
+
+        modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
+                                   self._modal_placeholder, self._finalize_kwargs)
+        # 🛡️ 인터랙션은 응답을 한 번만 보낼 수 있어서, 이 응답 슬롯은 send_modal에 써야 한다 -
+        # Yes/No 버튼 비활성화는 인터랙션 응답이 아니라 별도의 일반 메시지 편집으로 분리한다.
+        await interaction.response.send_modal(modal)
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException as e:
+            print(f"[PARTY][WARN] Failed to disable position-mode buttons after Yes click: "
+                  f"{type(e).__name__}: {e}", flush=True)
 
     async def _on_no(self, interaction: discord.Interaction):
         self.needs_positions = False
@@ -691,6 +808,14 @@ class KyvoParty(KyvoBaseCog):
         party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=party_settings["card_lifetime_minutes"])
 
+        # 🛡️ required_positions만 빼고, 모집 확정에 필요한 나머지 전부를 여기 모아둔다 - 프리셋
+        # 있음/포지션 불필요 분기는 이 함수가 곧장 _finalize_recruitment를 부르면 되지만, "예"+즉석
+        # 입력 분기는 PositionListModal 제출(완전히 새로운 인터랙션)이 이어받아 불러야 해서
+        # 그쪽으로 넘겨줄 값들을 dict 하나로 묶어둔다.
+        finalize_kwargs = dict(guild_id=guild_id, lanes=lanes, needed_count=needed_count,
+                                selected_game=selected_game, min_tier=min_tier,
+                                looking_for_role=looking_for_role, expires_at=expires_at)
+
         # 🛡️ [프리셋 우선] selected_game에 등록된 프리셋이 포지션 목록을 명시해뒀으면 그걸 그대로
         # 쓰고 Yes/No 확인창 자체를 생략한다 - 게임이 이미 답을 갖고 있는데 매번 다시 묻는 건
         # 불필요하고, 발로란트처럼 포지션이 없는 게임에 롤 포지션이 잘못 붙는 걸 원천 차단한다.
@@ -701,42 +826,57 @@ class KyvoParty(KyvoBaseCog):
         preset_positions = preset_row.get("positions") if preset_row else None
 
         if preset_positions:
-            required_positions = preset_positions
+            await self._finalize_recruitment(interaction, required_positions=preset_positions, **finalize_kwargs)
+            return
+
+        # 🛡️ [즉석 포지션 입력] 프리셋에 포지션이 없으면(프리셋 자체가 없거나, 있어도 positions가
+        # 비어있음) 기존처럼 매 모집마다 직접 묻는다 - Discord Modal은 TextInput만 지원해서
+        # (PartyRecruitmentModal docstring 참고) 모달 안에 못 넣고, 제출 직후 버튼 2개짜리
+        # 확인창으로 받는다. 타임아웃 시에는 안전한 기본값인 "포지션 없음"으로 fail-open
+        # 처리한다 - 포지션 슬롯은 이번에 새로 추가된 기능이라, 응답이 없을 때 새 기능 쪽으로
+        # 강제하기보다 오랫동안 써온 기존 흐름을 기본값으로 삼는다.
+        #
+        # 🛡️ [게임별 문구 분기] 게임을 골랐는데 그 프리셋에 포지션이 없는 경우엔, 어떤 게임인지
+        # 밝혀서 "예"를 누르면 이번 모집에 쓸 포지션 목록을 직접 입력하게 된다는 걸 미리
+        # 알려준다 - 게임 자체를 안 골랐으면(순수 캐주얼 모집) 기존 문구 그대로 둔다.
+        if selected_game and preset_row:
+            mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt_game", game=selected_game)
         else:
-            # 🛡️ [1단계 고도화 + 되돌리기] 프리셋에 포지션이 없으면(프리셋 자체가 없거나, 있어도
-            # positions가 비어있음) 기존처럼 매 모집마다 직접 묻는다 - Discord Modal은 TextInput만
-            # 지원해서(PartyRecruitmentModal docstring 참고) 모달 안에 못 넣고, 제출 직후 버튼
-            # 2개짜리 확인창으로 받는다. 타임아웃 시에는 안전한 기본값인 "포지션 없음"으로
-            # fail-open 처리한다 - 포지션 슬롯은 이번에 새로 추가된 기능이라, 응답이 없을 때 새
-            # 기능 쪽으로 강제하기보다 오랫동안 써온 기존 흐름을 기본값으로 삼는다.
-            #
-            # 🛡️ [게임별 문구 분기] 게임을 골랐는데 그 프리셋에 포지션이 없는 경우엔, 어떤 게임인지
-            # 밝혀서 "예"를 누르면 이 게임과 안 맞을 수 있는 롤 포지션이 적용된다는 걸 미리
-            # 알려준다(발로란트에 롤 포지션이 잘못 붙던 원래 문제를 리더가 스스로 피할 수 있게) -
-            # 게임 자체를 안 골랐으면(순수 캐주얼 모집) 기존 문구 그대로 둔다.
-            if selected_game and preset_row:
-                mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt_game", game=selected_game)
-            else:
-                mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
+            mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
 
-            yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
-            no_label = await self.get_msg(guild_id, "party_position_mode_no")
-            mode_view = PositionModeConfirmView(interaction.user.id, yes_label, no_label)
-            await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
-            await mode_view.wait()
+        yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
+        no_label = await self.get_msg(guild_id, "party_position_mode_no")
+        modal_title = await self.get_msg(guild_id, "party_position_list_modal_title")
+        modal_label = await self.get_msg(guild_id, "party_position_list_modal_label")
+        modal_placeholder = await self.get_msg(guild_id, "party_position_list_modal_placeholder")
+        mode_view = PositionModeConfirmView(self, interaction.user.id, yes_label, no_label,
+                                             modal_title, modal_label, modal_placeholder, finalize_kwargs)
+        await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
+        await mode_view.wait()
 
-            needs_positions = mode_view.needs_positions
-            if needs_positions is None:
-                print(f"[PARTY][WARN] Leader did not answer the position-mode prompt in time "
-                      f"(guild={guild_id}), defaulting to no positions.", flush=True)
-                needs_positions = False
+        if mode_view.needs_positions:
+            # 🛡️ "예" 클릭 - PositionModeConfirmView._on_yes가 이미 PositionListModal을 열었다.
+            # 그 모달의 on_submit이 (검증 통과 시) _finalize_recruitment를 직접 이어서 부르므로
+            # 여기서는 더 할 일이 없다 - 리더가 모달을 끝내 제출하지 않으면(닫기/타임아웃) 다른
+            # 모달을 그냥 무시했을 때와 마찬가지로 이 모집은 만들어지지 않는다.
+            return
 
-            # 🛡️ 이번 모집의 포지션 목록을 생성 시점에 스냅샷한다 - 나중에 POSITION_CHOICES가
-            # 바뀌어도 이미 만들어진 이 모집엔 소급 적용되지 않는다(expires_at을 여기서 절대시각으로
-            # 스냅샷하는 것과 동일한 이유). "아니요"를 골랐으면 None으로 저장해서 예전의 단순
-            # 인원수 흐름을 그대로 쓴다.
-            required_positions = POSITION_CHOICES if needs_positions else None
+        if mode_view.needs_positions is None:
+            print(f"[PARTY][WARN] Leader did not answer the position-mode prompt in time "
+                  f"(guild={guild_id}), defaulting to no positions.", flush=True)
 
+        await self._finalize_recruitment(interaction, required_positions=None, **finalize_kwargs)
+
+    async def _finalize_recruitment(self, interaction: discord.Interaction, *, required_positions: list[str] | None,
+                                     guild_id: int, lanes: str, needed_count: int, selected_game: str | None,
+                                     min_tier: str | None, looking_for_role: str | None, expires_at: datetime) -> None:
+        """required_positions가 확정된 이후의 공통 마무리 로직 - DB insert, 리더 포지션 선택,
+        mmr_score 계산, 참가자 자동 등록, 카드 게시, message_id 기록까지. 프리셋에 포지션이
+        있거나 포지션이 아예 불필요한 경우엔 handle_recruitment_submit이 원래 모달 제출
+        인터랙션으로 곧장 부르고, "예"+즉석 입력 경로에서는 PositionListModal.on_submit이 그
+        모달 제출 인터랙션으로 이어서 부른다 - 인터랙션의 종류(원본 모달 vs 포지션 입력 모달)만
+        다를 뿐, 둘 다 이미 defer된 상태로 들어오고 channel/user/guild는 원 모집 컨텍스트와
+        동일해서 이 함수 입장에서는 완전히 동일하게 다룬다."""
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
         # 🛡️ [queue_type 필드 삭제] 컬럼 자체는 기존 데이터 보존을 위해 남겨두지만, 새 모집부터는
         # 이 키를 아예 안 보내서 NULL로 남긴다(컬럼이 nullable이라는 전제 - 실제로 확인 필요).
