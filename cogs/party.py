@@ -333,15 +333,20 @@ class PositionListModal(discord.ui.Modal):
     또 다른 모달을 여는 방식은 쓰지 않는다(그 경로가 실제로 되는지 이 세션에서 검증하지
     못했으므로, 이미 확인된 "버튼 클릭 → 모달" 경로만 재사용한다)."""
 
-    def __init__(self, cog: "KyvoParty", title: str, label: str, placeholder: str, finalize_kwargs: dict):
+    def __init__(self, cog: "KyvoParty", title: str, label: str, placeholder: str,
+                 retry_label: str, finalize_kwargs: dict):
         super().__init__(title=title[:45])
         self.cog = cog
         self.finalize_kwargs = finalize_kwargs
-        # 🛡️ label/placeholder를 따로 저장해둔다 - TextInput 생성 이후 .label/.placeholder를
-        # 다시 읽는 건 이 discord.py 버전에서 DeprecationWarning 대상이라(discord.ui.Label로의
-        # 이행 예고), 재입력 모달을 다시 만들 때(_send_retry) 컴포넌트에서 되읽지 않고 이 값을 쓴다.
+        # 🛡️ label/placeholder/retry_label을 따로 저장해둔다 - TextInput 생성 이후
+        # .label/.placeholder를 다시 읽는 건 이 discord.py 버전에서 DeprecationWarning
+        # 대상이고(discord.ui.Label로의 이행 예고), retry_label은 검증 실패 시(_send_retry)
+        # "응답보다 먼저 await하지 않기" 위해 미리 확보해둔다 - handle_recruitment_submit이
+        # 이 모달을 만들기 전에 이미 get_msg로 조회해서 넘겨준 값이라, 여기선 다시 조회할
+        # 필요가 없다.
         self._label = label
         self._placeholder = placeholder
+        self._retry_label = retry_label
         self.positions_input = discord.ui.TextInput(
             label=label[:45], style=discord.TextStyle.short,
             placeholder=placeholder[:100], max_length=250, required=True,
@@ -369,11 +374,13 @@ class PositionListModal(discord.ui.Modal):
         await self.cog._finalize_recruitment(interaction, required_positions=positions, **self.finalize_kwargs)
 
     async def _send_retry(self, interaction: discord.Interaction, error_msg: str):
-        guild_id = self.finalize_kwargs["guild_id"]
-        retry_label = await self.cog.get_msg(guild_id, "party_position_list_retry_button")
+        # 🛡️ [응답 먼저 원칙] retry_label은 __init__에서 이미 받아둔 값이라 여기서 await 없이
+        # 바로 쓴다 - 예전엔 여기서 get_msg를 새로 호출했는데, 그러면 응답(send_message)보다
+        # 먼저 실행되는 await이 생겨(실측상 Redis 캐시 왕복만 최소 수십~백여 ms) 3초 응답
+        # 예산을 불필요하게 갉아먹었다.
         retry_view = PositionListRetryView(
-            interaction.user.id, retry_label, self.cog,
-            self.title, self._label, self._placeholder, self.finalize_kwargs,
+            interaction.user.id, self._retry_label, self.cog,
+            self.title, self._label, self._placeholder, self._retry_label, self.finalize_kwargs,
         )
         await interaction.response.send_message(error_msg, view=retry_view, ephemeral=True)
 
@@ -385,13 +392,15 @@ class PositionListRetryView(discord.ui.View):
     연다(PositionModeConfirmView의 Yes 버튼과 완전히 동일한 패턴)."""
 
     def __init__(self, author_id: int, retry_label: str, cog: "KyvoParty",
-                 modal_title: str, modal_label: str, modal_placeholder: str, finalize_kwargs: dict):
+                 modal_title: str, modal_label: str, modal_placeholder: str,
+                 modal_retry_label: str, finalize_kwargs: dict):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.cog = cog
         self._modal_title = modal_title
         self._modal_label = modal_label
         self._modal_placeholder = modal_placeholder
+        self._modal_retry_label = modal_retry_label
         self._finalize_kwargs = finalize_kwargs
 
         btn = discord.ui.Button(label=retry_label, style=discord.ButtonStyle.primary)
@@ -406,7 +415,7 @@ class PositionListRetryView(discord.ui.View):
 
     async def _on_retry(self, interaction: discord.Interaction):
         modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
-                                   self._modal_placeholder, self._finalize_kwargs)
+                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs)
         await interaction.response.send_modal(modal)
         self.stop()
 
@@ -423,7 +432,8 @@ class PositionModeConfirmView(discord.ui.View):
     PositionListModal에 넘겨준다. "아니요"는 예전과 동일하게 여기서 바로 끝난다(모달 불필요)."""
 
     def __init__(self, cog: "KyvoParty", author_id: int, yes_label: str, no_label: str,
-                 modal_title: str, modal_label: str, modal_placeholder: str, finalize_kwargs: dict):
+                 modal_title: str, modal_label: str, modal_placeholder: str,
+                 modal_retry_label: str, finalize_kwargs: dict):
         super().__init__(timeout=60)
         self.cog = cog
         self.author_id = author_id
@@ -431,6 +441,7 @@ class PositionModeConfirmView(discord.ui.View):
         self._modal_title = modal_title
         self._modal_label = modal_label
         self._modal_placeholder = modal_placeholder
+        self._modal_retry_label = modal_retry_label
         self._finalize_kwargs = finalize_kwargs
 
         yes_btn = discord.ui.Button(label=yes_label, style=discord.ButtonStyle.primary)
@@ -457,7 +468,7 @@ class PositionModeConfirmView(discord.ui.View):
         self.stop()
 
         modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
-                                   self._modal_placeholder, self._finalize_kwargs)
+                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs)
         # 🛡️ 인터랙션은 응답을 한 번만 보낼 수 있어서, 이 응답 슬롯은 send_modal에 써야 한다 -
         # Yes/No 버튼 비활성화는 인터랙션 응답이 아니라 별도의 일반 메시지 편집으로 분리한다.
         await interaction.response.send_modal(modal)
@@ -757,30 +768,52 @@ class KyvoParty(KyvoBaseCog):
     async def party_recruit(self, interaction: discord.Interaction, game: str = None, min_tier: str = None):
         guild_id = interaction.guild_id
 
-        # 🛡️ game을 생략했으면 저장된 즐겨찾기로 조용히 대체한다 - Discord 슬래시 커맨드는 유저별
-        # 동적 기본값을 UI 레벨에서 지원하지 않아서, 이게 실질적으로 "기본값 자동 채움"에 해당한다.
-        favorite_game = None if game else await self._get_favorite_game(guild_id, interaction.user.id)
-        used_favorite = not game and favorite_game is not None
-        game = resolve_effective_game(game, favorite_game)
+        # 🛡️ [3초 예산 압축] 슬래시 커맨드가 여는 모달은 defer 후에 나중에 열 수 없다(모달은
+        # 반드시 최초 응답이어야 하는 Discord API 제약) - 그래서 모달을 열기 전 조회는 전부
+        # asyncio.gather로 최대한 동시에 실행해서 왕복 시간을 겹쳐야 한다. 실측(프로덕션
+        # Redis/Supabase, 읽기 전용): get_msg 하나가 캐시 hit이어도 평균 141ms, 콜드 시 최대
+        # 725ms - 이걸 4번 순차로 부르면 그것만으로 3초 예산을 위협한다.
+        #
+        # 라벨 4개(get_msg)는 서로도, game 결정 과정과도 완전히 무관해서 항상 같은 배치에
+        # 넣는다. game이 이미 주어졌으면(자동완성으로 선택) 프리셋 조회도 즐겨찾기 조회 없이
+        # 바로 시작할 수 있어 같은 배치에 넣는다 - game이 생략된 경우에만 즐겨찾기 -> 프리셋으로
+        # 이어지는 진짜 의존 체인(프리셋 조회는 즐겨찾기가 풀려야 game이 뭔지 알 수 있음)이라
+        # 어쩔 수 없이 한 단계 더 순차로 가지만, 그 경우에도 라벨 4개는 즐겨찾기 조회와
+        # 동시에 실행된다.
+        label_keys = ("party_modal_title", "party_modal_lanes_label",
+                      "party_modal_needed_count_label", "party_modal_looking_for_role_label")
+
+        if game:
+            title, lanes_label, count_label, looking_for_role_label, preset = await asyncio.gather(
+                *(self.get_msg(guild_id, key) for key in label_keys),
+                self._get_game_preset(guild_id, game),
+            )
+            used_favorite = False
+        else:
+            (title, lanes_label, count_label, looking_for_role_label,
+             favorite_game) = await asyncio.gather(
+                *(self.get_msg(guild_id, key) for key in label_keys),
+                self._get_favorite_game(guild_id, interaction.user.id),
+            )
+            # 🛡️ game을 생략했으면 저장된 즐겨찾기로 조용히 대체한다 - Discord 슬래시 커맨드는
+            # 유저별 동적 기본값을 UI 레벨에서 지원하지 않아서, 이게 실질적으로 "기본값 자동
+            # 채움"에 해당한다.
+            used_favorite = favorite_game is not None
+            game = resolve_effective_game(game, favorite_game)
+            preset = await self._get_game_preset(guild_id, game) if game else None
 
         # 자동완성은 후보만 제안할 뿐 강제하지 않는다 - 존재하지 않는 값이면 모달을 열기 전에
         # 바로 거부한다(모달 다 채운 뒤에야 알게 되는 것보다 낫다).
-        if game:
-            preset = await self._get_game_preset(guild_id, game)
-            if preset is None:
-                if used_favorite:
-                    # 저장된 즐겨찾기가 그 사이 삭제된 경우 - 유저가 직접 고른 값이 아니므로
-                    # 명령어를 실패시키지 않고 "게임 미지정"으로 조용히 넘어간다.
-                    game = None
-                else:
-                    msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
-                    await interaction.response.send_message(msg, ephemeral=True)
-                    return
+        if game and preset is None:
+            if used_favorite:
+                # 저장된 즐겨찾기가 그 사이 삭제된 경우 - 유저가 직접 고른 값이 아니므로
+                # 명령어를 실패시키지 않고 "게임 미지정"으로 조용히 넘어간다.
+                game = None
+            else:
+                msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
+                await interaction.response.send_message(msg, ephemeral=True)
+                return
 
-        title = await self.get_msg(guild_id, "party_modal_title")
-        lanes_label = await self.get_msg(guild_id, "party_modal_lanes_label")
-        count_label = await self.get_msg(guild_id, "party_modal_needed_count_label")
-        looking_for_role_label = await self.get_msg(guild_id, "party_modal_looking_for_role_label")
         modal = PartyRecruitmentModal(self, title, lanes_label, count_label, looking_for_role_label,
                                        selected_game=game, min_tier=min_tier)
         await interaction.response.send_modal(modal)
@@ -849,8 +882,14 @@ class KyvoParty(KyvoBaseCog):
         modal_title = await self.get_msg(guild_id, "party_position_list_modal_title")
         modal_label = await self.get_msg(guild_id, "party_position_list_modal_label")
         modal_placeholder = await self.get_msg(guild_id, "party_position_list_modal_placeholder")
+        # 🛡️ [응답 먼저 원칙] retry_label을 여기서 미리 조회해 PositionListModal까지 그대로
+        # 들려 보낸다 - 이 함수는 이미 맨 앞에서 defer()를 했으니 여기 있는 get_msg들은 3초
+        # 예산과 무관하지만, 모달의 검증 실패 경로(_send_retry)는 컴포넌트 인터랙션의 응답
+        # 슬롯을 새로 써야 해서 그쪽에서 다시 조회하면 응답보다 먼저 await이 생겨버린다.
+        modal_retry_label = await self.get_msg(guild_id, "party_position_list_retry_button")
         mode_view = PositionModeConfirmView(self, interaction.user.id, yes_label, no_label,
-                                             modal_title, modal_label, modal_placeholder, finalize_kwargs)
+                                             modal_title, modal_label, modal_placeholder,
+                                             modal_retry_label, finalize_kwargs)
         await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
         await mode_view.wait()
 
