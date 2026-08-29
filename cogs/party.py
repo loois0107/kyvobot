@@ -363,27 +363,30 @@ class PositionModeConfirmView(discord.ui.View):
 class PartyRecruitmentModal(discord.ui.Modal):
     """/party_recruit의 입력 모달. 디스코드 Modal은 TextInput만 지원하고 Select는 못 넣으므로
     라인 선택도 자유 텍스트로 받는다 (다중선택 UI가 꼭 필요해지면 모달 뒤에 별도 Select 단계를
-    추가하는 확장 경로로 남겨둔다)."""
+    추가하는 확장 경로로 남겨둔다).
 
-    def __init__(self, cog: "KyvoParty", title: str, queue_label: str, lanes_label: str, count_label: str,
+    🛡️ [queue_type 필드 삭제] "게임/활동 종류"를 자유 텍스트로 또 입력받는 게 /party_recruit의
+    game 파라미터(selected_game, 프리셋 자동완성)와 중복되고 혼란스러워서 이 입력 자체를 없앴다 -
+    카드 제목/파티 채널명은 이제 selected_game을 우선 쓴다(handle_recruitment_submit,
+    _build_card_embed, _create_party_channel 참고)."""
+
+    def __init__(self, cog: "KyvoParty", title: str, lanes_label: str, count_label: str,
                  looking_for_role_label: str, selected_game: str | None = None, min_tier: str | None = None):
         super().__init__(title=title[:45])
         self.cog = cog
         self.selected_game = selected_game
         self.min_tier = min_tier
-        self.queue_input = discord.ui.TextInput(label=queue_label[:45], max_length=50, required=True)
         self.lanes_input = discord.ui.TextInput(label=lanes_label[:45], max_length=100, required=False)
         self.count_input = discord.ui.TextInput(label=count_label[:45], max_length=3, required=True)
         self.looking_for_role_input = discord.ui.TextInput(
             label=looking_for_role_label[:45], max_length=PARTY_LOOKING_FOR_ROLE_MAX_LENGTH, required=False,
         )
-        self.add_item(self.queue_input)
         self.add_item(self.lanes_input)
         self.add_item(self.count_input)
         self.add_item(self.looking_for_role_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await self.cog.handle_recruitment_submit(interaction, self.queue_input.value, self.lanes_input.value,
+        await self.cog.handle_recruitment_submit(interaction, self.lanes_input.value,
                                                    self.count_input.value, self.selected_game,
                                                    self.min_tier, self.looking_for_role_input.value)
 
@@ -658,15 +661,14 @@ class KyvoParty(KyvoBaseCog):
                     return
 
         title = await self.get_msg(guild_id, "party_modal_title")
-        queue_label = await self.get_msg(guild_id, "party_modal_queue_label")
         lanes_label = await self.get_msg(guild_id, "party_modal_lanes_label")
         count_label = await self.get_msg(guild_id, "party_modal_needed_count_label")
         looking_for_role_label = await self.get_msg(guild_id, "party_modal_looking_for_role_label")
-        modal = PartyRecruitmentModal(self, title, queue_label, lanes_label, count_label, looking_for_role_label,
+        modal = PartyRecruitmentModal(self, title, lanes_label, count_label, looking_for_role_label,
                                        selected_game=game, min_tier=min_tier)
         await interaction.response.send_modal(modal)
 
-    async def handle_recruitment_submit(self, interaction: discord.Interaction, queue_type: str, lanes: str,
+    async def handle_recruitment_submit(self, interaction: discord.Interaction, lanes: str,
                                          count_str: str, selected_game: str | None = None,
                                          min_tier: str | None = None, looking_for_role: str | None = None) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -736,13 +738,14 @@ class KyvoParty(KyvoBaseCog):
             required_positions = POSITION_CHOICES if needs_positions else None
 
         # 1) DB에 먼저 기록한다 (message_id는 메시지를 보내야 알 수 있어 아직 비워둔다).
+        # 🛡️ [queue_type 필드 삭제] 컬럼 자체는 기존 데이터 보존을 위해 남겨두지만, 새 모집부터는
+        # 이 키를 아예 안 보내서 NULL로 남긴다(컬럼이 nullable이라는 전제 - 실제로 확인 필요).
         try:
             insert_res = await self._db_call(
                 lambda: self.bot.supabase.table("party_recruitments").insert({
                     "guild_id": str(guild_id),
                     "channel_id": str(interaction.channel.id),
                     "leader_id": str(interaction.user.id),
-                    "queue_type": queue_type.strip(),
                     "lanes": lanes.strip() if lanes else None,
                     "needed_count": needed_count,
                     "expires_at": expires_at.isoformat(),
@@ -826,7 +829,12 @@ class KyvoParty(KyvoBaseCog):
         # 실제로 전송하는 이 인스턴스에만 매번 새로 추가한다. 링크 버튼은 클릭해도 봇 콜백을
         # 안 타고(디스코드 클라이언트가 URL을 직접 여는 것뿐) 그래서 bot.add_view() 재등록
         # 대상일 필요가 아예 없다 - 참여 버튼과 달리 재시작 생존성 문제가 없다.
-        if DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
+        #
+        # 🛡️ [포지션 필요 모집에만 노출] required_positions가 없으면(포지션 불필요 모집) 대시보드
+        # 팀 편성 페이지에서 할 일이 사실상 없다(레드/블루 배정 자체가 포지션과 무관하게 가능은
+        # 하지만, 이 버튼의 원래 목적이 "포지션 슬롯이 있는 모집의 팀을 짜는" 것이라 굳이 안
+        # 붙인다) - 이전엔 이 조건과 무관하게 대시보드 URL만 설정돼 있으면 항상 붙었었다.
+        if required_positions and DASHBOARD_BASE_URL and DASHBOARD_BASE_URL_VALID:
             dashboard_button_label = await self.get_msg(guild_id, "party_dashboard_button")
             view.add_item(discord.ui.Button(
                 label=dashboard_button_label,
@@ -972,9 +980,14 @@ class KyvoParty(KyvoBaseCog):
                                  party_channel: discord.TextChannel | None = None, expired: bool = False,
                                  cancelled: bool = False, skip_thumbnail: bool = False) -> discord.Embed:
         guild_id = int(row["guild_id"])
-        title = await self.get_msg(guild_id, "party_card_title", queue_type=row["queue_type"])
+        # 🛡️ [queue_type 필드 삭제] 카드 제목은 이제 selected_game이 있으면 그걸로, 없으면(게임
+        # 미지정 캐주얼 모집) 게임명 없이 자연스러운 제목으로 폴백한다.
+        if row.get("selected_game"):
+            title = await self.get_msg(guild_id, "party_card_title_game", game=row["selected_game"])
+        else:
+            title = await self.get_msg(guild_id, "party_card_title_generic")
         leader_label = await self.get_msg(guild_id, "party_field_leader")
-        queue_label = await self.get_msg(guild_id, "party_field_queue_type")
+        details_label = await self.get_msg(guild_id, "party_field_details")
         positions_label = await self.get_msg(guild_id, "party_field_positions")
         count_label = await self.get_msg(guild_id, "party_field_count")
         expires_label = await self.get_msg(guild_id, "party_field_expires")
@@ -1028,12 +1041,11 @@ class KyvoParty(KyvoBaseCog):
                       f"(guild={guild_id}, url={card_thumbnail_url})", flush=True)
 
         embed.add_field(name=leader_label, value=f"<@{row['leader_id']}>", inline=True)
-        # Queue Type과 Lanes를 하나로 합쳐서 필드 수를 줄인다(5개->4개) - 촘촘했던 인라인 그리드가
-        # 자연스럽게 2열로 정리된다.
-        queue_value = row["queue_type"]
+        # 🛡️ [queue_type 필드 삭제] 예전엔 queue_type+lanes를 합쳐서 항상 보여줬는데, queue_type이
+        # 없어졌으니 lanes(이제 "추가 설명")만 남았다 - looking_for_line과 동일하게 내용이 있을
+        # 때만 필드를 추가하고, 없으면 필드 자체를 생략한다(빈 모집도 지금까지와 같은 카드로 보임).
         if row.get("lanes"):
-            queue_value = f"{queue_value} · {row['lanes']}"
-        embed.add_field(name=queue_label, value=queue_value, inline=True)
+            embed.add_field(name=details_label, value=row["lanes"], inline=True)
 
         # 🛡️ 순수 정보 표시용 - 참여 버튼은 이 값과 무관하게 항상 클릭 가능하다(강제 검증 없음).
         # 둘 다 없으면 필드 자체를 생략해서, 안 쓰는 모집은 지금까지와 완전히 같은 카드로 보인다.
@@ -1271,8 +1283,14 @@ class KyvoParty(KyvoBaseCog):
                 print(f"[PARTY][WARN] Participant {uid} not a cached guild member, cannot grant party "
                       f"channel access (recruitment={recruitment_id})", flush=True)
 
-        safe_name = "".join(c for c in row["queue_type"].lower() if c.isalnum() or c in "-_")[:80] or "party"
-        channel_name = f"party-{safe_name}"
+        # 🛡️ [queue_type 필드 삭제] 채널명은 이제 selected_game을 우선 쓰고, 게임 미지정 모집은
+        # queue_type이라는 자유 텍스트 대신 recruitment_id 기반의 일반적인 이름으로 폴백한다 -
+        # queue_type처럼 사람이 입력한 값이 아니라서 항상 안전한 채널명이 보장된다.
+        if row.get("selected_game"):
+            safe_name = "".join(c for c in row["selected_game"].lower() if c.isalnum() or c in "-_")[:80] or "party"
+            channel_name = f"party-{safe_name}"
+        else:
+            channel_name = f"party-{recruitment_id}"
 
         try:
             party_channel = await guild.create_text_channel(channel_name, overwrites=overwrites, reason="[KYVO PARTY]")
