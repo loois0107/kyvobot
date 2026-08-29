@@ -1268,7 +1268,34 @@ class KyvoParty(KyvoBaseCog):
             await interaction.followup.send("❌ An error occurred while processing your request.", ephemeral=True)
             return
 
-        if not row or row["status"] in ("closed", "expired"):
+        if not row:
+            msg = await self.get_msg(guild_id, "party_err_expired")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        recruitment_id = row["id"]
+
+        # 🛡️ [강퇴 재참가 방지] 다른 모든 체크(status/만료/min_tier 등)보다 먼저 확인한다 -
+        # party_participants 행은 강퇴 시 완전히 삭제되므로(대시보드 /api/party/[id] kick 액션),
+        # 아래의 "이미 참가함" 사전 체크로는 절대 못 잡는다. min_tier 검증과 동일하게 이것도
+        # 순수 UX가 아니라 실제 접근 통제라 fail-closed로 처리한다 - 조회 자체가 실패했는데
+        # 통과시키면 리더/관리자의 강퇴 조치가 일시적 DB 오류 한 번에 무력화된다.
+        try:
+            kick_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_recruitment_kicks").select("user_id")
+                        .eq("recruitment_id", recruitment_id).eq("user_id", str(user_id)).execute()
+            )
+        except Exception as e:
+            print(f"[PARTY][ERROR] Kick-record lookup failed (recruitment={recruitment_id}, user={user_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred while checking your eligibility to join.", ephemeral=True)
+            return
+        if kick_res.data:
+            msg = await self.get_msg(guild_id, "party_err_kicked")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if row["status"] in ("closed", "expired"):
             msg = await self.get_msg(guild_id, "party_err_expired")
             await interaction.followup.send(msg, ephemeral=True)
             return
@@ -1282,8 +1309,6 @@ class KyvoParty(KyvoBaseCog):
             msg = await self.get_msg(guild_id, "party_err_expired")
             await interaction.followup.send(msg, ephemeral=True)
             return
-
-        recruitment_id = row["id"]
 
         # (사전 체크, UX 응답 속도용 - 진짜 방어선은 아래 INSERT의 UNIQUE 제약)
         try:
@@ -1713,6 +1738,113 @@ class KyvoParty(KyvoBaseCog):
             await message.edit(embed=embed, view=None)
         except Exception as e:
             print(f"[PARTY][WARN] Failed to update recruitment card {message_id} after cancellation: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+    @app_commands.command(name="party_change_position", description="Change the position you're registered for in this channel's active recruitment.")
+    async def party_change_position(self, interaction: discord.Interaction):
+        """[참가자 셀프서비스] 대시보드 팀 편성 페이지(/party/{id})는 리더/관리자 전용으로
+        게이트돼 있어 일반 참가자는 애초에 들어갈 수 없다 - 그래서 포지션 변경은 봇 쪽 커맨드로
+        제공한다. /party_close와 동일하게 _find_recruitment(channel_id=...)로 "이 채널의
+        모집"을 찾는 패턴을 그대로 따른다."""
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild_id
+        user_id = interaction.user.id
+
+        row = await self._find_recruitment(channel_id=str(interaction.channel.id), status="recruiting")
+        if not row:
+            msg = await self.get_msg(guild_id, "party_err_no_active_recruitment")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        required_positions = row.get("required_positions")
+        if not required_positions:
+            msg = await self.get_msg(guild_id, "party_err_no_positions_to_change")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        recruitment_id = row["id"]
+
+        try:
+            participant_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants").select("position")
+                        .eq("recruitment_id", recruitment_id).eq("user_id", str(user_id)).limit(1).execute()
+            )
+            participant_row = participant_res.data[0] if participant_res.data else None
+        except Exception as e:
+            print(f"[PARTY][ERROR] Participant lookup failed for position change (recruitment={recruitment_id}, "
+                  f"user={user_id}): {type(e).__name__}: {e}", flush=True)
+            msg = await self.get_msg(guild_id, "party_err_save_failed")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        if participant_row is None:
+            msg = await self.get_msg(guild_id, "party_err_not_a_participant")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        # 🛡️ _get_available_positions는 "이미 누가 가진 포지션"을 전부 제외하는데, 그 "누가"에는
+        # 본인도 포함된다(자기 현재 포지션도 taken 집합에 들어감) - 그래서 이 결과는 자연스럽게
+        # "내가 지금 안 가진, 그리고 아무도 안 가진" 포지션 목록이 되어 "바꿔갈 수 있는 곳"과
+        # 정확히 일치한다. 자기 자신의 옛 값과는 재충돌할 일이 없어 별도 예외 처리가 필요 없다.
+        available_positions = await self._get_available_positions(recruitment_id, required_positions)
+        if not available_positions:
+            msg = await self.get_msg(guild_id, "party_err_all_positions_filled")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        select_prompt = await self.get_msg(guild_id, "party_position_change_select_prompt")
+        select_placeholder = await self.get_msg(guild_id, "party_position_select_placeholder")
+        position_view = PositionSelectView(interaction.user.id, available_positions, select_placeholder)
+        await interaction.followup.send(select_prompt, view=position_view, ephemeral=True)
+        await position_view.wait()
+
+        new_position = position_view.selected_position
+        if new_position is None:
+            msg = await self.get_msg(guild_id, "party_position_select_timeout")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        # 🛡️ 삭제 후 재삽입이 아니라 UPDATE 한 번으로 바꾼다 - 그 사이에 "포지션 없음" 순간이
+        # 생기지 않고(원자적), party_participants_position_unique는 갱신 후의 값 기준으로만
+        # 다른 행들과 비교하므로 자기 자신의 옛 값과 충돌할 일이 없다.
+        try:
+            await self._db_call(
+                lambda: self.bot.supabase.table("party_participants")
+                        .update({"position": new_position})
+                        .eq("recruitment_id", recruitment_id).eq("user_id", str(user_id)).execute()
+            )
+        except Exception as e:
+            err_str = str(e)
+            if "party_participants_position_unique" in err_str:
+                msg = await self.get_msg(guild_id, "party_err_position_taken", position=new_position)
+            else:
+                print(f"[PARTY][ERROR] Position change update failed (recruitment={recruitment_id}, user={user_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+                msg = await self.get_msg(guild_id, "party_err_save_failed")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        msg = await self.get_msg(guild_id, "party_position_change_success", position=new_position)
+        await interaction.followup.send(msg, ephemeral=True)
+
+        # 카드 갱신 - 이 커맨드는 카드의 참가 버튼을 눌러서 온 인터랙션이 아니라 별도 슬래시
+        # 커맨드라 interaction.message가 없다 - _cancel_recruiting_party와 동일하게 message_id로
+        # 카드 메시지를 직접 다시 찾아야 한다.
+        channel = self.bot.get_channel(int(row["channel_id"]))
+        message_id = row.get("message_id")
+        if channel is None or not message_id:
+            return
+        try:
+            participants_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants").select("user_id, position")
+                        .eq("recruitment_id", recruitment_id).execute()
+            )
+            participants = participants_res.data or []
+            card_message = await channel.fetch_message(int(message_id))
+            updated_embed = await self._build_card_embed(row, participants=participants)
+            await card_message.edit(embed=updated_embed)
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to refresh recruitment card {recruitment_id} after position change: "
                   f"{type(e).__name__}: {e}", flush=True)
 
     # ══════════════════════════════════════════════════════════
