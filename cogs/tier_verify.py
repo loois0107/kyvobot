@@ -186,7 +186,11 @@ class KyvoTierVerify(KyvoBaseCog):
     # ══════════════════════════════════════════════════════════
     #  Riot API 호출 - 상태 코드별 명확한 예외 분기, 429는 Retry-After 존중해서 1회 재시도.
     # ══════════════════════════════════════════════════════════
-    async def _riot_request(self, session: aiohttp.ClientSession, url: str):
+    async def _riot_request(self, session: aiohttp.ClientSession, url: str, extra_headers: dict | None = None):
+        headers = {"X-Riot-Token": RIOT_API_KEY}
+        if extra_headers:
+            headers.update(extra_headers)
+
         for attempt in range(RIOT_MAX_RETRIES):
             if not await self._wait_for_riot_slot():
                 raise RiotRateLimitedError()
@@ -194,7 +198,7 @@ class KyvoTierVerify(KyvoBaseCog):
             try:
                 async with session.get(
                     url,
-                    headers={"X-Riot-Token": RIOT_API_KEY},
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=RIOT_HTTP_TIMEOUT_SECONDS),
                 ) as resp:
                     if resp.status == 200:
