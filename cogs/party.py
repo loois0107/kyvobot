@@ -2,11 +2,28 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from cogs.base import KyvoBaseCog
+from locales import get_locale_message
 import asyncio
 import os
 import hmac
 from datetime import datetime, timezone, timedelta
 from aiohttp import web
+
+# 🛡️ [모달 흐름 언어 고정] /party_recruit 최초 실행 시점의 interaction.locale로 한 번만 lang을
+# 정하고, 확인창(PositionModeConfirmView) → 포지션 모달(PositionListModal) → 재시도 모달까지
+# 그 값을 계속 그대로 들려 보낸다. 중간에 guild_settings.language를 다시 조회하면(get_msg처럼)
+# 흐름 도중 길드 설정이 바뀌거나 캐시가 순간적으로 비어도 같은 흐름 안에서 언어가 갈릴 수 있어서,
+# 대신 이 파일 안에서는 get_locale_message(lang, key)를 직접 불러 순수 로컬 딕셔너리 조회로
+# 처리한다 - get_msg와 달리 Redis/Supabase 왕복이 전혀 없어 3초 응답 예산에도 더 유리하다.
+def _msg(lang: str, key: str, **kwargs) -> str:
+    template = get_locale_message(lang, key)
+    if kwargs:
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError) as e:
+            print(f"[LOCALES][WARN] '{key}' format failed: {type(e).__name__}")
+            return template
+    return template
 
 # 🛡️ 대시보드 tier-roles 일괄 편집기가 재매핑 시 "이전 역할 보유자 정리"를 이 봇에게 위임할 때
 # 쓰는 내부 전용 시크릿. 없어도 party 코그 자체는 정상 동작한다(슬래시 커맨드 쪽 정리는 이 시크릿과
@@ -334,16 +351,17 @@ class PositionListModal(discord.ui.Modal):
     못했으므로, 이미 확인된 "버튼 클릭 → 모달" 경로만 재사용한다)."""
 
     def __init__(self, cog: "KyvoParty", title: str, label: str, placeholder: str,
-                 retry_label: str, finalize_kwargs: dict):
+                 retry_label: str, finalize_kwargs: dict, lang: str):
         super().__init__(title=title[:45])
         self.cog = cog
         self.finalize_kwargs = finalize_kwargs
+        self.lang = lang
         # 🛡️ label/placeholder/retry_label을 따로 저장해둔다 - TextInput 생성 이후
         # .label/.placeholder를 다시 읽는 건 이 discord.py 버전에서 DeprecationWarning
         # 대상이고(discord.ui.Label로의 이행 예고), retry_label은 검증 실패 시(_send_retry)
         # "응답보다 먼저 await하지 않기" 위해 미리 확보해둔다 - handle_recruitment_submit이
-        # 이 모달을 만들기 전에 이미 get_msg로 조회해서 넘겨준 값이라, 여기선 다시 조회할
-        # 필요가 없다.
+        # 이 모달을 만들기 전에 이미 _msg(lang, ...)로 조회해서 넘겨준 값이라, 여기선 다시
+        # 조회할 필요가 없다.
         self._label = label
         self._placeholder = placeholder
         self._retry_label = retry_label
@@ -358,15 +376,15 @@ class PositionListModal(discord.ui.Modal):
         positions = [p.strip() for p in self.positions_input.value.split(",") if p.strip()]
 
         if not (PARTY_ADHOC_POSITION_MIN_COUNT <= len(positions) <= PARTY_ADHOC_POSITION_MAX_COUNT):
-            msg = await self.cog.get_msg(guild_id, "party_err_position_count",
-                                          min=PARTY_ADHOC_POSITION_MIN_COUNT, max=PARTY_ADHOC_POSITION_MAX_COUNT)
+            msg = _msg(self.lang, "party_err_position_count",
+                       min=PARTY_ADHOC_POSITION_MIN_COUNT, max=PARTY_ADHOC_POSITION_MAX_COUNT)
             await self._send_retry(interaction, msg)
             return
 
         too_long = next((p for p in positions if len(p) > PARTY_ADHOC_POSITION_NAME_MAX_LENGTH), None)
         if too_long:
-            msg = await self.cog.get_msg(guild_id, "party_err_position_name_too_long",
-                                          max=PARTY_ADHOC_POSITION_NAME_MAX_LENGTH, name=too_long)
+            msg = _msg(self.lang, "party_err_position_name_too_long",
+                       max=PARTY_ADHOC_POSITION_NAME_MAX_LENGTH, name=too_long)
             await self._send_retry(interaction, msg)
             return
 
@@ -381,6 +399,7 @@ class PositionListModal(discord.ui.Modal):
         retry_view = PositionListRetryView(
             interaction.user.id, self._retry_label, self.cog,
             self.title, self._label, self._placeholder, self._retry_label, self.finalize_kwargs,
+            self.lang,
         )
         await interaction.response.send_message(error_msg, view=retry_view, ephemeral=True)
 
@@ -393,7 +412,7 @@ class PositionListRetryView(discord.ui.View):
 
     def __init__(self, author_id: int, retry_label: str, cog: "KyvoParty",
                  modal_title: str, modal_label: str, modal_placeholder: str,
-                 modal_retry_label: str, finalize_kwargs: dict):
+                 modal_retry_label: str, finalize_kwargs: dict, lang: str):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.cog = cog
@@ -402,6 +421,7 @@ class PositionListRetryView(discord.ui.View):
         self._modal_placeholder = modal_placeholder
         self._modal_retry_label = modal_retry_label
         self._finalize_kwargs = finalize_kwargs
+        self.lang = lang
 
         btn = discord.ui.Button(label=retry_label, style=discord.ButtonStyle.primary)
         btn.callback = self._on_retry
@@ -415,7 +435,8 @@ class PositionListRetryView(discord.ui.View):
 
     async def _on_retry(self, interaction: discord.Interaction):
         modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
-                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs)
+                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs,
+                                   self.lang)
         await interaction.response.send_modal(modal)
         self.stop()
 
@@ -433,7 +454,7 @@ class PositionModeConfirmView(discord.ui.View):
 
     def __init__(self, cog: "KyvoParty", author_id: int, yes_label: str, no_label: str,
                  modal_title: str, modal_label: str, modal_placeholder: str,
-                 modal_retry_label: str, finalize_kwargs: dict):
+                 modal_retry_label: str, finalize_kwargs: dict, lang: str):
         super().__init__(timeout=60)
         self.cog = cog
         self.author_id = author_id
@@ -443,6 +464,7 @@ class PositionModeConfirmView(discord.ui.View):
         self._modal_placeholder = modal_placeholder
         self._modal_retry_label = modal_retry_label
         self._finalize_kwargs = finalize_kwargs
+        self.lang = lang
 
         yes_btn = discord.ui.Button(label=yes_label, style=discord.ButtonStyle.primary)
         yes_btn.callback = self._on_yes
@@ -468,7 +490,8 @@ class PositionModeConfirmView(discord.ui.View):
         self.stop()
 
         modal = PositionListModal(self.cog, self._modal_title, self._modal_label,
-                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs)
+                                   self._modal_placeholder, self._modal_retry_label, self._finalize_kwargs,
+                                   self.lang)
         # 🛡️ 인터랙션은 응답을 한 번만 보낼 수 있어서, 이 응답 슬롯은 send_modal에 써야 한다 -
         # Yes/No 버튼 비활성화는 인터랙션 응답이 아니라 별도의 일반 메시지 편집으로 분리한다.
         await interaction.response.send_modal(modal)
@@ -499,11 +522,13 @@ class PartyRecruitmentModal(discord.ui.Modal):
     _build_card_embed, _create_party_channel 참고)."""
 
     def __init__(self, cog: "KyvoParty", title: str, lanes_label: str, count_label: str,
-                 looking_for_role_label: str, selected_game: str | None = None, min_tier: str | None = None):
+                 looking_for_role_label: str, lang: str,
+                 selected_game: str | None = None, min_tier: str | None = None):
         super().__init__(title=title[:45])
         self.cog = cog
         self.selected_game = selected_game
         self.min_tier = min_tier
+        self.lang = lang
         self.lanes_input = discord.ui.TextInput(label=lanes_label[:45], max_length=100, required=False)
         self.count_input = discord.ui.TextInput(label=count_label[:45], max_length=3, required=True)
         self.looking_for_role_input = discord.ui.TextInput(
@@ -516,7 +541,8 @@ class PartyRecruitmentModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         await self.cog.handle_recruitment_submit(interaction, self.lanes_input.value,
                                                    self.count_input.value, self.selected_game,
-                                                   self.min_tier, self.looking_for_role_input.value)
+                                                   self.min_tier, self.looking_for_role_input.value,
+                                                   self.lang)
 
 
 class PartyCardView(discord.ui.View):
@@ -768,33 +794,30 @@ class KyvoParty(KyvoBaseCog):
     async def party_recruit(self, interaction: discord.Interaction, game: str = None, min_tier: str = None):
         guild_id = interaction.guild_id
 
+        # 🛡️ [모달 흐름 언어 고정] 확인창(PositionModeConfirmView) → 포지션 모달(PositionListModal)
+        # → 재시도 모달까지 이어지는 흐름 전체가 여기서 딱 한 번 정한 lang을 그대로 들고 다닌다.
+        # get_msg(guild_id, ...)처럼 매 단계마다 길드 설정을 다시 조회하지 않는다 - 그러면 흐름
+        # 도중 길드 설정이 바뀌거나(관리자가 /language를 그 사이 실행) 캐시/DB 조회가 순간적으로
+        # 실패해서 조용히 기본값으로 폴백하는 경우(get_guild_settings의 except 폴백 참고) 같은
+        # 요청 안에서 언어가 섞일 수 있었다. discord.Locale.korean과 정확히 비교해서(문자열 비교가
+        # 아니라 enum 비교) ko-KR 같은 변형 표기를 놓칠 걱정도 없다.
+        lang = "ko" if interaction.locale == discord.Locale.korean else "en"
+
         # 🛡️ [3초 예산 압축] 슬래시 커맨드가 여는 모달은 defer 후에 나중에 열 수 없다(모달은
-        # 반드시 최초 응답이어야 하는 Discord API 제약) - 그래서 모달을 열기 전 조회는 전부
-        # asyncio.gather로 최대한 동시에 실행해서 왕복 시간을 겹쳐야 한다. 실측(프로덕션
-        # Redis/Supabase, 읽기 전용): get_msg 하나가 캐시 hit이어도 평균 141ms, 콜드 시 최대
-        # 725ms - 이걸 4번 순차로 부르면 그것만으로 3초 예산을 위협한다.
-        #
-        # 라벨 4개(get_msg)는 서로도, game 결정 과정과도 완전히 무관해서 항상 같은 배치에
-        # 넣는다. game이 이미 주어졌으면(자동완성으로 선택) 프리셋 조회도 즐겨찾기 조회 없이
-        # 바로 시작할 수 있어 같은 배치에 넣는다 - game이 생략된 경우에만 즐겨찾기 -> 프리셋으로
-        # 이어지는 진짜 의존 체인(프리셋 조회는 즐겨찾기가 풀려야 game이 뭔지 알 수 있음)이라
-        # 어쩔 수 없이 한 단계 더 순차로 가지만, 그 경우에도 라벨 4개는 즐겨찾기 조회와
-        # 동시에 실행된다.
+        # 반드시 최초 응답이어야 하는 Discord API 제약). 라벨 4개는 이제 _msg(lang, key)로
+        # Redis/Supabase 왕복 없는 순수 로컬 딕셔너리 조회라 await/gather 자체가 필요 없다 -
+        # 예전엔 get_msg 4번(캐시 hit이어도 평균 141ms, 콜드 시 최대 725ms)을 gather로 겹쳐야
+        # 했지만, 그 지연이 이제 통째로 사라졌다. game 결정 과정(프리셋/즐겨찾기 조회)만 원래대로
+        # 비동기로 남는다.
         label_keys = ("party_modal_title", "party_modal_lanes_label",
                       "party_modal_needed_count_label", "party_modal_looking_for_role_label")
+        title, lanes_label, count_label, looking_for_role_label = (_msg(lang, key) for key in label_keys)
 
         if game:
-            title, lanes_label, count_label, looking_for_role_label, preset = await asyncio.gather(
-                *(self.get_msg(guild_id, key) for key in label_keys),
-                self._get_game_preset(guild_id, game),
-            )
+            preset = await self._get_game_preset(guild_id, game)
             used_favorite = False
         else:
-            (title, lanes_label, count_label, looking_for_role_label,
-             favorite_game) = await asyncio.gather(
-                *(self.get_msg(guild_id, key) for key in label_keys),
-                self._get_favorite_game(guild_id, interaction.user.id),
-            )
+            favorite_game = await self._get_favorite_game(guild_id, interaction.user.id)
             # 🛡️ game을 생략했으면 저장된 즐겨찾기로 조용히 대체한다 - Discord 슬래시 커맨드는
             # 유저별 동적 기본값을 UI 레벨에서 지원하지 않아서, 이게 실질적으로 "기본값 자동
             # 채움"에 해당한다.
@@ -810,17 +833,18 @@ class KyvoParty(KyvoBaseCog):
                 # 명령어를 실패시키지 않고 "게임 미지정"으로 조용히 넘어간다.
                 game = None
             else:
-                msg = await self.get_msg(guild_id, "party_err_unknown_preset", game=game)
+                msg = _msg(lang, "party_err_unknown_preset", game=game)
                 await interaction.response.send_message(msg, ephemeral=True)
                 return
 
-        modal = PartyRecruitmentModal(self, title, lanes_label, count_label, looking_for_role_label,
+        modal = PartyRecruitmentModal(self, title, lanes_label, count_label, looking_for_role_label, lang,
                                        selected_game=game, min_tier=min_tier)
         await interaction.response.send_modal(modal)
 
     async def handle_recruitment_submit(self, interaction: discord.Interaction, lanes: str,
                                          count_str: str, selected_game: str | None = None,
-                                         min_tier: str | None = None, looking_for_role: str | None = None) -> None:
+                                         min_tier: str | None = None, looking_for_role: str | None = None,
+                                         lang: str = "en") -> None:
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
 
@@ -830,8 +854,8 @@ class KyvoParty(KyvoBaseCog):
             needed_count = -1
 
         if not (PARTY_MIN_NEEDED_COUNT <= needed_count <= PARTY_MAX_NEEDED_COUNT):
-            msg = await self.get_msg(guild_id, "party_err_invalid_count",
-                                      min=PARTY_MIN_NEEDED_COUNT, max=PARTY_MAX_NEEDED_COUNT)
+            msg = _msg(lang, "party_err_invalid_count",
+                       min=PARTY_MIN_NEEDED_COUNT, max=PARTY_MAX_NEEDED_COUNT)
             await interaction.followup.send(msg, ephemeral=True)
             return
 
@@ -873,23 +897,23 @@ class KyvoParty(KyvoBaseCog):
         # 밝혀서 "예"를 누르면 이번 모집에 쓸 포지션 목록을 직접 입력하게 된다는 걸 미리
         # 알려준다 - 게임 자체를 안 골랐으면(순수 캐주얼 모집) 기존 문구 그대로 둔다.
         if selected_game and preset_row:
-            mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt_game", game=selected_game)
+            mode_prompt = _msg(lang, "party_position_mode_prompt_game", game=selected_game)
         else:
-            mode_prompt = await self.get_msg(guild_id, "party_position_mode_prompt")
+            mode_prompt = _msg(lang, "party_position_mode_prompt")
 
-        yes_label = await self.get_msg(guild_id, "party_position_mode_yes")
-        no_label = await self.get_msg(guild_id, "party_position_mode_no")
-        modal_title = await self.get_msg(guild_id, "party_position_list_modal_title")
-        modal_label = await self.get_msg(guild_id, "party_position_list_modal_label")
-        modal_placeholder = await self.get_msg(guild_id, "party_position_list_modal_placeholder")
-        # 🛡️ [응답 먼저 원칙] retry_label을 여기서 미리 조회해 PositionListModal까지 그대로
-        # 들려 보낸다 - 이 함수는 이미 맨 앞에서 defer()를 했으니 여기 있는 get_msg들은 3초
-        # 예산과 무관하지만, 모달의 검증 실패 경로(_send_retry)는 컴포넌트 인터랙션의 응답
-        # 슬롯을 새로 써야 해서 그쪽에서 다시 조회하면 응답보다 먼저 await이 생겨버린다.
-        modal_retry_label = await self.get_msg(guild_id, "party_position_list_retry_button")
+        yes_label = _msg(lang, "party_position_mode_yes")
+        no_label = _msg(lang, "party_position_mode_no")
+        modal_title = _msg(lang, "party_position_list_modal_title")
+        modal_label = _msg(lang, "party_position_list_modal_label")
+        modal_placeholder = _msg(lang, "party_position_list_modal_placeholder")
+        # 🛡️ retry_label을 여기서 미리 만들어 PositionListModal까지 그대로 들려 보낸다 - 이제
+        # _msg는 순수 로컬 조회라 "응답 먼저 원칙" 자체가 무의미해졌지만(await이 없어 순서
+        # 문제가 생길 수 없음), 그래도 모달의 검증 실패 경로(_send_retry)에서 매번 새로 만들지
+        # 않고 재사용하도록 그대로 들고 다니는 구조는 유지한다.
+        modal_retry_label = _msg(lang, "party_position_list_retry_button")
         mode_view = PositionModeConfirmView(self, interaction.user.id, yes_label, no_label,
                                              modal_title, modal_label, modal_placeholder,
-                                             modal_retry_label, finalize_kwargs)
+                                             modal_retry_label, finalize_kwargs, lang)
         await interaction.followup.send(mode_prompt, view=mode_view, ephemeral=True)
         await mode_view.wait()
 
