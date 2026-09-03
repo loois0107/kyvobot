@@ -48,6 +48,7 @@ PARTY_CHANNEL_LIFETIME_MAX_HOURS = 48
 # 연결할 수 있어야 하므로 고정 문자열이어야 한다 (recruitment_id는 여기 넣지 않는다 -
 # 아래 PartyCardView docstring 참고, giveaway/anonymous_reports와 동일한 이유).
 PARTY_JOIN_CUSTOM_ID = "kyvo_party:join"
+PARTY_LEAVE_CUSTOM_ID = "kyvo_party:leave"
 
 # 라이엇 API 연동 전까지 쓰는 자기신고 티어 목록 (LoL 랭크 체계)
 TIER_CHOICES = [
@@ -130,6 +131,17 @@ def resolve_party_settings(party_settings: dict | None) -> dict:
     game_name = str(party_settings.get("game_name") or "").strip()[:256]  # 디스코드 author name 256자 제한
     card_thumbnail_url = clean_thumbnail_url(party_settings.get("card_thumbnail_url"))
 
+    # 🛡️ [카테고리 지정] 값이 없으면(미설정 길드, 대시보드에서 "없음" 선택) None - _create_party_channel이
+    # category=None으로 guild.create_text_channel을 호출해 기존과 동일하게 최상단에 생성한다(하위호환).
+    # 스노우플레이크 형식이 아니면(수동 DB 편집 등) 조용히 None으로 되돌린다 - 대시보드 쪽
+    # validatePartySettings가 저장 시점에 이미 형식을 강제하므로, 여기서 걸리는 건 그 검증을
+    # 우회한 비정상 데이터뿐이다. 실제로 그 서버에 그 카테고리가 아직 존재하는지는 여기서 확인하지
+    # 않는다 - _create_party_channel이 guild.get_channel()로 조회해서 없으면 그때 카테고리 없이 생성한다.
+    category_id_raw = party_settings.get("category_id")
+    category_id = str(category_id_raw).strip() if category_id_raw else ""
+    if not (category_id.isdigit() and 17 <= len(category_id) <= 20):
+        category_id = None
+
     return {
         "card_color": card_color,
         "card_description": card_description,
@@ -137,6 +149,7 @@ def resolve_party_settings(party_settings: dict | None) -> dict:
         "channel_lifetime_hours": channel_lifetime_hours,
         "game_name": game_name,
         "card_thumbnail_url": card_thumbnail_url,
+        "category_id": category_id,
     }
 
 
@@ -554,7 +567,7 @@ class PartyCardView(discord.ui.View):
     클릭마다 interaction.message.id(=party_recruitments.message_id)로 DB에서 다시 찾는다.
     """
 
-    def __init__(self, cog: "KyvoParty", join_label: str = "Join Party"):
+    def __init__(self, cog: "KyvoParty", join_label: str = "Join Party", leave_label: str = "Cancel Join"):
         super().__init__(timeout=None)
         self.cog = cog
 
@@ -563,8 +576,19 @@ class PartyCardView(discord.ui.View):
         btn.callback = self._on_join
         self.add_item(btn)
 
+        # 🛡️ 참여 버튼과 마찬가지로 모든 카드가 이 View 인스턴스 하나를 공유한다 - 참가 여부는
+        # 버튼 자체를 숨기는 게 아니라(디스코드는 메시지 컴포넌트를 뷰어별로 다르게 못 보여줌)
+        # handle_leave 안에서 클릭한 유저가 실제 참가자인지 확인해서, 아니면 안내만 보낸다.
+        leave_btn = discord.ui.Button(label=leave_label, style=discord.ButtonStyle.secondary,
+                                       custom_id=PARTY_LEAVE_CUSTOM_ID, emoji="🚪")
+        leave_btn.callback = self._on_leave
+        self.add_item(leave_btn)
+
     async def _on_join(self, interaction: discord.Interaction):
         await self.cog.handle_join(interaction)
+
+    async def _on_leave(self, interaction: discord.Interaction):
+        await self.cog.handle_leave(interaction)
 
 
 class KyvoParty(KyvoBaseCog):
@@ -1024,7 +1048,8 @@ class KyvoParty(KyvoBaseCog):
 
         embed = await self._build_card_embed(recruitment_row, participants=leader_participants)
         join_label = await self.get_msg(guild_id, "party_btn_join")
-        view = PartyCardView(self, join_label)
+        leave_label = await self.get_msg(guild_id, "party_btn_leave")
+        view = PartyCardView(self, join_label, leave_label)
 
         # 🔗 [팀 편성 페이지 딥링크] 이 recruitment_id는 지금 이 함수 스코프에만 있고, 재시작 후
         # 참여 버튼 콜백을 되살리려고 setup()에서 등록하는 범용 PartyCardView 인스턴스(어떤
@@ -1483,6 +1508,94 @@ class KyvoParty(KyvoBaseCog):
                     print(f"[PARTY][ERROR] Failed to update recruitment card {recruitment_id} even without "
                           f"thumbnail: {type(e2).__name__}: {e2}", flush=True)
 
+    async def handle_leave(self, interaction: discord.Interaction) -> None:
+        """participant 본인이 자발적으로 빠지는 것 - handle_tier_cleanup_webhook이나 대시보드
+        kick 액션(party_recruitment_kicks에 기록 남김, 재참가 차단)과는 명확히 다르다. 여기는
+        party_participants 행만 지우고 kick 기록은 절대 남기지 않는다 - 그래야 handle_join의
+        강퇴 체크(party_recruitment_kicks 조회)에 안 걸리고 마감 전까지 언제든 재참가 가능하다."""
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild_id
+        user_id = interaction.user.id
+        message_id = str(interaction.message.id)
+
+        try:
+            res = await self._db_call(
+                lambda: self.bot.supabase.table("party_recruitments").select("*").eq("message_id", message_id).execute()
+            )
+            row = res.data[0] if res.data else None
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to look up recruitment for message {message_id}: {type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred while processing your request.", ephemeral=True)
+            return
+
+        if not row:
+            msg = await self.get_msg(guild_id, "party_err_expired")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        recruitment_id = row["id"]
+
+        # 🛡️ 리더는 party_recruitments.leader_id에 별도로 저장돼 있어서(참가자 목록과 무관),
+        # 여기서 자기 participant 행만 지워봤자 카드의 "리더" 필드는 그대로 남아 인원수만 안 맞는
+        # 유령 상태가 된다 - 아예 막고 /party_close로 안내한다.
+        if str(row["leader_id"]) == str(user_id):
+            msg = await self.get_msg(guild_id, "party_err_leader_cannot_leave")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        # 🛡️ [카드 View는 공유 인스턴스] full/expired/cancelled가 되면 카드 자체의 view가
+        # None으로 교체돼서(_finalize_recruitment 등) 실제로는 이 버튼이 안 남아있어야 정상이지만,
+        # 클릭이 그 교체 직전에 이미 큐에 들어와 있었을 수 있어 방어적으로 다시 확인한다 -
+        # 특히 'full'은 이미 파티 채널/권한까지 만들어진 뒤라, 그 시점 이후에 참가자 행을 지우면
+        # 채널 권한과 DB가 어긋난 채로 남는다.
+        if row["status"] != "recruiting":
+            msg = await self.get_msg(guild_id, "party_err_expired")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        try:
+            deleted = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants")
+                        .delete().eq("recruitment_id", recruitment_id).eq("user_id", str(user_id)).execute()
+            )
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to delete participant row for user={user_id} recruitment={recruitment_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            await interaction.followup.send("❌ An error occurred while processing your request.", ephemeral=True)
+            return
+
+        if not deleted.data:
+            msg = await self.get_msg(guild_id, "party_err_not_a_participant")
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
+        msg = await self.get_msg(guild_id, "party_leave_success")
+        await interaction.followup.send(msg, ephemeral=True)
+
+        try:
+            count_res = await self._db_call(
+                lambda: self.bot.supabase.table("party_participants").select("user_id, position")
+                        .eq("recruitment_id", recruitment_id).execute()
+            )
+            participants = count_res.data or []
+        except Exception as e:
+            print(f"[PARTY][ERROR] Failed to re-count participants for recruitment {recruitment_id}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return
+
+        try:
+            updated_embed = await self._build_card_embed(row, participants=participants)
+            await interaction.message.edit(embed=updated_embed)
+        except Exception as e:
+            print(f"[PARTY][WARN] Failed to update recruitment card {recruitment_id}, retrying without "
+                  f"thumbnail: {type(e).__name__}: {e}", flush=True)
+            try:
+                fallback_embed = await self._build_card_embed(row, participants=participants, skip_thumbnail=True)
+                await interaction.message.edit(embed=fallback_embed)
+            except Exception as e2:
+                print(f"[PARTY][ERROR] Failed to update recruitment card {recruitment_id} even without "
+                      f"thumbnail: {type(e2).__name__}: {e2}", flush=True)
+
     async def _create_party_channel(self, row: dict, participants: list[dict], card_message: discord.Message) -> None:
         guild_id = int(row["guild_id"])
         recruitment_id = row["id"]
@@ -1520,15 +1633,29 @@ class KyvoParty(KyvoBaseCog):
         else:
             channel_name = f"party-{recruitment_id}"
 
+        guild_settings_row = await self.get_guild_settings(guild_id)
+        party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
+
+        # 🛡️ [카테고리 지정] category_id가 있어도 그 채널이 이 서버에서 지워졌거나 카테고리가
+        # 아닌 다른 타입으로 바뀌었을 수 있다 - guild.get_channel()이 못 찾거나 타입이 안 맞으면
+        # category=None으로 조용히 폴백해서(기존 동작=최상단 생성) 모집 성사 자체가 막히지 않게 한다.
+        category = None
+        if party_settings["category_id"]:
+            found = guild.get_channel(int(party_settings["category_id"]))
+            if isinstance(found, discord.CategoryChannel):
+                category = found
+            else:
+                print(f"[PARTY][WARN] Configured category {party_settings['category_id']} not found or not "
+                      f"a category, creating without one (guild={guild_id})", flush=True)
+
         try:
-            party_channel = await guild.create_text_channel(channel_name, overwrites=overwrites, reason="[KYVO PARTY]")
+            party_channel = await guild.create_text_channel(channel_name, overwrites=overwrites,
+                                                              category=category, reason="[KYVO PARTY]")
         except Exception as e:
             print(f"[PARTY][ERROR] Failed to create party channel for recruitment {recruitment_id}: "
                   f"{type(e).__name__}: {e}", flush=True)
             return
 
-        guild_settings_row = await self.get_guild_settings(guild_id)
-        party_settings = resolve_party_settings((guild_settings_row.get("settings") or {}).get("party_settings"))
         channel_expires_at = datetime.now(timezone.utc) + timedelta(hours=party_settings["channel_lifetime_hours"])
         try:
             await self._db_call(
@@ -1546,7 +1673,7 @@ class KyvoParty(KyvoBaseCog):
         # Create 수명주기(비면 유예 후 삭제)를 재사용한다 - 단, 네임스페이스는 분리(kyvo:party_voice:*).
         try:
             party_voice_channel = await guild.create_voice_channel(
-                f"🔊 {channel_name}", overwrites=overwrites, reason="[KYVO PARTY]"
+                f"🔊 {channel_name}", overwrites=overwrites, category=category, reason="[KYVO PARTY]"
             )
         except Exception as e:
             print(f"[PARTY][WARN] Failed to create party voice channel for recruitment {recruitment_id}, "

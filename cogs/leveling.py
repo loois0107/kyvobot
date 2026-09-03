@@ -167,17 +167,18 @@ class KyvoLeveling(KyvoBaseCog):
             return
 
         if leveled_up:
-            try:
-                title = await self.get_msg(guild_id, "level_up_title")
-                desc = await self.get_msg(guild_id, "level_up_desc", mention=message.author.mention, level=current_level)
-                alert_embed = discord.Embed(
-                    title=title,
-                    description=desc,
-                    color=discord.Color.gold()
-                )
-                await message.channel.send(embed=alert_embed, delete_after=10.0)
-            except discord.Forbidden:
-                pass
+            if leveling_set.get("announce_level_up", True):
+                try:
+                    title = await self.get_msg(guild_id, "level_up_title")
+                    desc = await self.get_msg(guild_id, "level_up_desc", mention=message.author.mention, level=current_level)
+                    alert_embed = discord.Embed(
+                        title=title,
+                        description=desc,
+                        color=discord.Color.gold()
+                    )
+                    await message.channel.send(embed=alert_embed, delete_after=10.0)
+                except discord.Forbidden:
+                    pass
 
             role_rewards = leveling_set.get("role_rewards", {})
             target_role_id = role_rewards.get(str(current_level))
