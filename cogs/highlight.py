@@ -56,9 +56,28 @@ FONT_PATH = FONT_PATH_RAW.replace("\\", "/").replace(":", "\\:")  # ffmpeg 필�
 SFX_DIR = os.path.join(REPO_ROOT, "assets", "highlight_sfx")
 SFX_POOL = sorted(glob.glob(os.path.join(SFX_DIR, "crowd_cheer_*.wav")))
 
+# 대부분의 효과음은 "킬 시점 = 파일 시작(즉시 폭발)"이라 리드타임이 0이다. crowd_cheer_2.wav만
+# 예외 - 조용히 고조되다 마지막에 훅 터지는 구조라, "터짐이 완성된 시점"이 킬 시점에 오도록
+# 앞에서부터 재생해야 한다. crowd_cheer_2.wav의 엔벨로프 설계는 0~1.5s 조용함 → 1.5~4.5s 완만한
+# 고조 → 4.5~6.0s 큰 도약(훅 터짐) → 6.0s~ 정점 유지. 도약이 "끝나는" 6.0초 지점이 킬 시점에
+# 오도록 리드타임=6.0초로 잡는다(도약이 "시작"하는 4.5초를 쓰면 킬 순간엔 아직 다 안 터진 상태가
+# 됨 - 처음엔 4.5초로 했다가 실측으로 이 문제를 발견해서 6.0초로 수정함). 에셋을 다시 다듬으면
+# 이 값도 같이 조정해야 한다.
+SFX_LEAD_MS = {"crowd_cheer_2.wav": 6000}
+
 # 화면 우측 상단 시계 영역 비율 크롭 박스 (프로토타입에서 1920x804 캡처 기준 보정).
 # 다른 해상도/HUD 배치에서는 부정확할 수 있음 - 알려진 한계.
 CLOCK_CROP_RATIO = (0.965, 0.0, 1.0, 0.028)
+
+# 🛡️ [Sanity check] 크롭이 시계를 벗어나 골드/KDA 같은 다른 UI 숫자를 읽어도, 그 값들이
+# 우연히 clip_t와 그럴듯하게 상관돼 보이면 최소자승 회귀 자체는 아무 에러 없이 성공해버려서
+# 조용히 틀린 매핑을 쓰게 된다. 게임 시계는 항상 실시간 1배속(1초당 게임시간 1000ms)으로
+# 흐른다는 유일하게 확실한 불변식을 슬로프에 강제해서, 이 범위를 벗어나면 "시계를 잘못
+# 읽었다"고 간주하고 명확히 실패시킨다. ±15%는 짧은 클립(샘플 6개, 1초 단위 양자화 오차)에서도
+# 정상 클록이 오탐되지 않을 만큼 넉넉하면서, 시계와 무관한 숫자(거의 항상 1000ms/s와 크게
+# 다르거나 상관관계 자체가 약함)는 충분히 걸러낼 만큼 좁다.
+EXPECTED_CLOCK_SLOPE_MS_PER_SEC = 1000.0
+CLOCK_SLOPE_TOLERANCE_RATIO = 0.15
 
 # Match-v5 계열은 User-Agent 없으면 Cloudflare가 403으로 막는다는 게 프로토타입에서 확인된
 # 핵심 교훈 (Riot 인증 문제 아님). account-v1/league-v4는 필요 없어서 tier_verify._riot_request의
@@ -72,6 +91,22 @@ BROWSER_USER_AGENT_HEADER = {
 
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100MB
 MAX_CLIP_DURATION_SECONDS = 45.0
+
+# 🛡️ ffmpeg amix는 클리핑 방지를 위해 기본값(normalize=true)으로 입력 스트림들을 자동으로
+# 나눠서 합친다 - 즉 지금까지 킬 효과음은 원본 게임 오디오와 함께 자동으로 절반 가까이
+# 감쇠되고 있었다. normalize=0으로 그 자동 감쇠를 끄고, 대신 효과음 스트림에만 명시적으로
+# SFX_MIX_GAIN_DB만큼 게인을 얹는다. normalize를 끄면 합산 시 0dBFS를 넘길 수 있어
+# alimiter로 최종 출력을 안전하게 캡핑한다.
+SFX_MIX_GAIN_DB = 6.0
+# crowd_cheer_2.wav는 에셋 자체를 이미 정점이 0dBFS 근처까지 차도록 마스터링해뒀다(고조→도약 구조를
+# 살리려고). 여기에 SFX_MIX_GAIN_DB를 그대로 더 얹으면 렌더링 단계의 alimiter가 다시 세게 눌러서
+# 애써 만든 도약폭이 뭉개지는 걸 실측으로 확인함 - 그래서 이 파일만 추가 게인을 0으로 뺀다.
+SFX_MIX_GAIN_DB_OVERRIDE = {"crowd_cheer_2.wav": 0.0}
+# alimiter limit (선형 스케일, 1.0=0dBFS). 0.97(-0.3dB 근처)로 뒀더니 PCM 단계에선 안전했지만
+# AAC로 인코딩한 뒤 다시 재보면 실측 피크가 +2.4dB까지 튀는 걸 확인함 - 트랜지언트(박수/함성)를
+# 0dBFS 바로 아래까지 밀어붙이면 손실 압축 특유의 인터샘플 오버슈트가 나온다는 뜻. 인코딩 후에도
+# 진짜로 0dBFS를 안 넘도록 사전에 -3.7dB 정도 여유를 더 준다.
+SFX_LIMITER_CEILING = 0.65
 
 
 def _mmss_to_ms(mmss: str) -> int:
@@ -94,6 +129,13 @@ def _fit_linear_mapping(samples: list[dict]) -> tuple[float, float]:
         raise ValueError("모든 샘플의 clip_t가 동일함")
     slope = num / den
     intercept = mean_y - slope * mean_x
+    deviation_ratio = abs(slope - EXPECTED_CLOCK_SLOPE_MS_PER_SEC) / EXPECTED_CLOCK_SLOPE_MS_PER_SEC
+    if deviation_ratio > CLOCK_SLOPE_TOLERANCE_RATIO:
+        raise ValueError(
+            f"시계 기울기가 비정상적임(slope={slope:.1f}ms/s, 기대값={EXPECTED_CLOCK_SLOPE_MS_PER_SEC:.0f}ms/s "
+            f"±{CLOCK_SLOPE_TOLERANCE_RATIO * 100:.0f}%, 편차={deviation_ratio * 100:.1f}%) - "
+            "크롭이 시계를 벗어나 다른 UI 요소를 읽었을 가능성"
+        )
     return slope, intercept
 
 
@@ -288,13 +330,26 @@ class KyvoHighlight(KyvoBaseCog):
 
             audio_parts = ["[0:a]"]
             delay_filters = []
-            for i, t in enumerate(kill_times_sec):
-                delay_ms = max(0, int(t * 1000))
-                delay_filters.append(f"[{i+1}:a]adelay={delay_ms}|{delay_ms}[sfx{i}]")
+            for i, (t, sfx_path) in enumerate(zip(kill_times_sec, chosen_sfx)):
+                basename = os.path.basename(sfx_path)
+                lead_ms = SFX_LEAD_MS.get(basename, 0)
+                # 리드타임이 클립 시작보다 앞서 당겨지면(킬이 클립 맨 앞부분에 있으면) 0으로 클램핑 -
+                # 긴장감 도입부가 일부 잘린 채로 클립 시작점부터 재생될 뿐, 별도 처리가 필요 없다.
+                delay_ms = max(0, int(t * 1000) - lead_ms)
+                mix_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(basename, SFX_MIX_GAIN_DB)
+                delay_filters.append(
+                    f"[{i+1}:a]adelay={delay_ms}|{delay_ms},volume={mix_gain_db}dB[sfx{i}]"
+                )
                 audio_parts.append(f"[sfx{i}]")
             n_audio = len(audio_parts)
             audio_chain = ";".join(delay_filters)
-            amix = f"{''.join(audio_parts)}amix=inputs={n_audio}:duration=first:dropout_transition=0[aout]"
+            # normalize=0: amix 기본값(자동 감쇠)을 꺼서 위 volume 부스트가 실제로 반영되게 한다.
+            # 감쇠를 끈 대신 합산 결과가 0dBFS를 넘을 수 있어 alimiter로 최종 출력을 안전하게 캡핑.
+            amix = (
+                f"{''.join(audio_parts)}amix=inputs={n_audio}:duration=first:"
+                f"dropout_transition=0:normalize=0[mixed];"
+                f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50[aout]"
+            )
             full_audio = f"{audio_chain};{amix}" if audio_chain else "[0:a]anull[aout]"
 
             filter_complex = f"{video_chain};{full_audio}"
