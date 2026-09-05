@@ -59,6 +59,7 @@ class KyvoBot(commands.Bot):
             'cogs.help',
             'cogs.koreanbots',
             'cogs.bots_gg',
+            'cogs.topgg',
             'cogs.inquiry',
             'cogs.presence',
         ]
