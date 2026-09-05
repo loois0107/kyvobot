@@ -116,6 +116,25 @@ BROWSER_USER_AGENT_HEADER = {
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100MB
 MAX_CLIP_DURATION_SECONDS = 45.0
 
+# 🛡️ [출력 용량 제어] 디스코드 업로드 한도(서버 부스트 레벨에 따라 다르지만 25MB가 기준선)를
+# 넘기지 않도록, 실측 결과(오늘 실제 배포 코드 경로로 렌더한 파일이 15.78s에 6.74MB = 0.427MB/s)
+# 기준 최악의 경우(MAX_CLIP_DURATION_SECONDS + 킬 후 멘트 꼬리 ~10s ≈ 55s)를 계산해보면
+# 25MB 문턱에 위험할 만큼 가까워진다 - crf 고정값 대신 total_duration으로 목표 비트레이트를
+# 역산해서 파일 크기 자체를 항상 목표 근처로 수렴시킨다(콘텐츠 복잡도/해상도와 무관하게).
+DISCORD_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024
+TARGET_OUTPUT_SIZE_MB = 23.0  # 25MB에서 안전마진
+OUTPUT_AUDIO_BITRATE_KBPS = 128
+MIN_OUTPUT_VIDEO_BITRATE_KBPS = 300  # 극단적으로 긴 렌더에서도 화면이 아예 뭉개지지 않게 하는 하한
+# 🛡️ TARGET_OUTPUT_SIZE_MB/duration만 그대로 쓰면 짧은 클립에서 오히려 화질/용량이 쓸데없이
+# 커진다(예: 16초짜리를 23MB에 딱 맞추면 ~11.8Mbps짜리 영상이 나옴 - 예전 crf=20이 자연스럽게
+# 뽑던 ~3.4Mbps보다 훨씬 큼). "크기 예산이 허용하는 한도 안에서, 그래도 이 정도면 충분한
+# 화질 상한"을 같이 둬서 짧은 클립은 정상적인 크기로, 긴 클립만 예산에 맞춰 낮아지게 한다.
+MAX_OUTPUT_VIDEO_BITRATE_KBPS = 3500
+# 두 번째 안전장치: 비트레이트 역산은 "얼마나 큰가"를 다루지만 "얼마나 무거운 콘텐츠인가"(고해상도
+# 업로드)는 안 다룬다 - 같은 비트레이트라도 해상도가 크면 화질이 그만큼 더 나빠질 뿐 크기 자체는
+# 여전히 목표에 맞게 나오긴 하지만, 화질 하한을 지키려면 애초에 픽셀 수 자체를 제한하는 게 낫다.
+MAX_OUTPUT_WIDTH = 1920
+
 # 🛡️ ffmpeg amix는 클리핑 방지를 위해 기본값(normalize=true)으로 입력 스트림들을 자동으로
 # 나눠서 합친다 - 즉 지금까지 킬 효과음은 원본 게임 오디오와 함께 자동으로 절반 가까이
 # 감쇠되고 있었다. normalize=0으로 그 자동 감쇠를 끄고, 대신 효과음 스트림에만 명시적으로
@@ -445,14 +464,20 @@ class KyvoHighlight(KyvoBaseCog):
             raise RuntimeError(f"관중 함성 효과음을 찾을 수 없음: {SFX_DIR}")
         return random.choice(SFX_POOL)
 
-    def _render_video(self, video_path: str, video_duration: float, schedule: dict,
-                       work_dir: str, out_mp4: str) -> str:
+    def _render_video(self, video_path: str, video_duration: float, video_width: int,
+                       schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "stage1"?, "stage2"?, "main", "hype", "sub"} - 각
         엔트리는 {"wav","text","start","duration"} (stage1/stage2는 자리가 없으면 None).
         타이밍 자체는 plan_stages()에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로
         ffmpeg 인풋/필터그래프를 조립하기만 한다."""
         total_duration = schedule["total_duration"]
         cheer_path = self._make_sfx_pick()
+
+        size_budget_total_kbps = (TARGET_OUTPUT_SIZE_MB * 8192) / total_duration
+        quality_ceiling_total_kbps = MAX_OUTPUT_VIDEO_BITRATE_KBPS + OUTPUT_AUDIO_BITRATE_KBPS
+        target_total_kbps = min(quality_ceiling_total_kbps, size_budget_total_kbps)
+        target_video_kbps = max(MIN_OUTPUT_VIDEO_BITRATE_KBPS,
+                                 target_total_kbps - OUTPUT_AUDIO_BITRATE_KBPS)
 
         run_dir = os.path.join(work_dir, f"txt_{uuid.uuid4().hex[:8]}")
         os.makedirs(run_dir, exist_ok=True)
@@ -469,6 +494,11 @@ class KyvoHighlight(KyvoBaseCog):
 
             # ── 자막 ──
             draw_filters = []
+            # 🛡️ 유저가 1440p/4K 등 고해상도 클립을 올리면(크기만 100MB 이내면 통과되므로
+            # 충분히 가능) 목표 비트레이트가 픽셀 수 대비 너무 낮아져 화질이 심하게 뭉개진다 -
+            # 스케일을 먼저 걸어 픽셀 수 자체를 낮춰둔다. -2로 짝수 높이 보장(libx264 요구사항).
+            if video_width > MAX_OUTPUT_WIDTH:
+                draw_filters.append(f"scale={MAX_OUTPUT_WIDTH}:-2")
             # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
             # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
             # 정지시키는 대신 마지막 프레임을 그대로 붙잡아 늘리는 가장 단순한 방법(tpad) -
@@ -527,11 +557,19 @@ class KyvoHighlight(KyvoBaseCog):
 
             filter_complex = f"{video_chain};{full_audio}"
 
+            # 🛡️ crf 고정값 대신 total_duration에서 역산한 목표 비트레이트로 인코딩 -
+            # 콘텐츠 복잡도/해상도와 무관하게 파일 크기가 항상 TARGET_OUTPUT_SIZE_MB 근처로
+            # 수렴한다(디스코드 업로드 한도 대응). maxrate/bufsize로 순간적인 폭주만 눌러주고
+            # 평균은 -b:v 그대로 나가게 하는 표준 단일 패스 VBV 제한 인코딩.
             cmd = [FFMPEG_EXE, "-y", *inputs,
                    "-filter_complex", filter_complex,
                    "-map", "[vout]", "-map", "[aout]",
-                   "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                   "-c:a", "aac", "-t", str(total_duration),
+                   "-c:v", "libx264", "-preset", "veryfast",
+                   "-b:v", f"{int(target_video_kbps)}k",
+                   "-maxrate", f"{int(target_video_kbps * 1.5)}k",
+                   "-bufsize", f"{int(target_video_kbps * 2)}k",
+                   "-c:a", "aac", "-b:a", f"{OUTPUT_AUDIO_BITRATE_KBPS}k",
+                   "-t", str(total_duration),
                    out_mp4]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -849,18 +887,50 @@ class KyvoHighlight(KyvoBaseCog):
 
         out_mp4 = os.path.join(work_dir, "highlight_final.mp4")
         try:
-            await self._to_executor(self._render_video, video_path, duration, schedule, work_dir, out_mp4)
+            await self._to_executor(self._render_video, video_path, duration, width, schedule, work_dir, out_mp4)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Render failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
             return
 
+        await self._send_result_or_report_failure(interaction, progress_msg, guild_id, out_mp4)
+
+    async def _send_result_or_report_failure(self, interaction, progress_msg, guild_id, out_mp4) -> None:
+        """렌더링된 파일을 보내되, 용량 초과나 그 외 업로드 실패를 조용히 묻지 않고 progress_msg를
+        적절한 에러로 되돌린다. 독립 메서드로 뺀 이유: 이 분기 로직 자체를 파이프라인 전체를
+        돌리지 않고도 단위 테스트할 수 있어야 하기 때문."""
+        # 🛡️ 비트레이트 역산으로 크기를 목표 근처로 수렴시켰지만, 그래도 극단적인 경우(예상보다
+        # 훨씬 복잡한 콘텐츠, 컨테이너/오디오 오버헤드 오차)를 대비해 실제 파일 크기를 보내기
+        # 전에 먼저 확인한다 - 어차피 실패할 업로드를 시도해서 시간 버릴 필요 없이 바로 안내.
+        out_size_bytes = os.path.getsize(out_mp4)
+        if out_size_bytes > DISCORD_UPLOAD_LIMIT_BYTES:
+            print(f"[HIGHLIGHT][WARN] Rendered output exceeds Discord upload limit "
+                  f"({out_size_bytes / 1024 / 1024:.1f}MB, guild={guild_id})", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_output_too_large"))
+            return
+
+        # 🛡️ [버그 수정] 이전에는 전송 성공 여부와 무관하게 먼저 "완성됐습니다"로 편집해버려서,
+        # followup.send가 실패하면(용량 초과 등) 유저는 성공 메시지만 보고 실제 파일은 영영 못
+        # 받는 상황이 조용히 묻혔다. 전송을 먼저 시도하고, 성공했을 때만 성공 메시지로 편집한다.
+        try:
+            await interaction.followup.send(
+                content=await self.get_msg(guild_id, "highlight_success_caption"),
+                file=discord.File(out_mp4, filename="highlight.mp4"),
+                ephemeral=False,
+            )
+        except discord.HTTPException as e:
+            print(f"[HIGHLIGHT][ERROR] Upload failed (status={e.status}, guild={guild_id}): {e}", flush=True)
+            if e.status == 413:
+                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_output_too_large"))
+            else:
+                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_upload_failed"))
+            return
+        except Exception as e:
+            print(f"[HIGHLIGHT][ERROR] Unexpected upload failure (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_upload_failed"))
+            return
+
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_success_caption"))
-        await interaction.followup.send(
-            content=await self.get_msg(guild_id, "highlight_success_caption"),
-            file=discord.File(out_mp4, filename="highlight.mp4"),
-            ephemeral=False,
-        )
 
 
 async def setup(bot):
