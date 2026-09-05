@@ -398,6 +398,7 @@
   "highlight_err_match_not_found": "❌ 이 클립 시간대에 해당하는 매치메이킹 게임을 찾지 못했습니다. 커스텀 게임/연습 모드는 지원하지 않으며, 방금 끝난 게임이면 잠시 후 다시 시도해주세요.",
   "highlight_err_clock_read_failed": "❌ 영상에서 인게임 시계를 읽지 못했습니다. 화면 우측 상단에 시계가 보이는 클립인지 확인해주세요.",
   "highlight_err_no_kills": "❌ 이 클립 구간에서 킬 이벤트를 찾지 못했습니다. 킬 장면이 포함된 구간으로 다시 시도해주세요.",
+  "highlight_err_tts_failed": "❌ 캐스터 음성 합성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_riot_auth": "⚠️ 설정 문제로 하이라이트 기능을 일시적으로 사용할 수 없습니다. 서버 관리자에게 문의해주세요.",
   "highlight_err_riot_rate_limited": "❌ 지금 라이엇 API 요청이 많습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_riot_server_error": "❌ 라이엇 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",

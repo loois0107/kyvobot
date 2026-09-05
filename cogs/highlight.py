@@ -38,6 +38,17 @@ if not OPENAI_API_KEY:
         "Set it before starting the bot (used for clock OCR + commentary generation)."
     )
 
+# 🛡️ 메인 캐스터 대사(실제 킬러/희생자 이름이 들어가는 한 줄)만 실시간 TTS로 합성한다 -
+# 빌드업 1/2단계·Hype·Sub는 화면 상황과 무관한 정적 음성 풀(assets/highlight_voice/)이라
+# 이 키가 없어도 동작하지만, 메인 캐스터 음성은 이 기능의 핵심이라 다른 필수 키들과 동일한
+# fail-fast 원칙을 적용한다.
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+if not ELEVENLABS_API_KEY:
+    raise RuntimeError(
+        "[HIGHLIGHT] ELEVENLABS_API_KEY environment variable is not set. "
+        "Set it before starting the bot (used for the real-time main-caster voice line)."
+    )
+
 # 🛡️ Render 무료 플랜은 디스크가 없어 이 기능이 원천적으로 작동 불가능 - 유료 전환 전까지는
 # 기본 비활성. env var가 없으면 setup()에서 add_cog() 자체를 건너뛰어 명령어가 아예 등록되지 않는다.
 HIGHLIGHT_FEATURE_ENABLED = os.environ.get("HIGHLIGHT_FEATURE_ENABLED", "").strip().lower() in ("1", "true", "yes")
@@ -63,7 +74,7 @@ SFX_POOL = sorted(glob.glob(os.path.join(SFX_DIR, "crowd_cheer_*.wav")))
 # 오도록 리드타임=6.0초로 잡는다(도약이 "시작"하는 4.5초를 쓰면 킬 순간엔 아직 다 안 터진 상태가
 # 됨 - 처음엔 4.5초로 했다가 실측으로 이 문제를 발견해서 6.0초로 수정함). 에셋을 다시 다듬으면
 # 이 값도 같이 조정해야 한다.
-SFX_LEAD_MS = {"crowd_cheer_2.wav": 6000}
+SFX_LEAD_MS = {"crowd_cheer_2.wav": 6000, "crowd_cheer_4.wav": 14800}
 
 # 화면 우측 상단 시계 영역 비율 크롭 박스 (프로토타입에서 1920x804 캡처 기준 보정).
 # 다른 해상도/HUD 배치에서는 부정확할 수 있음 - 알려진 한계.
@@ -114,12 +125,104 @@ SFX_MIX_GAIN_DB = 6.0
 # crowd_cheer_2.wav는 에셋 자체를 이미 정점이 0dBFS 근처까지 차도록 마스터링해뒀다(고조→도약 구조를
 # 살리려고). 여기에 SFX_MIX_GAIN_DB를 그대로 더 얹으면 렌더링 단계의 alimiter가 다시 세게 눌러서
 # 애써 만든 도약폭이 뭉개지는 걸 실측으로 확인함 - 그래서 이 파일만 추가 게인을 0으로 뺀다.
-SFX_MIX_GAIN_DB_OVERRIDE = {"crowd_cheer_2.wav": 0.0}
+# crowd_cheer_4.wav(연속 배경+킬 시 dB 앵커 상승, 이번 라운드 신규 - assets/highlight_sfx/README.md
+# 참고)도 이미 자체적으로 목표 레벨까지 차 있어 같은 이유로 추가 부스트를 뺀다.
+SFX_MIX_GAIN_DB_OVERRIDE = {"crowd_cheer_2.wav": 0.0, "crowd_cheer_4.wav": 0.0}
 # alimiter limit (선형 스케일, 1.0=0dBFS). 0.97(-0.3dB 근처)로 뒀더니 PCM 단계에선 안전했지만
 # AAC로 인코딩한 뒤 다시 재보면 실측 피크가 +2.4dB까지 튀는 걸 확인함 - 트랜지언트(박수/함성)를
 # 0dBFS 바로 아래까지 밀어붙이면 손실 압축 특유의 인터샘플 오버슈트가 나온다는 뜻. 인코딩 후에도
 # 진짜로 0dBFS를 안 넘도록 사전에 -3.7dB 정도 여유를 더 준다.
 SFX_LIMITER_CEILING = 0.65
+
+# ══════════════════════════════════════════════════════════
+#  3단계 빌드업 체인 (이상감지 -> 감정격상 -> 킬폭발) - 정적 음성 풀 + 실시간 메인 대사
+# ══════════════════════════════════════════════════════════
+# 🛡️ [비용 설계] 화면 상황과 무관한(사실 주장이 전혀 없는) 순수 감정 표현인 빌드업 1/2단계와
+# Hype/Sub는 SFX_POOL과 똑같은 glob+random.choice 정적 풀로 미리 구워둔다 - 실제 킬러/희생자
+# 이름이 들어가야 하는 메인 캐스터 대사 "한 줄"만 렌더당 ElevenLabs 실시간 호출 1회로 처리한다.
+VOICE_DIR = os.path.join(REPO_ROOT, "assets", "highlight_voice")
+BUILDUP1_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_*.wav")))
+BUILDUP2_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup2_*.wav")))
+HYPE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_*.wav")))
+SUB_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_*.wav")))
+
+# 각 빌드업 파일의 실측 강조 지점(초) - 0.08s 윈도우 슬라이딩 RMS로 사전 측정
+# (_build_highlight_voice_pool.py, 한 번 실행하고 버리는 오프라인 빌드 스크립트).
+# 빌드업만 필요함: 킬 시점 기준 특정 목표 시각에 정렬돼야 하기 때문. Hype/Sub는 메인이 끝난
+# 직후 순차 재생일 뿐이라 정렬 기준점이 필요 없다(파일 시작 = 배치 시작).
+BUILDUP_PEAK_T = {
+    "buildup1_a.wav": 0.48, "buildup1_b.wav": 0.28,
+    "buildup2_a.wav": 0.80, "buildup2_b.wav": 0.20,
+    "buildup2_c.wav": 0.76, "buildup2_d.wav": 0.20,
+}
+BUILDUP_TEXT = {
+    "buildup1_a.wav": "어어?!", "buildup1_b.wav": "어?! 뭔가...?!",
+    "buildup2_a.wav": "어어?! 분위기가?!", "buildup2_b.wav": "잠시만요! 잠시만요!",
+    "buildup2_c.wav": "어어?! 조심해야죠!", "buildup2_d.wav": "기류가 심상치 않은데요?!",
+}
+HYPE_TEXT = {
+    "hype_a.wav": "와아아아악!! 미쳤다!!", "hype_b.wav": "우와아!! 대박이다!!",
+    "hype_c.wav": "미쳤어요 진짜!!",
+}
+SUB_TEXT = {
+    "sub_a.wav": "아니, 이건 진짜 대담한 판단이에요!!", "sub_b.wav": "완전히 상황을 뒤집어버렸네요!!",
+    "sub_c.wav": "이걸 해내네요, 진짜!!",
+}
+
+STAGE1_TARGET_OFFSET_SEC = 2.0    # 1단계(이상감지) 목표: 킬 - 2.0초
+STAGE2_TARGET_OFFSET_SEC = 1.0    # 2단계(감정격상) 목표: 킬 - 1.0초
+STAGE2_STAGE3_MIN_GAP_SEC = 0.4   # 2단계 끝 ~ 3단계(메인) 시작 최소 여유
+POST_LINE_GAP_SEC = 0.15          # 메인->하이프, 하이프->서브 사이 간격
+RENDER_TAIL_BUFFER_SEC = 0.8      # 서브 종료 후 여유
+
+ELEVENLABS_MAIN_VOICE_ID = "tlUdVt24VftfDokp32eu"  # LCK_Main_caster
+ELEVENLABS_MODEL_ID = "eleven_v3"
+
+
+def plan_stages(kill_t: float, s1_off: float, s1_dur: float, s2_off: float, s2_dur: float,
+                 s3_off: float, min_lead: float = 0.0,
+                 min_gap_2_3: float = STAGE2_STAGE3_MIN_GAP_SEC) -> dict:
+    """3단계 타이밍 계획(순수 함수, 테스트 가능) - 각 단계 후보의 실측 강조지점(peak_t)이
+    킬 시점 기준 목표 시각(1단계 킬-2.0s / 2단계 킬-1.0s / 3단계 킬)에 오도록 배치한다.
+    자리가 부족하면 앞단계부터 스킵하고, 남은 단계는 뒷단계에 딱 붙여 압축 배치한다
+    (이전 세션 v10에서 검증된 것과 동일한 알고리즘)."""
+    target1 = kill_t - STAGE1_TARGET_OFFSET_SEC
+    target2 = kill_t - STAGE2_TARGET_OFFSET_SEC
+    target3 = kill_t
+
+    start3 = max(min_lead, target3 - s3_off)
+
+    start1 = target1 - s1_off
+    active1 = start1 >= min_lead
+    end1 = (start1 + s1_dur) if active1 else min_lead
+    if not active1:
+        start1 = None
+
+    start2 = max(target2 - s2_off, end1)
+    latest_start2 = start3 - min_gap_2_3 - s2_dur
+    if start2 > latest_start2:
+        start2 = latest_start2
+    if active1 and start2 < end1:
+        shift = end1 - start2
+        if start1 - shift >= min_lead:
+            start1 -= shift
+            end1 -= shift
+        else:
+            active1 = False
+            start1 = None
+            end1 = min_lead
+            start2 = max(start2, min_lead)
+
+    active2 = (start2 >= end1 - 1e-9 and start2 >= min_lead - 1e-9
+               and start2 + s2_dur + min_gap_2_3 <= start3 + 1e-9)
+    if not active2:
+        start2 = None
+
+    return {
+        "start1": start1, "active1": active1,
+        "start2": start2, "active2": active2,
+        "start3": start3,
+    }
 
 
 def _mmss_to_ms(mmss: str) -> int:
@@ -162,6 +265,14 @@ def _game_ms_to_clip_t(game_ms: float, mapping: tuple[float, float]) -> float:
     return (game_ms - intercept) / slope
 
 
+# 🛡️ [비용 예측 가능성] 3단계 빌드업 체인(아래 plan_stages)+실시간 TTS는 킬 1건당 비용이
+# 고정이라, 렌더당 비용을 예측 가능하게 만들려면 클립당 킬 개수 자체를 상한 걸어야 한다.
+# 지금은 가장 단순하고 안전한 값인 1로 제한 - 클립에 킬이 여러 개(팀파이트/에이스)여도
+# 시간상 가장 먼저 오는 킬 하나만 다룬다. 나머지가 조용히 버려지는 트레이드오프는 알려진
+# 한계로 남겨둠(추후 필요하면 유저에게 "N개 중 1개만 다뤘습니다" 안내를 붙이는 걸 고려).
+MAX_KILLS_PER_CLIP = 1
+
+
 def _select_kills_in_clip(kills: list[dict], mapping: tuple[float, float],
                            clip_duration_sec: float, slack_sec: float = 1.5) -> list[dict]:
     start_ms = _clip_t_to_game_ms(-slack_sec, mapping)
@@ -172,7 +283,7 @@ def _select_kills_in_clip(kills: list[dict], mapping: tuple[float, float],
             k = dict(k)
             k["clip_t_sec"] = _game_ms_to_clip_t(k["timestamp_ms"], mapping)
             selected.append(k)
-    return selected
+    return selected[:MAX_KILLS_PER_CLIP]
 
 
 def _extract_champion_kills(timeline: dict) -> list[dict]:
@@ -298,6 +409,20 @@ class KyvoHighlight(KyvoBaseCog):
         return duration, creation, resolution
 
     @staticmethod
+    def _probe_audio_duration(path: str) -> float:
+        r = subprocess.run([FFMPEG_EXE, "-i", path], capture_output=True, text=True)
+        m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
+        if not m:
+            raise ValueError(f"ffmpeg가 오디오 길이를 읽지 못함: {path}")
+        h, mi, s = m.groups()
+        return int(h) * 3600 + int(mi) * 60 + float(s)
+
+    @staticmethod
+    def _convert_to_wav(src_path: str, out_wav: str) -> None:
+        subprocess.run([FFMPEG_EXE, "-y", "-i", src_path, "-c:a", "pcm_s16le", out_wav],
+                        capture_output=True, check=True)
+
+    @staticmethod
     def _extract_frame(video_path: str, t_sec: float, out_png: str) -> None:
         subprocess.run(
             [FFMPEG_EXE, "-y", "-ss", str(t_sec), "-i", video_path,
@@ -320,28 +445,48 @@ class KyvoHighlight(KyvoBaseCog):
             raise RuntimeError(f"관중 함성 효과음을 찾을 수 없음: {SFX_DIR}")
         return random.choice(SFX_POOL)
 
-    def _render_video(self, video_path: str, lines: list[dict], kill_times_sec: list[float],
-                       work_dir: str, out_mp4: str) -> list[str]:
-        chosen_sfx = [self._make_sfx_pick() for _ in kill_times_sec]
+    def _render_video(self, video_path: str, video_duration: float, schedule: dict,
+                       work_dir: str, out_mp4: str) -> str:
+        """schedule = {"total_duration", "stage1"?, "stage2"?, "main", "hype", "sub"} - 각
+        엔트리는 {"wav","text","start","duration"} (stage1/stage2는 자리가 없으면 None).
+        타이밍 자체는 plan_stages()에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로
+        ffmpeg 인풋/필터그래프를 조립하기만 한다."""
+        total_duration = schedule["total_duration"]
+        cheer_path = self._make_sfx_pick()
 
-        inputs = ["-i", video_path]
-        for sfx_path in chosen_sfx:
-            inputs += ["-i", sfx_path]
-
-        # 자막 텍스트 파일을 요청마다 고유한 하위 디렉터리에 쓴다 - 동시 처리 개수를 세마포어로
-        # 1개 이상 허용해도 서로의 line_{i}.txt를 덮어쓰는 경로 충돌이 안 생기게.
         run_dir = os.path.join(work_dir, f"txt_{uuid.uuid4().hex[:8]}")
         os.makedirs(run_dir, exist_ok=True)
 
         try:
+            inputs = ["-i", video_path, "-i", cheer_path]
+            voice_indices = {}
+            for key in ("stage1", "stage2", "main", "hype", "sub"):
+                entry = schedule.get(key)
+                if entry is None:
+                    continue
+                inputs += ["-i", entry["wav"]]
+                voice_indices[key] = len(inputs) // 2 - 1
+
+            # ── 자막 ──
             draw_filters = []
-            for i, line in enumerate(lines):
-                txt_path = os.path.join(run_dir, f"line_{i}.txt")
+            # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
+            # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
+            # 정지시키는 대신 마지막 프레임을 그대로 붙잡아 늘리는 가장 단순한 방법(tpad) -
+            # 이전 프로토타입의 펀치인 줌/비네트는 이번 라운드 범위 밖.
+            extra_video_sec = max(0.0, total_duration - video_duration)
+            if extra_video_sec > 0.01:
+                draw_filters.append(f"tpad=stop_mode=clone:stop_duration={extra_video_sec:.3f}")
+
+            for key in ("stage1", "stage2", "main", "hype", "sub"):
+                entry = schedule.get(key)
+                if entry is None:
+                    continue
+                txt_path = os.path.join(run_dir, f"line_{key}.txt")
                 with open(txt_path, "w", encoding="utf-8") as f:
-                    f.write(line["text"])
-                start = line["clip_t_sec"]
-                end = start + line.get("duration", 3.0)
+                    f.write(entry["text"])
                 txt_escaped = txt_path.replace("\\", "/").replace(":", "\\:")
+                start = entry["start"]
+                end = start + entry["duration"]
                 draw_filters.append(
                     f"drawtext=fontfile='{FONT_PATH}':"
                     f"textfile='{txt_escaped}':reload=0:"
@@ -351,29 +496,34 @@ class KyvoHighlight(KyvoBaseCog):
                 )
             video_chain = "[0:v]" + ",".join(draw_filters) + "[vout]" if draw_filters else "[0:v]copy[vout]"
 
-            audio_parts = ["[0:a]"]
-            delay_filters = []
-            for i, (t, sfx_path) in enumerate(zip(kill_times_sec, chosen_sfx)):
-                basename = os.path.basename(sfx_path)
-                lead_ms = SFX_LEAD_MS.get(basename, 0)
-                # 리드타임이 클립 시작보다 앞서 당겨지면(킬이 클립 맨 앞부분에 있으면) 0으로 클램핑 -
-                # 긴장감 도입부가 일부 잘린 채로 클립 시작점부터 재생될 뿐, 별도 처리가 필요 없다.
-                delay_ms = max(0, int(t * 1000) - lead_ms)
-                mix_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(basename, SFX_MIX_GAIN_DB)
-                delay_filters.append(
-                    f"[{i+1}:a]adelay={delay_ms}|{delay_ms},volume={mix_gain_db}dB[sfx{i}]"
-                )
-                audio_parts.append(f"[sfx{i}]")
-            n_audio = len(audio_parts)
-            audio_chain = ";".join(delay_filters)
-            # normalize=0: amix 기본값(자동 감쇠)을 꺼서 위 volume 부스트가 실제로 반영되게 한다.
-            # 감쇠를 끈 대신 합산 결과가 0dBFS를 넘을 수 있어 alimiter로 최종 출력을 안전하게 캡핑.
-            amix = (
-                f"{''.join(audio_parts)}amix=inputs={n_audio}:duration=first:"
+            # ── 오디오 ──
+            # 🛡️ amix duration=first는 "첫 번째로 나열된 스트림"의 길이만 본다 - 게임 오디오를
+            # 전체 렌더 길이만큼 apad로 먼저 늘려두지 않으면, 뒤에 붙는 빌드업/메인/하이프/서브가
+            # 게임 오디오 원래 길이에서 통째로 잘려나간다(이번 세션 프로토타입에서 반복 확인된
+            # 실수, 여기서도 그대로 적용).
+            audio_parts = [f"[0:a]apad=whole_dur={total_duration}[game0];"]
+            mix_labels = ["[game0]"]
+
+            cheer_basename = os.path.basename(cheer_path)
+            cheer_lead_ms = SFX_LEAD_MS.get(cheer_basename, 0)
+            cheer_delay_ms = max(0, int(schedule["kill_t"] * 1000) - cheer_lead_ms)
+            cheer_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(cheer_basename, SFX_MIX_GAIN_DB)
+            audio_parts.append(f"[1:a]adelay={cheer_delay_ms}|{cheer_delay_ms},volume={cheer_gain_db}dB[cheer0];")
+            mix_labels.append("[cheer0]")
+
+            for key, idx in voice_indices.items():
+                entry = schedule[key]
+                delay_ms = max(0, int(entry["start"] * 1000))
+                audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[v_{key}];")
+                mix_labels.append(f"[v_{key}]")
+
+            n_mix = len(mix_labels)
+            audio_parts.append(
+                f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=first:"
                 f"dropout_transition=0:normalize=0[mixed];"
                 f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50[aout]"
             )
-            full_audio = f"{audio_chain};{amix}" if audio_chain else "[0:a]anull[aout]"
+            full_audio = "".join(audio_parts)
 
             filter_complex = f"{video_chain};{full_audio}"
 
@@ -381,7 +531,7 @@ class KyvoHighlight(KyvoBaseCog):
                    "-filter_complex", filter_complex,
                    "-map", "[vout]", "-map", "[aout]",
                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                   "-c:a", "aac",
+                   "-c:a", "aac", "-t", str(total_duration),
                    out_mp4]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -389,7 +539,7 @@ class KyvoHighlight(KyvoBaseCog):
         finally:
             shutil.rmtree(run_dir, ignore_errors=True)
 
-        return [os.path.basename(p) for p in chosen_sfx]
+        return cheer_basename
 
     # ══════════════════════════════════════════════════════════
     #  OpenAI 호출 (AsyncOpenAI라 executor 불필요 - ticket_ai.py와 동일한 클라이언트 관례)
@@ -411,6 +561,28 @@ class KyvoHighlight(KyvoBaseCog):
             max_tokens=10, temperature=0,
         )
         return resp.choices[0].message.content.strip()
+
+    async def _synthesize_main_voice(self, text: str, work_dir: str) -> str:
+        """메인 캐스터 대사(실제 킬러/희생자 이름이 들어간 그 한 줄)를 ElevenLabs로 실시간
+        합성 - 이 함수가 렌더당 유일한 ElevenLabs 실시간 호출이다(빌드업/Hype/Sub는 전부
+        assets/highlight_voice/의 정적 풀에서 고름)."""
+        tagged_text = f"[excited][shouts] {text}"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_MAIN_VOICE_ID}",
+                headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                json={"text": tagged_text, "model_id": ELEVENLABS_MODEL_ID},
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise RuntimeError(f"ElevenLabs TTS 실패(status={resp.status}): {body[:500]}")
+                content = await resp.read()
+        mp3_path = os.path.join(work_dir, "main_voice_raw.mp3")
+        with open(mp3_path, "wb") as f:
+            f.write(content)
+        wav_path = os.path.join(work_dir, "main_voice.wav")
+        await self._to_executor(self._convert_to_wav, mp3_path, wav_path)
+        return wav_path
 
     async def _generate_commentary(self, kills_with_names: list[dict]) -> list[dict]:
         import json
@@ -608,14 +780,76 @@ class KyvoHighlight(KyvoBaseCog):
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_ai_failed"))
             return
 
-        by_index = {k["index"]: k for k in kills_with_names}
-        lines = [{"clip_t_sec": by_index[l["event_index"]]["clip_t_sec"], "text": l["text"], "duration": 3.0} for l in lines_raw]
-        kill_times = [k["clip_t_sec"] for k in kills_with_names]
+        # MAX_KILLS_PER_CLIP=1이라 kills_with_names/lines_raw는 항상 정확히 1건.
+        kill_t = kills_with_names[0]["clip_t_sec"]
+        main_text = lines_raw[0]["text"]
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
+
+        # ── 3단계 체인: 메인만 실시간 TTS(렌더당 ElevenLabs 호출 정확히 1회), 나머지는 정적 풀 ──
+        try:
+            main_wav = await self._synthesize_main_voice(main_text, work_dir)
+        except Exception as e:
+            print(f"[HIGHLIGHT][ERROR] ElevenLabs TTS failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
+            return
+
+        if not (BUILDUP1_POOL and BUILDUP2_POOL and HYPE_POOL and SUB_POOL):
+            print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
+                  f"stage1={len(BUILDUP1_POOL)} stage2={len(BUILDUP2_POOL)} "
+                  f"hype={len(HYPE_POOL)} sub={len(SUB_POOL)}", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
+            return
+
+        stage1_file = random.choice(BUILDUP1_POOL)
+        stage2_file = random.choice(BUILDUP2_POOL)
+        hype_file = random.choice(HYPE_POOL)
+        sub_file = random.choice(SUB_POOL)
+
+        try:
+            main_duration = await self._to_executor(self._probe_audio_duration, main_wav)
+            stage1_duration = await self._to_executor(self._probe_audio_duration, stage1_file)
+            stage2_duration = await self._to_executor(self._probe_audio_duration, stage2_file)
+            hype_duration = await self._to_executor(self._probe_audio_duration, hype_file)
+            sub_duration = await self._to_executor(self._probe_audio_duration, sub_file)
+        except Exception as e:
+            print(f"[HIGHLIGHT][ERROR] Failed to probe voice-line durations (guild={guild_id}): "
+                  f"{type(e).__name__}: {e}", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+            return
+
+        # plan_stages()는 순수 함수 - 각 단계 강조지점이 킬 기준 목표 시각에 오도록 배치하고,
+        # 자리가 부족하면 앞단계 스킵/뒷단계 압축을 알아서 처리한다(이전 세션 v10에서 검증됨).
+        plan = plan_stages(
+            kill_t,
+            s1_off=BUILDUP_PEAK_T[os.path.basename(stage1_file)], s1_dur=stage1_duration,
+            s2_off=BUILDUP_PEAK_T[os.path.basename(stage2_file)], s2_dur=stage2_duration,
+            s3_off=0.0,  # 메인은 실시간 합성이라 사전 실측 강조지점이 없음 - 파일 시작=킬 시점으로 단순화
+        )
+        main_start = plan["start3"]
+        hype_start = main_start + main_duration + POST_LINE_GAP_SEC
+        sub_start = hype_start + hype_duration + POST_LINE_GAP_SEC
+        total_duration = max(duration, sub_start + sub_duration + RENDER_TAIL_BUFFER_SEC)
+
+        schedule = {
+            "kill_t": kill_t,
+            "total_duration": total_duration,
+            "main": {"wav": main_wav, "text": main_text, "start": main_start, "duration": main_duration},
+            "hype": {"wav": hype_file, "text": HYPE_TEXT[os.path.basename(hype_file)],
+                     "start": hype_start, "duration": hype_duration},
+            "sub": {"wav": sub_file, "text": SUB_TEXT[os.path.basename(sub_file)],
+                    "start": sub_start, "duration": sub_duration},
+        }
+        if plan["active1"]:
+            schedule["stage1"] = {"wav": stage1_file, "text": BUILDUP_TEXT[os.path.basename(stage1_file)],
+                                   "start": plan["start1"], "duration": stage1_duration}
+        if plan["active2"]:
+            schedule["stage2"] = {"wav": stage2_file, "text": BUILDUP_TEXT[os.path.basename(stage2_file)],
+                                   "start": plan["start2"], "duration": stage2_duration}
+
         out_mp4 = os.path.join(work_dir, "highlight_final.mp4")
         try:
-            await self._to_executor(self._render_video, video_path, lines, kill_times, work_dir, out_mp4)
+            await self._to_executor(self._render_video, video_path, duration, schedule, work_dir, out_mp4)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Render failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))

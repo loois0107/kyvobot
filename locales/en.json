@@ -398,6 +398,7 @@
   "highlight_err_match_not_found": "❌ Couldn't find a matchmade game matching this clip's timing. Custom games and practice tool aren't supported; if the game just ended, try again in a moment.",
   "highlight_err_clock_read_failed": "❌ Couldn't read the in-game clock from this clip. Make sure the clock is visible in the top-right corner.",
   "highlight_err_no_kills": "❌ No kill events were found in this clip's timeframe. Try a clip that includes a kill.",
+  "highlight_err_tts_failed": "❌ Something went wrong synthesizing the caster's voice. Please try again in a moment.",
   "highlight_err_riot_auth": "⚠️ The highlight feature is temporarily unavailable due to a configuration issue. Please contact a server administrator.",
   "highlight_err_riot_rate_limited": "❌ Too many Riot API requests right now. Please try again in a moment.",
   "highlight_err_riot_server_error": "❌ Riot's servers returned an error. Please try again later.",
