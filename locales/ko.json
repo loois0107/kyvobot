@@ -394,6 +394,7 @@
   "highlight_err_not_verified": "❌ 먼저 `/tier_verify`로 라이엇 계정을 인증해야 하이라이트 기능을 쓸 수 있습니다.",
   "highlight_err_invalid_attachment": "❌ 영상 파일(mp4 등)을 첨부해주세요. 파일 크기는 100MB를 넘을 수 없습니다.",
   "highlight_err_clip_too_long": "❌ 클립이 너무 깁니다. {max}초 이하의 영상만 지원합니다.",
+  "highlight_err_unsupported_aspect_ratio": "❌ 이 영상은 지원하지 않는 화면비입니다. 인게임 시계가 우측 상단에 보이는 일반적인 가로 화면(PC 게임 캡처) 클립만 지원합니다 - 세로 화면 녹화는 지원하지 않습니다.",
   "highlight_err_match_not_found": "❌ 이 클립 시간대에 해당하는 매치메이킹 게임을 찾지 못했습니다. 커스텀 게임/연습 모드는 지원하지 않으며, 방금 끝난 게임이면 잠시 후 다시 시도해주세요.",
   "highlight_err_clock_read_failed": "❌ 영상에서 인게임 시계를 읽지 못했습니다. 화면 우측 상단에 시계가 보이는 클립인지 확인해주세요.",
   "highlight_err_no_kills": "❌ 이 클립 구간에서 킬 이벤트를 찾지 못했습니다. 킬 장면이 포함된 구간으로 다시 시도해주세요.",

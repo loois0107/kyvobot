@@ -394,6 +394,7 @@
   "highlight_err_not_verified": "❌ You need to verify your Riot account with `/tier_verify` before using the highlight feature.",
   "highlight_err_invalid_attachment": "❌ Please attach a video file (e.g. mp4). Files larger than 100MB aren't supported.",
   "highlight_err_clip_too_long": "❌ This clip is too long. Only clips of {max} seconds or shorter are supported.",
+  "highlight_err_unsupported_aspect_ratio": "❌ This video's aspect ratio isn't supported. Only landscape PC gameplay captures with the in-game clock visible in the top-right corner are supported - portrait recordings aren't supported.",
   "highlight_err_match_not_found": "❌ Couldn't find a matchmade game matching this clip's timing. Custom games and practice tool aren't supported; if the game just ended, try again in a moment.",
   "highlight_err_clock_read_failed": "❌ Couldn't read the in-game clock from this clip. Make sure the clock is visible in the top-right corner.",
   "highlight_err_no_kills": "❌ No kill events were found in this clip's timeframe. Try a clip that includes a kill.",

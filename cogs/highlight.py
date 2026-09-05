@@ -79,6 +79,19 @@ CLOCK_CROP_RATIO = (0.965, 0.0, 1.0, 0.028)
 EXPECTED_CLOCK_SLOPE_MS_PER_SEC = 1000.0
 CLOCK_SLOPE_TOLERANCE_RATIO = 0.15
 
+# 🛡️ [화면비 사전 검사] 처음엔 "16:9에 가까운지"로 걸렀는데, 이번 라운드 검증 중 실제로 이
+# 세션 내내 검증에 써온 실제 캡처 파일 자체가 1920x804(비율≈2.39, DAR 160:67)라는 걸 발견함 -
+# OBS/캡처 소프트웨어가 창 크기를 임의로 잘라 저장하는 게 흔해서, "16:9 근접"으로 걸렀다면
+# 이미 정상 동작이 검증된 캡처까지 거절하는 회귀였을 것. 진짜 위험한 건 화면비가 "16:9와
+# 다른 것"이 아니라 "가로/세로가 뒤집힌 것"(세로 폰 녹화) - PC 게임 캡처는 창 크기가 어떻게
+# 잘리든 항상 가로가 세로보다 넓고, 게임 UI는 실제 뷰포트 코너에 붙어 그려지므로 화면비가
+# 좀 달라도(4:3/21:9/이번처럼 임의로 자른 2.39:1) 우측 상단 크롭이 대체로 여전히 유효하다.
+# 그래서 화면비 자체의 미세한 편차가 아니라 "가로가 세로보다 충분히 넓은가"만 앞단에서
+# 명확히 거르고, 그 안에서의 세부 크롭 오차는 기존 slope sanity check(OCR 결과 자체 검증)에
+# 맡긴다. MIN_LANDSCAPE_ASPECT_RATIO=1.2는 4:3(1.33)까지는 통과시키면서 정사각형/세로는
+# 확실히 막을 만큼 낮게 잡음 - 오늘 재검증한 실제 캡처(2.39)는 물론 통과.
+MIN_LANDSCAPE_ASPECT_RATIO = 1.2
+
 # Match-v5 계열은 User-Agent 없으면 Cloudflare가 403으로 막는다는 게 프로토타입에서 확인된
 # 핵심 교훈 (Riot 인증 문제 아님). account-v1/league-v4는 필요 없어서 tier_verify._riot_request의
 # 기본 헤더엔 없었지만, match-v5 호출에는 반드시 추가해야 한다.
@@ -259,7 +272,7 @@ class KyvoHighlight(KyvoBaseCog):
     #  ffmpeg/PIL/OpenCV 계열 블로킹 작업 (전부 render_executor로 격리)
     # ══════════════════════════════════════════════════════════
     @staticmethod
-    def _probe_duration_and_creation(video_path: str) -> tuple[float, datetime.datetime]:
+    def _probe_duration_and_creation(video_path: str) -> tuple[float, datetime.datetime, tuple[int, int]]:
         r = subprocess.run([FFMPEG_EXE, "-i", video_path], capture_output=True, text=True)
         stderr = r.stderr
         dur_m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", stderr)
@@ -272,7 +285,17 @@ class KyvoHighlight(KyvoBaseCog):
             creation = datetime.datetime.fromisoformat(ct_m.group(1).replace("Z", "+00:00"))
         else:
             creation = datetime.datetime.now(datetime.timezone.utc)
-        return duration, creation
+        # 🛡️ 회전 메타데이터(휴대폰 rotate/displaymatrix 태그로 실제 표시 화면비가 저장된
+        # 픽셀 치수와 달라지는 경우)는 감지하지 않음 - PC 화면 녹화(League 클립)라는 실제
+        # 사용 범위에선 나타나지 않는 경우라 알려진 한계로 남겨둠.
+        video_line_m = re.search(r"Stream #\d+:\d+.*Video:.*", stderr)
+        if not video_line_m:
+            raise ValueError("ffmpeg가 비디오 스트림 정보를 읽지 못함 - 손상되었거나 지원하지 않는 형식")
+        res_m = re.search(r"(\d{2,5})x(\d{2,5})", video_line_m.group(0))
+        if not res_m:
+            raise ValueError("ffmpeg가 해상도를 읽지 못함")
+        resolution = (int(res_m.group(1)), int(res_m.group(2)))
+        return duration, creation, resolution
 
     @staticmethod
     def _extract_frame(video_path: str, t_sec: float, out_png: str) -> None:
@@ -480,7 +503,7 @@ class KyvoHighlight(KyvoBaseCog):
         await video.save(video_path)
 
         try:
-            duration, creation = await self._to_executor(self._probe_duration_and_creation, video_path)
+            duration, creation, (width, height) = await self._to_executor(self._probe_duration_and_creation, video_path)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Failed to probe attachment (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_invalid_attachment"))
@@ -488,6 +511,13 @@ class KyvoHighlight(KyvoBaseCog):
 
         if duration > MAX_CLIP_DURATION_SECONDS:
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clip_too_long", max=int(MAX_CLIP_DURATION_SECONDS)))
+            return
+
+        aspect_ratio = width / height
+        if aspect_ratio < MIN_LANDSCAPE_ASPECT_RATIO:
+            print(f"[HIGHLIGHT][INFO] Rejected non-landscape aspect ratio {width}x{height} "
+                  f"(ratio={aspect_ratio:.3f}, min={MIN_LANDSCAPE_ASPECT_RATIO:.2f}, guild={guild_id})", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unsupported_aspect_ratio"))
             return
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_analyzing"))
