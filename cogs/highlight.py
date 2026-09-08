@@ -752,24 +752,34 @@ class KyvoHighlight(KyvoBaseCog):
             return
 
         # 매치 자동 판별 + 타임라인 조회
+        # 🛡️ [진단성] highlight_err_match_not_found는 아래 두 군데에서 나올 수 있다 -
+        # (a) _pick_match_for_clip이 5개 후보 중 시간대가 맞는 걸 못 찾음
+        # (b) Riot API 자체가 세 호출(매치목록/매치상세/타임라인) 중 하나에서 404를 반환
+        # 이 둘을 로그만 보고 구별할 방법이 없었다(RiotNotFoundError 분기가 유일하게 print가
+        # 없었음) - riot_call_stage/riot_call_url을 각 호출 직전에 갱신해두고, 404가 나면
+        # 그 시점의 값을 그대로 로그에 남겨서 어느 호출이 실패했는지 바로 알 수 있게 한다.
+        riot_call_stage = "match_ids"
+        riot_call_url = (
+            f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=5"
+        )
         try:
             async with aiohttp.ClientSession() as session:
-                match_ids = await self._riot_get(
-                    tv_cog, session,
-                    f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=5",
-                )
-                details = [
-                    await self._riot_get(tv_cog, session, f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}")
-                    for mid in match_ids
-                ]
+                match_ids = await self._riot_get(tv_cog, session, riot_call_url)
+
+                details = []
+                for mid in match_ids:
+                    riot_call_stage = "match_detail"
+                    riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}"
+                    details.append(await self._riot_get(tv_cog, session, riot_call_url))
+
                 chosen = _pick_match_for_clip(details, creation)
                 if chosen is None:
                     await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
                     return
                 match_id = chosen["metadata"]["matchId"]
-                timeline = await self._riot_get(
-                    tv_cog, session, f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
-                )
+                riot_call_stage = "timeline"
+                riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
+                timeline = await self._riot_get(tv_cog, session, riot_call_url)
         except RiotAuthError as e:
             print(f"[HIGHLIGHT][CRITICAL] Riot API auth failure (status={e.status}, guild={guild_id})", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_auth"))
@@ -785,6 +795,8 @@ class KyvoHighlight(KyvoBaseCog):
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_timeout"))
             return
         except RiotNotFoundError:
+            print(f"[HIGHLIGHT][WARN] Riot API 404 not found (stage={riot_call_stage}, url={riot_call_url}, "
+                  f"guild={guild_id})", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
             return
         except RiotAPIError as e:
