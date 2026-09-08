@@ -774,6 +774,32 @@ class KyvoHighlight(KyvoBaseCog):
 
                 chosen = _pick_match_for_clip(details, creation)
                 if chosen is None:
+                    # 🛡️ [진단성] 지난 라운드에 RiotNotFoundError 분기만 로그를 붙이고 이 분기(진짜
+                    # _pick_match_for_clip이 못 찾은 경우)는 빼먹었었다 - _pick_match_for_clip
+                    # 자체는 순수 함수로 남겨두고(테스트 용이성), 호출부에서 5개 후보 전부의
+                    # 시간창과 클립 creation_time을 비교해 "왜" 안 맞았는지(너무 이르다/늦다,
+                    # 얼마나) 남긴다.
+                    diag_lines = [f"clip_creation={creation.isoformat()}"]
+                    for d in details:
+                        info = d["info"]
+                        start = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, tz=datetime.timezone.utc)
+                        end = datetime.datetime.fromtimestamp(
+                            (info["gameStartTimestamp"] + info["gameDuration"] * 1000) / 1000, tz=datetime.timezone.utc
+                        )
+                        window_start = start - datetime.timedelta(minutes=2)
+                        window_end = end + datetime.timedelta(minutes=2)
+                        if creation < window_start:
+                            reason = f"too early by {(window_start - creation).total_seconds():.0f}s"
+                        elif creation > window_end:
+                            reason = f"too late by {(creation - window_end).total_seconds():.0f}s"
+                        else:
+                            reason = "within window (unexpected - should have matched)"
+                        diag_lines.append(
+                            f"  {d['metadata']['matchId']}: window=[{window_start.isoformat()}, "
+                            f"{window_end.isoformat()}] - {reason}"
+                        )
+                    print(f"[HIGHLIGHT][WARN] No candidate match window contains clip creation_time "
+                          f"(guild={guild_id}):\n" + "\n".join(diag_lines), flush=True)
                     await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
                     return
                 match_id = chosen["metadata"]["matchId"]
