@@ -78,7 +78,12 @@ SFX_LEAD_MS = {"crowd_cheer_2.wav": 6000, "crowd_cheer_4.wav": 14800}
 
 # 화면 우측 상단 시계 영역 비율 크롭 박스 (프로토타입에서 1920x804 캡처 기준 보정).
 # 다른 해상도/HUD 배치에서는 부정확할 수 있음 - 알려진 한계.
-CLOCK_CROP_RATIO = (0.965, 0.0, 1.0, 0.028)
+CLOCK_CROP_RATIO_NORMAL = (0.965, 0.0, 1.0, 0.028)
+# 🛡️ 리플레이 뷰어(내보내기든, 재생 화면을 그냥 녹화한 것이든) 화면은 시계가 우측 상단이
+# 아니라 스코어보드 KDA 배너 바로 아래 중앙에 있다 - 실제 실패 클립 2개(해상도 1728x720,
+# 1920x804로 서로 다름)에서 실측 확인된 값. 두 해상도 다 이 비율로 정확히 잡혀서 비율
+# 기반 접근이 유효해 보이지만, 표본이 2개뿐이라 확정은 아님 - 알려진 한계로 남겨둠.
+CLOCK_CROP_RATIO_REPLAY = (0.47, 0.06, 0.53, 0.09)
 
 # 🛡️ [Sanity check] 크롭이 시계를 벗어나 골드/KDA 같은 다른 UI 숫자를 읽어도, 그 값들이
 # 우연히 clip_t와 그럴듯하게 상관돼 보이면 최소자승 회귀 자체는 아무 에러 없이 성공해버려서
@@ -450,10 +455,10 @@ class KyvoHighlight(KyvoBaseCog):
         )
 
     @staticmethod
-    def _crop_clock(frame_png: str) -> Image.Image:
+    def _crop_clock(frame_png: str, ratio: tuple[float, float, float, float] = CLOCK_CROP_RATIO_NORMAL) -> Image.Image:
         im = Image.open(frame_png)
         w, h = im.size
-        x0, y0, x1, y1 = CLOCK_CROP_RATIO
+        x0, y0, x1, y1 = ratio
         box = (int(w * x0), int(h * y0), int(w * x1), int(h * y1))
         crop = im.crop(box)
         return crop.resize((crop.width * 4, crop.height * 4))
@@ -737,15 +742,31 @@ class KyvoHighlight(KyvoBaseCog):
         n_samples = min(12, max(6, round(duration / 1.5) + 1))
         sample_times = [min(round(duration * i / (n_samples - 1), 2), duration - 0.1) for i in range(n_samples)]
 
-        try:
+        # 🛡️ [리플레이 뷰어 지원] 프레임 추출(ffmpeg) 자체는 크롭 좌표와 무관하니 한 번만 하고,
+        # 크롭+OCR만 좌표 세트별로 재시도한다 - 일반 플레이 클립은 1차(우측 상단)에서 바로
+        # 성공해서 추가 호출이 전혀 없고, 리플레이 뷰어 화면(재생바가 하단에 보이는 녹화본)만
+        # 2차(중앙, CLOCK_CROP_RATIO_REPLAY)로 넘어가면서 호출이 늘어난다.
+        frame_pngs = []
+        for t in sample_times:
+            frame_png = os.path.join(work_dir, f"f_{t:.2f}.png")
+            await self._to_executor(self._extract_frame, video_path, t, frame_png)
+            frame_pngs.append(frame_png)
+
+        async def try_crop_ratio(ratio):
             clock_samples = []
-            for t in sample_times:
-                frame_png = os.path.join(work_dir, f"f_{t:.2f}.png")
-                await self._to_executor(self._extract_frame, video_path, t, frame_png)
-                crop = await self._to_executor(self._crop_clock, frame_png)
+            for t, frame_png in zip(sample_times, frame_pngs):
+                crop = await self._to_executor(self._crop_clock, frame_png, ratio)
                 mmss = await self._read_clock(crop)
                 clock_samples.append({"clip_t_sec": t, "game_ms": _mmss_to_ms(mmss)})
-            mapping = _fit_linear_mapping(clock_samples)
+            return _fit_linear_mapping(clock_samples)
+
+        try:
+            try:
+                mapping = await try_crop_ratio(CLOCK_CROP_RATIO_NORMAL)
+            except Exception as e:
+                print(f"[HIGHLIGHT][INFO] Normal clock crop failed ({type(e).__name__}: {e}) - "
+                      f"retrying with replay-viewer crop (guild={guild_id})", flush=True)
+                mapping = await try_crop_ratio(CLOCK_CROP_RATIO_REPLAY)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Clock OCR/mapping failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clock_read_failed"))
