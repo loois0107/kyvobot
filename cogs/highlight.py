@@ -121,6 +121,21 @@ BROWSER_USER_AGENT_HEADER = {
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100MB
 MAX_CLIP_DURATION_SECONDS = 45.0
 
+# 🛡️ [매치 판별 2단계] 1차(creation_time ±2분 정밀 매칭)는 그대로 두고, 그게 실패했을 때만
+# (주로 리플레이 뷰어 녹화본 - creation_time이 "본 시각"이라 실제 매치 시각과 몇 시간씩
+# 어긋날 수 있음) 최근 매치 폭을 넓혀 재조회한다. 1차 그대로일 때 비용이 하나도 안 늘게
+# 하려고 2차에서만 더 넓게 본다 - 실측(이 계정 최근 20경기)해보니 클립의 게임시각이 이른
+# 구간(1~5분)이면 duration 조건만으로는 20개 중 20개가 다 살아남아서, 후보 폭 자체를
+# 넓혀야 creation_time 근접도 비교가 의미 있어진다.
+MATCH_LOOKUP_COUNT_NORMAL = 5
+MATCH_LOOKUP_COUNT_FALLBACK = 20
+# 🛡️ [2차 안전장치] "가장 가까운 후보"를 고르는 것과 "그 후보가 실제로 말이 되는 정도로
+# 가까운가"는 별개 문제 - 실측으로 확인된 정상 리플레이 사용 범위(3시간)와 완전히 잘못된
+# 경우(원본 클립이 8일+ 지나 최근 기록에서 아예 밀려난 경우)를 기준으로 24시간을 임계값으로
+# 잡았다. 정상 케이스(3h)엔 8배, 실패 케이스(8일+)엔 실제 간격의 1/7 수준이라 양쪽 다
+# 넉넉한 여유가 있다. 이걸 넘으면 "그럴듯한 오답"보다 명확한 실패가 낫다고 판단해 None 처리.
+MATCH_GAME_TIME_MAX_STALENESS_SEC = 24 * 60 * 60
+
 # 🛡️ [출력 용량 제어] 디스코드 업로드 한도(서버 부스트 레벨에 따라 다르지만 25MB가 기준선)를
 # 넘기지 않도록, 실측 결과(오늘 실제 배포 코드 경로로 렌더한 파일이 15.78s에 6.74MB = 0.427MB/s)
 # 기준 최악의 경우(MAX_CLIP_DURATION_SECONDS + 킬 후 멘트 꼬리 ~10s ≈ 55s)를 계산해보면
@@ -345,6 +360,38 @@ def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.dat
         if start - datetime.timedelta(minutes=2) <= clip_creation <= end + datetime.timedelta(minutes=2):
             return md
     return None
+
+
+def _pick_match_by_game_time_range(matches_detail: list[dict], clip_creation: datetime.datetime,
+                                    game_ms_end: float) -> dict | None:
+    """_pick_match_for_clip(1차)이 실패했을 때만 쓰는 2차 판별 - 주로 리플레이 뷰어를 녹화한
+    클립처럼 creation_time(파일을 "본" 시각)을 못 믿는 경우를 위한 것. 클립이 게임 내 시계
+    기준 game_ms_end 시점까지 진행된 걸 보여주므로, 그보다 짧게 끝난 매치는 확실히 아니다 -
+    이걸로 후보를 추리고, 남은 후보 중 실제 게임 "종료" 시각이 clip_creation에 가장 가까운
+    걸 고른다(리플레이는 항상 게임이 끝난 "후"에나 볼 수 있으므로 종료 시각이 자연스러운
+    기준점). creation_time은 더 이상 정확한 창이 아니라 "그럴듯한 순서"를 매기는 느슨한
+    참고용일 뿐이라, 이 결과가 항상 정답이라는 보장은 없다(알려진 한계 - 특히 리플레이
+    시청 전에 다른 게임을 더 했다면 그 게임이 더 가까워서 잘못 뽑힐 수 있음).
+
+    🛡️ [안전장치] 그 "가장 가까운" 후보조차 MATCH_GAME_TIME_MAX_STALENESS_SEC보다 더 멀리
+    떨어져 있으면, 확신할 수 없는 추측을 내놓는 대신 None을 반환해 명확한 실패로 처리한다
+    (원본 클립이 너무 오래돼서 최근 매치 목록에 애초에 정답이 없는 경우를 위한 방어).
+    """
+    candidates = [md for md in matches_detail if md["info"]["gameDuration"] * 1000 >= game_ms_end]
+    if not candidates:
+        return None
+
+    def end_of(md):
+        info = md["info"]
+        return datetime.datetime.fromtimestamp(
+            (info["gameStartTimestamp"] + info["gameDuration"] * 1000) / 1000, tz=datetime.timezone.utc
+        )
+
+    best = min(candidates, key=lambda md: abs((end_of(md) - clip_creation).total_seconds()))
+    gap_sec = abs((end_of(best) - clip_creation).total_seconds())
+    if gap_sec > MATCH_GAME_TIME_MAX_STALENESS_SEC:
+        return None
+    return best
 
 
 SYSTEM_PROMPT = (
@@ -781,7 +828,8 @@ class KyvoHighlight(KyvoBaseCog):
         # 그 시점의 값을 그대로 로그에 남겨서 어느 호출이 실패했는지 바로 알 수 있게 한다.
         riot_call_stage = "match_ids"
         riot_call_url = (
-            f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?start=0&count=5"
+            f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
+            f"?start=0&count={MATCH_LOOKUP_COUNT_NORMAL}"
         )
         try:
             async with aiohttp.ClientSession() as session:
@@ -821,8 +869,34 @@ class KyvoHighlight(KyvoBaseCog):
                         )
                     print(f"[HIGHLIGHT][WARN] No candidate match window contains clip creation_time "
                           f"(guild={guild_id}):\n" + "\n".join(diag_lines), flush=True)
-                    await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
-                    return
+
+                    # 🛡️ [2차: creation_time을 못 믿는 경우 - 주로 리플레이 뷰어 녹화본] 1차가
+                    # 실패했을 때만, 후보 폭을 넓혀(count=20) 다시 조회하고 "클립이 보여주는
+                    # 게임시각까지 실제로 진행됐는가"로 후보를 추린 뒤 creation_time이 가장
+                    # 가까운 걸 고른다. 1차가 성공하는 일반 클립은 이 블록 자체를 안 타서
+                    # 조회량이 늘지 않는다.
+                    game_ms_end = _clip_t_to_game_ms(duration, mapping)
+                    riot_call_stage = "match_ids_fallback"
+                    riot_call_url = (
+                        f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
+                        f"?start=0&count={MATCH_LOOKUP_COUNT_FALLBACK}"
+                    )
+                    fallback_ids = await self._riot_get(tv_cog, session, riot_call_url)
+                    fallback_details = []
+                    for mid in fallback_ids:
+                        riot_call_stage = "match_detail_fallback"
+                        riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}"
+                        fallback_details.append(await self._riot_get(tv_cog, session, riot_call_url))
+
+                    chosen = _pick_match_by_game_time_range(fallback_details, creation, game_ms_end)
+                    if chosen is None:
+                        print(f"[HIGHLIGHT][WARN] 2차(게임시각+creation_time 근접) 판별도 실패 - "
+                              f"game_ms_end={game_ms_end:.0f}ms 이상 진행된 후보가 {len(fallback_details)}개 "
+                              f"중 없음 (guild={guild_id})", flush=True)
+                        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
+                        return
+                    print(f"[HIGHLIGHT][INFO] 2차 판별로 매치 선택됨: {chosen['metadata']['matchId']} "
+                          f"(game_ms_end={game_ms_end:.0f}ms, guild={guild_id})", flush=True)
                 match_id = chosen["metadata"]["matchId"]
                 riot_call_stage = "timeline"
                 riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{match_id}/timeline"
