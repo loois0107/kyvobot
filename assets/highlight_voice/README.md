@@ -24,7 +24,11 @@ run, not meant to be re-run unless the pools need to change).
   - `buildup2_b.wav`: "잠시만요! 잠시만요!" (LCK_Main_caster)
   - `buildup2_c.wav`: "어어?! 조심해야죠!" (LCK_Main_caster)
   - `buildup2_d.wav`: "기류가 심상치 않은데요?!" (LCK_Main_caster)
-- **hype_\*.wav** - plays right after the main line ends (sequential, no anchor needed)
+- **hype_\*.wav** - starts `MAIN_HYPE_OVERLAP_SEC` (1.2s) before the main line *ends*, so it
+  overlaps the tail of the main line instead of waiting for it to finish (see
+  `cogs/highlight.py` scheduling below) - a real deployed clip sounded like three people
+  taking turns speaking one at a time before this, since the original "main+hype burst
+  together" design had never actually been wired up.
   - `hype_a.wav`: "와아아아악!! 미쳤다!!" (LCK_Hype_Reaction)
   - `hype_b.wav`: "우와아!! 대박이다!!" (LCK_Hype_Reaction)
   - `hype_c.wav`: "미쳤어요 진짜!!" (LCK_Hype_Reaction)
@@ -51,4 +55,11 @@ guarantees at least `STAGE2_STAGE3_MIN_GAP_SEC` (0.4s) of breathing room before 
 main line starts at the kill. If there isn't room (very short clips, or a long
 buildup2 pick landing right after a long buildup1 pick), it compresses buildup2
 earlier, then buildup1 earlier still, and drops a stage entirely only if there's
-truly no room left - never overlaps.
+truly no room left - never overlaps (this part is unchanged).
+
+Hype is scheduled separately, outside `plan_stages()`: `hype_start =
+max(main_start, main_start + main_duration - MAIN_HYPE_OVERLAP_SEC)`. The `max()`
+floor guarantees hype never starts before main does, which transitively also keeps
+it clear of buildup1/buildup2 (since `plan_stages()` already places `main_start`
+after buildup2 ends + its own min gap). Sub still starts strictly after hype ends
+(+`POST_LINE_GAP_SEC`) - only main+hype overlap right now.

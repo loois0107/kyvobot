@@ -66,7 +66,13 @@ FFMPEG_EXE = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SFX_DIR = os.path.join(REPO_ROOT, "assets", "highlight_sfx")
-SFX_POOL = sorted(glob.glob(os.path.join(SFX_DIR, "crowd_cheer_*.wav")))
+# 🛡️ [배경음 고정] assets/highlight_sfx/에는 crowd_cheer_1~4.wav 4개가 있는데, 1/2/3.wav는
+# "즉시 폭발형" 짧은 스팅어(2.7~13.3초)로 설계됐고, 오직 crowd_cheer_4.wav만 클립 전체에 지속되는
+# 배경음 전용으로 설계됐다(README 참고). 예전엔 이 넷을 glob+random.choice로 무작위 골랐는데,
+# 75% 확률로 스팅어가 뽑혀 "초반 몇 초만 나오고 나머지는 조용해지는" 문제가 실제 배포 영상에서
+# 확인됨 - 배경음 용도로는 이제 4번만 고정으로 쓴다. 1/2/3.wav는 지우지 않고 디스크에 남겨둔다
+# (다른 용도로 재사용 가능하니 파일만 보존, 이 코드에서 더는 선택하지 않을 뿐).
+BACKGROUND_SFX_PATH = os.path.join(SFX_DIR, "crowd_cheer_4.wav")
 
 # 대부분의 효과음은 "킬 시점 = 파일 시작(즉시 폭발)"이라 리드타임이 0이다. crowd_cheer_2.wav만
 # 예외 - 조용히 고조되다 마지막에 훅 터지는 구조라, "터짐이 완성된 시점"이 킬 시점에 오도록
@@ -178,7 +184,7 @@ SFX_LIMITER_CEILING = 0.65
 #  3단계 빌드업 체인 (이상감지 -> 감정격상 -> 킬폭발) - 정적 음성 풀 + 실시간 메인 대사
 # ══════════════════════════════════════════════════════════
 # 🛡️ [비용 설계] 화면 상황과 무관한(사실 주장이 전혀 없는) 순수 감정 표현인 빌드업 1/2단계와
-# Hype/Sub는 SFX_POOL과 똑같은 glob+random.choice 정적 풀로 미리 구워둔다 - 실제 킬러/희생자
+# Hype/Sub는 glob+random.choice 정적 풀로 미리 구워둔다 - 실제 킬러/희생자
 # 이름이 들어가야 하는 메인 캐스터 대사 "한 줄"만 렌더당 ElevenLabs 실시간 호출 1회로 처리한다.
 VOICE_DIR = os.path.join(REPO_ROOT, "assets", "highlight_voice")
 BUILDUP1_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_*.wav")))
@@ -212,7 +218,14 @@ SUB_TEXT = {
 STAGE1_TARGET_OFFSET_SEC = 2.0    # 1단계(이상감지) 목표: 킬 - 2.0초
 STAGE2_TARGET_OFFSET_SEC = 1.0    # 2단계(감정격상) 목표: 킬 - 1.0초
 STAGE2_STAGE3_MIN_GAP_SEC = 0.4   # 2단계 끝 ~ 3단계(메인) 시작 최소 여유
-POST_LINE_GAP_SEC = 0.15          # 메인->하이프, 하이프->서브 사이 간격
+# 🛡️ [Main+Hype 겹침] 원래 "킬폭발" 설계는 메인 캐스터 대사와 관중 Hype 반응이 킬 순간에 함께
+# 터지는 구조였는데, 실제 구현은 완전 순차 재생(메인이 끝난 "후" hype 시작)이라 실제 배포
+# 영상에서 "한 명씩 순서대로 말하는" 것처럼 들리는 문제가 확인됨 - hype를 메인 "종료 전"
+# MAIN_HYPE_OVERLAP_SEC만큼 앞당겨 시작해서 겹치게 한다. hype 파일 자체가 짧으면(1.9~2.1초)
+# 겹침이 통째로 먹혀버리지 않도록, 실제 겹침 폭은 min(이 값, main_duration)으로 제한한다
+# (아래 스케줄링 코드에서 max(main_start, ...)로 처리 - main보다 더 앞으로는 못 간다).
+MAIN_HYPE_OVERLAP_SEC = 1.2
+POST_LINE_GAP_SEC = 0.15          # 하이프->서브 사이 간격 (메인->하이프는 이제 겹침, 위 참고)
 RENDER_TAIL_BUFFER_SEC = 0.8      # 서브 종료 후 여유
 
 ELEVENLABS_MAIN_VOICE_ID = "tlUdVt24VftfDokp32eu"  # LCK_Main_caster
@@ -268,6 +281,22 @@ def plan_stages(kill_t: float, s1_off: float, s1_dur: float, s2_off: float, s2_d
 def _mmss_to_ms(mmss: str) -> int:
     m, s = mmss.strip().split(":")
     return (int(m) * 60 + int(s)) * 1000
+
+
+def _eul_or_reul(word: str) -> str:
+    """한글 마지막 글자에 받침이 있으면 '을', 없으면 '를' - 한글 완성형 유니코드 범위(가~힣)에서
+    (codepoint - '가') % 28 == 0이면 종성 없음(를), 아니면 종성 있음(을). 한글이 아닌 이름(라틴
+    닉네임 등)은 받침 판단이 무의미하므로 '를'로 기본 처리."""
+    if not word or not ("가" <= word[-1] <= "힣"):
+        return "를"
+    return "를" if (ord(word[-1]) - ord("가")) % 28 == 0 else "을"
+
+
+def _commentary_names_killer(text: str, killer: str) -> bool:
+    """GPT가 생성한 main_text에 실제 킬러 이름이 들어있는지 확인 - 온도 0.8로 자유 생성되는
+    텍스트라 프롬프트 지시(킬러 이름을 강조하라)를 안 따르고 희생자만 부각시키는 경우가 실제
+    배포 영상에서 발견됨. 코드가 이를 검증하는 지점이 전혀 없었던 게 근본 원인이라 여기서 막는다."""
+    return bool(killer) and killer in text
 
 
 def _fit_linear_mapping(samples: list[dict]) -> tuple[float, float]:
@@ -525,9 +554,9 @@ class KyvoHighlight(KyvoBaseCog):
 
     @staticmethod
     def _make_sfx_pick() -> str:
-        if not SFX_POOL:
-            raise RuntimeError(f"관중 함성 효과음을 찾을 수 없음: {SFX_DIR}")
-        return random.choice(SFX_POOL)
+        if not os.path.exists(BACKGROUND_SFX_PATH):
+            raise RuntimeError(f"배경음 효과음을 찾을 수 없음: {BACKGROUND_SFX_PATH}")
+        return BACKGROUND_SFX_PATH
 
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        schedule: dict, work_dir: str, out_mp4: str) -> str:
@@ -942,7 +971,18 @@ class KyvoHighlight(KyvoBaseCog):
 
         # MAX_KILLS_PER_CLIP=1이라 kills_with_names/lines_raw는 항상 정확히 1건.
         kill_t = kills_with_names[0]["clip_t_sec"]
+        killer_name = kills_with_names[0]["killer"]
+        victim_name = kills_with_names[0]["victim"]
         main_text = lines_raw[0]["text"]
+
+        # 🛡️ [킬러 이름 검증] GPT는 온도 0.8로 자유 생성돼서 "킬러 이름을 강조하라"는 프롬프트
+        # 지시를 안 따르고 희생자만 부각시킨 문장을 내놓는 경우가 실제로 확인됨 - 코드가 이걸
+        # 검증하는 지점이 아예 없었던 게 실질적 원인. LLM을 재호출하면 비용/시간이 또 드니,
+        # 검증 실패 시 즉시 안전한 고정 템플릿으로 대체한다(재시도 없음).
+        if not _commentary_names_killer(main_text, killer_name):
+            print(f"[HIGHLIGHT][WARN] Commentary text missing killer name (guild={guild_id}) - "
+                  f"falling back to template. killer={killer_name!r} text={main_text!r}", flush=True)
+            main_text = f"{killer_name}!! {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
 
@@ -987,7 +1027,13 @@ class KyvoHighlight(KyvoBaseCog):
             s3_off=0.0,  # 메인은 실시간 합성이라 사전 실측 강조지점이 없음 - 파일 시작=킬 시점으로 단순화
         )
         main_start = plan["start3"]
-        hype_start = main_start + main_duration + POST_LINE_GAP_SEC
+        # 🛡️ hype를 main 종료 MAIN_HYPE_OVERLAP_SEC초 전에 당겨서 겹치게 한다. main_start보다
+        # 앞으로는 절대 못 가게(= stage1/stage2와 절대 안 겹치게) max(main_start, ...)로 하한선을
+        # 건다 - plan_stages()가 이미 main_start를 stage2 종료 + STAGE2_STAGE3_MIN_GAP_SEC 뒤로
+        # 배치해두므로, main_start를 하한선으로 쓰면 앞 단계와의 최소 간격도 자동으로 지켜진다.
+        # main_duration이 겹침 폭보다 짧은 극단적인 경우엔 max()가 자연히 main_start로 수렴해서
+        # (= 둘이 완전히 동시 시작) 음수/역전 없이 안전하게 처리된다.
+        hype_start = max(main_start, main_start + main_duration - MAIN_HYPE_OVERLAP_SEC)
         sub_start = hype_start + hype_duration + POST_LINE_GAP_SEC
         total_duration = max(duration, sub_start + sub_duration + RENDER_TAIL_BUFFER_SEC)
 
