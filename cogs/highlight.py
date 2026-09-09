@@ -15,7 +15,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
@@ -59,14 +58,12 @@ HIGHLIGHT_FEATURE_ENABLED = os.environ.get("HIGHLIGHT_FEATURE_ENABLED", "").stri
 HIGHLIGHT_MAX_WORKERS = int(os.environ.get("HIGHLIGHT_MAX_WORKERS", "2"))
 HIGHLIGHT_MAX_CONCURRENT = int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT", "1"))
 
-# 🛡️ imageio-ffmpeg가 배포하는 Linux 바이너리는 drawtext 필터가 빠진 최소 빌드라 자막이
-# 100% 확정적으로 깨진다(Dockerfile에서 실측 확인). Dockerfile이 apt로 drawtext 포함 풀빌드
-# ffmpeg를 설치하므로 그쪽을 우선 사용하고, 시스템에 ffmpeg가 없는 환경(예: 로컬 개발 PC)을
-# 위해서만 imageio-ffmpeg를 폴백으로 남긴다.
+# 🛡️ imageio-ffmpeg가 배포하는 Linux 바이너리는 drawtext 필터가 빠진 최소 빌드다(Dockerfile에서
+# 실측 확인). 현재 렌더링은 화면에 아무 것도 그리지 않아 drawtext를 안 쓰지만, 이후 화면 오버레이
+# 기능이 다시 생기면 필요해지므로 Dockerfile이 apt로 설치한 drawtext 포함 풀빌드 ffmpeg를 계속
+# 우선 사용한다. 시스템에 ffmpeg가 없는 환경(예: 로컬 개발 PC)을 위해서만 imageio-ffmpeg를 폴백으로 남긴다.
 FFMPEG_EXE = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FONT_PATH_RAW = os.path.join(REPO_ROOT, "FontKR.otf")
-FONT_PATH = FONT_PATH_RAW.replace("\\", "/").replace(":", "\\:")  # ffmpeg 필터 문법 콜론 이스케이프
 
 SFX_DIR = os.path.join(REPO_ROOT, "assets", "highlight_sfx")
 SFX_POOL = sorted(glob.glob(os.path.join(SFX_DIR, "crowd_cheer_*.wav")))
@@ -547,103 +544,79 @@ class KyvoHighlight(KyvoBaseCog):
         target_video_kbps = max(MIN_OUTPUT_VIDEO_BITRATE_KBPS,
                                  target_total_kbps - OUTPUT_AUDIO_BITRATE_KBPS)
 
-        run_dir = os.path.join(work_dir, f"txt_{uuid.uuid4().hex[:8]}")
-        os.makedirs(run_dir, exist_ok=True)
+        inputs = ["-i", video_path, "-i", cheer_path]
+        voice_indices = {}
+        for key in ("stage1", "stage2", "main", "hype", "sub"):
+            entry = schedule.get(key)
+            if entry is None:
+                continue
+            inputs += ["-i", entry["wav"]]
+            voice_indices[key] = len(inputs) // 2 - 1
 
-        try:
-            inputs = ["-i", video_path, "-i", cheer_path]
-            voice_indices = {}
-            for key in ("stage1", "stage2", "main", "hype", "sub"):
-                entry = schedule.get(key)
-                if entry is None:
-                    continue
-                inputs += ["-i", entry["wav"]]
-                voice_indices[key] = len(inputs) // 2 - 1
+        # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다) ──
+        video_filters = []
+        # 🛡️ 유저가 1440p/4K 등 고해상도 클립을 올리면(크기만 100MB 이내면 통과되므로
+        # 충분히 가능) 목표 비트레이트가 픽셀 수 대비 너무 낮아져 화질이 심하게 뭉개진다 -
+        # 스케일을 먼저 걸어 픽셀 수 자체를 낮춰둔다. -2로 짝수 높이 보장(libx264 요구사항).
+        if video_width > MAX_OUTPUT_WIDTH:
+            video_filters.append(f"scale={MAX_OUTPUT_WIDTH}:-2")
+        # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
+        # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
+        # 정지시키는 대신 마지막 프레임을 그대로 붙잡아 늘리는 가장 단순한 방법(tpad) -
+        # 이전 프로토타입의 펀치인 줌/비네트는 이번 라운드 범위 밖.
+        extra_video_sec = max(0.0, total_duration - video_duration)
+        if extra_video_sec > 0.01:
+            video_filters.append(f"tpad=stop_mode=clone:stop_duration={extra_video_sec:.3f}")
+        video_chain = "[0:v]" + ",".join(video_filters) + "[vout]" if video_filters else "[0:v]copy[vout]"
 
-            # ── 자막 ──
-            draw_filters = []
-            # 🛡️ 유저가 1440p/4K 등 고해상도 클립을 올리면(크기만 100MB 이내면 통과되므로
-            # 충분히 가능) 목표 비트레이트가 픽셀 수 대비 너무 낮아져 화질이 심하게 뭉개진다 -
-            # 스케일을 먼저 걸어 픽셀 수 자체를 낮춰둔다. -2로 짝수 높이 보장(libx264 요구사항).
-            if video_width > MAX_OUTPUT_WIDTH:
-                draw_filters.append(f"scale={MAX_OUTPUT_WIDTH}:-2")
-            # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
-            # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
-            # 정지시키는 대신 마지막 프레임을 그대로 붙잡아 늘리는 가장 단순한 방법(tpad) -
-            # 이전 프로토타입의 펀치인 줌/비네트는 이번 라운드 범위 밖.
-            extra_video_sec = max(0.0, total_duration - video_duration)
-            if extra_video_sec > 0.01:
-                draw_filters.append(f"tpad=stop_mode=clone:stop_duration={extra_video_sec:.3f}")
+        # ── 오디오 (화면 처리와 무관하게 그대로 유지) ──
+        # 🛡️ amix duration=first는 "첫 번째로 나열된 스트림"의 길이만 본다 - 게임 오디오를
+        # 전체 렌더 길이만큼 apad로 먼저 늘려두지 않으면, 뒤에 붙는 빌드업/메인/하이프/서브가
+        # 게임 오디오 원래 길이에서 통째로 잘려나간다(이번 세션 프로토타입에서 반복 확인된
+        # 실수, 여기서도 그대로 적용).
+        audio_parts = [f"[0:a]apad=whole_dur={total_duration}[game0];"]
+        mix_labels = ["[game0]"]
 
-            for key in ("stage1", "stage2", "main", "hype", "sub"):
-                entry = schedule.get(key)
-                if entry is None:
-                    continue
-                txt_path = os.path.join(run_dir, f"line_{key}.txt")
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    f.write(entry["text"])
-                txt_escaped = txt_path.replace("\\", "/").replace(":", "\\:")
-                start = entry["start"]
-                end = start + entry["duration"]
-                draw_filters.append(
-                    f"drawtext=fontfile='{FONT_PATH}':"
-                    f"textfile='{txt_escaped}':reload=0:"
-                    "fontcolor=white:fontsize=32:borderw=3:bordercolor=black:"
-                    "x=(w-text_w)/2:y=h-100:"
-                    f"enable='between(t,{start},{end})'"
-                )
-            video_chain = "[0:v]" + ",".join(draw_filters) + "[vout]" if draw_filters else "[0:v]copy[vout]"
+        cheer_basename = os.path.basename(cheer_path)
+        cheer_lead_ms = SFX_LEAD_MS.get(cheer_basename, 0)
+        cheer_delay_ms = max(0, int(schedule["kill_t"] * 1000) - cheer_lead_ms)
+        cheer_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(cheer_basename, SFX_MIX_GAIN_DB)
+        audio_parts.append(f"[1:a]adelay={cheer_delay_ms}|{cheer_delay_ms},volume={cheer_gain_db}dB[cheer0];")
+        mix_labels.append("[cheer0]")
 
-            # ── 오디오 ──
-            # 🛡️ amix duration=first는 "첫 번째로 나열된 스트림"의 길이만 본다 - 게임 오디오를
-            # 전체 렌더 길이만큼 apad로 먼저 늘려두지 않으면, 뒤에 붙는 빌드업/메인/하이프/서브가
-            # 게임 오디오 원래 길이에서 통째로 잘려나간다(이번 세션 프로토타입에서 반복 확인된
-            # 실수, 여기서도 그대로 적용).
-            audio_parts = [f"[0:a]apad=whole_dur={total_duration}[game0];"]
-            mix_labels = ["[game0]"]
+        for key, idx in voice_indices.items():
+            entry = schedule[key]
+            delay_ms = max(0, int(entry["start"] * 1000))
+            audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[v_{key}];")
+            mix_labels.append(f"[v_{key}]")
 
-            cheer_basename = os.path.basename(cheer_path)
-            cheer_lead_ms = SFX_LEAD_MS.get(cheer_basename, 0)
-            cheer_delay_ms = max(0, int(schedule["kill_t"] * 1000) - cheer_lead_ms)
-            cheer_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(cheer_basename, SFX_MIX_GAIN_DB)
-            audio_parts.append(f"[1:a]adelay={cheer_delay_ms}|{cheer_delay_ms},volume={cheer_gain_db}dB[cheer0];")
-            mix_labels.append("[cheer0]")
+        n_mix = len(mix_labels)
+        audio_parts.append(
+            f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=first:"
+            f"dropout_transition=0:normalize=0[mixed];"
+            f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50[aout]"
+        )
+        full_audio = "".join(audio_parts)
 
-            for key, idx in voice_indices.items():
-                entry = schedule[key]
-                delay_ms = max(0, int(entry["start"] * 1000))
-                audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[v_{key}];")
-                mix_labels.append(f"[v_{key}]")
+        filter_complex = f"{video_chain};{full_audio}"
 
-            n_mix = len(mix_labels)
-            audio_parts.append(
-                f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=first:"
-                f"dropout_transition=0:normalize=0[mixed];"
-                f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50[aout]"
-            )
-            full_audio = "".join(audio_parts)
-
-            filter_complex = f"{video_chain};{full_audio}"
-
-            # 🛡️ crf 고정값 대신 total_duration에서 역산한 목표 비트레이트로 인코딩 -
-            # 콘텐츠 복잡도/해상도와 무관하게 파일 크기가 항상 TARGET_OUTPUT_SIZE_MB 근처로
-            # 수렴한다(디스코드 업로드 한도 대응). maxrate/bufsize로 순간적인 폭주만 눌러주고
-            # 평균은 -b:v 그대로 나가게 하는 표준 단일 패스 VBV 제한 인코딩.
-            cmd = [FFMPEG_EXE, "-y", *inputs,
-                   "-filter_complex", filter_complex,
-                   "-map", "[vout]", "-map", "[aout]",
-                   "-c:v", "libx264", "-preset", "veryfast",
-                   "-b:v", f"{int(target_video_kbps)}k",
-                   "-maxrate", f"{int(target_video_kbps * 1.5)}k",
-                   "-bufsize", f"{int(target_video_kbps * 2)}k",
-                   "-c:a", "aac", "-b:a", f"{OUTPUT_AUDIO_BITRATE_KBPS}k",
-                   "-t", str(total_duration),
-                   out_mp4]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise RuntimeError(f"ffmpeg 렌더링 실패:\n{result.stderr[-2000:]}")
-        finally:
-            shutil.rmtree(run_dir, ignore_errors=True)
+        # 🛡️ crf 고정값 대신 total_duration에서 역산한 목표 비트레이트로 인코딩 -
+        # 콘텐츠 복잡도/해상도와 무관하게 파일 크기가 항상 TARGET_OUTPUT_SIZE_MB 근처로
+        # 수렴한다(디스코드 업로드 한도 대응). maxrate/bufsize로 순간적인 폭주만 눌러주고
+        # 평균은 -b:v 그대로 나가게 하는 표준 단일 패스 VBV 제한 인코딩.
+        cmd = [FFMPEG_EXE, "-y", *inputs,
+               "-filter_complex", filter_complex,
+               "-map", "[vout]", "-map", "[aout]",
+               "-c:v", "libx264", "-preset", "veryfast",
+               "-b:v", f"{int(target_video_kbps)}k",
+               "-maxrate", f"{int(target_video_kbps * 1.5)}k",
+               "-bufsize", f"{int(target_video_kbps * 2)}k",
+               "-c:a", "aac", "-b:a", f"{OUTPUT_AUDIO_BITRATE_KBPS}k",
+               "-t", str(total_duration),
+               out_mp4]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg 렌더링 실패:\n{result.stderr[-2000:]}")
 
         return cheer_basename
 
