@@ -59,7 +59,11 @@ HIGHLIGHT_FEATURE_ENABLED = os.environ.get("HIGHLIGHT_FEATURE_ENABLED", "").stri
 HIGHLIGHT_MAX_WORKERS = int(os.environ.get("HIGHLIGHT_MAX_WORKERS", "2"))
 HIGHLIGHT_MAX_CONCURRENT = int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT", "1"))
 
-FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+# 🛡️ imageio-ffmpeg가 배포하는 Linux 바이너리는 drawtext 필터가 빠진 최소 빌드라 자막이
+# 100% 확정적으로 깨진다(Dockerfile에서 실측 확인). Dockerfile이 apt로 drawtext 포함 풀빌드
+# ffmpeg를 설치하므로 그쪽을 우선 사용하고, 시스템에 ffmpeg가 없는 환경(예: 로컬 개발 PC)을
+# 위해서만 imageio-ffmpeg를 폴백으로 남긴다.
+FFMPEG_EXE = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONT_PATH_RAW = os.path.join(REPO_ROOT, "FontKR.otf")
 FONT_PATH = FONT_PATH_RAW.replace("\\", "/").replace(":", "\\:")  # ffmpeg 필터 문법 콜론 이스케이프

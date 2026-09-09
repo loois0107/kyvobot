@@ -8,12 +8,14 @@ ENV PYTHONUNBUFFERED=1
 # Step 3: Set absolute workspace path inside container
 WORKDIR /app
 
-# Step 4: Install system dependencies for fonts
+# Step 4: Install system dependencies for fonts + a full ffmpeg build (Debian's apt package
+# includes drawtext, unlike imageio-ffmpeg's bundled minimal binary)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
     libssl-dev \
     fontconfig \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Step 5: Ingest dependencies layer
