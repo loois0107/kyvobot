@@ -362,6 +362,16 @@ def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.dat
     return None
 
 
+def _has_bot_participant(match_detail: dict) -> bool:
+    """🛡️ AI 상대 대전 후보를 걸러내려고 gameType/gameMode/queueId를 먼저 확인해봤는데,
+    실제로 발견된 문제 사례(KR_8364744586)는 gameType=MATCHED_GAME, gameMode=SWIFTPLAY로
+    "봇으로 채워진 정식 스위프트플레이"라 그 기준으로는 안 걸러졌다(Riot이 이걸 진짜
+    매치메이드로 분류함). 대신 참가자 데이터에서 확인되는 훨씬 확실한 공식 신호를 쓴다 -
+    AI로 채워진 슬롯은 participant.puuid가 리터럴 문자열 "BOT"(길이 3)이다(실제 이 매치로
+    실측 확인). 사람 플레이어의 puuid는 항상 78자 고유 문자열이라 오탐 위험이 없다."""
+    return any(p.get("puuid") == "BOT" for p in match_detail["info"]["participants"])
+
+
 def _pick_match_by_game_time_range(matches_detail: list[dict], clip_creation: datetime.datetime,
                                     game_ms_end: float) -> dict | None:
     """_pick_match_for_clip(1차)이 실패했을 때만 쓰는 2차 판별 - 주로 리플레이 뷰어를 녹화한
@@ -372,12 +382,14 @@ def _pick_match_by_game_time_range(matches_detail: list[dict], clip_creation: da
     기준점). creation_time은 더 이상 정확한 창이 아니라 "그럴듯한 순서"를 매기는 느슨한
     참고용일 뿐이라, 이 결과가 항상 정답이라는 보장은 없다(알려진 한계 - 특히 리플레이
     시청 전에 다른 게임을 더 했다면 그 게임이 더 가까워서 잘못 뽑힐 수 있음).
+    AI 상대 대전(봇으로 채워진 매치 포함)은 애초에 후보에서 제외한다(_has_bot_participant).
 
     🛡️ [안전장치] 그 "가장 가까운" 후보조차 MATCH_GAME_TIME_MAX_STALENESS_SEC보다 더 멀리
     떨어져 있으면, 확신할 수 없는 추측을 내놓는 대신 None을 반환해 명확한 실패로 처리한다
     (원본 클립이 너무 오래돼서 최근 매치 목록에 애초에 정답이 없는 경우를 위한 방어).
     """
-    candidates = [md for md in matches_detail if md["info"]["gameDuration"] * 1000 >= game_ms_end]
+    candidates = [md for md in matches_detail
+                  if md["info"]["gameDuration"] * 1000 >= game_ms_end and not _has_bot_participant(md)]
     if not candidates:
         return None
 
