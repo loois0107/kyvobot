@@ -326,6 +326,11 @@ ELEVENLABS_VOICE_IDS = {
     "sub": "K4OVml3awIZZxKC33zQV",   # Lck_Sub_Analyst
 }
 ELEVENLABS_MODEL_ID = "eleven_v3"
+# 🛡️ [output_format 명시] 예전엔 지정을 아예 안 해서 API 기본값(mp3_44100_128)을 그대로 썼다.
+# Creator 티어로 업그레이드하면서 192kbps가 열려 명시적으로 올렸다 - pcm_44100(무손실)은
+# Pro 티어부터라 아직 못 쓴다. 받은 mp3를 바로 ffmpeg로 WAV 변환해서 믹싱하므로(아래
+# _synthesize_voice_line), 128->192kbps는 그 변환 전 손실 압축 정도를 줄여주는 효과.
+ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_192"
 
 
 def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
@@ -838,6 +843,7 @@ class KyvoHighlight(KyvoBaseCog):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                params={"output_format": ELEVENLABS_OUTPUT_FORMAT},
                 headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
                 json={"text": tagged_text, "model_id": ELEVENLABS_MODEL_ID},
             ) as resp:
