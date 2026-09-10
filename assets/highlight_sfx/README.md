@@ -73,17 +73,34 @@ Processing chain:
    see lesson 4 below for why that step was actively wrong for this asset and was
    dropped after measuring its effect.
 
-`SFX_LEAD_MS["crowd_cheer_4.wav"] = 14800` (14.0s baseline + 0.8s ramp - the point the
-swell *completes*, same convention as `crowd_cheer_2.wav`). Exempted from
-`SFX_MIX_GAIN_DB` like `crowd_cheer_2.wav` (`SFX_MIX_GAIN_DB_OVERRIDE = 0.0`) since it
-already peaks near 0dBFS on its own.
+`SFX_LEAD_MS["crowd_cheer_4.wav"] = 15300` - **recalibrated from an original 14800**
+after a deployed clip made "the cheer peaks noticeably after the kill" audible. 14800
+(14.0s baseline + 0.8s ramp) was where the ramp *completes*, not where the file is
+actually loudest - decoding the raw PCM with numpy and scanning a 50ms sliding-window
+RMS showed the real perceptual peak cluster sits at ~15.3-16.8s (multiple near-peak
+windows within -0.5dB of the max, starting at 15.300s), a good ~0.5-2s after the ramp
+merely *finishes*. (A single raw-sample amplitude peak also exists at 18.8s, but it's
+an isolated transient, not a sustained loud moment, so it wasn't used as the anchor.)
+15300 is that measured peak-cluster start. Exempted from `SFX_MIX_GAIN_DB` like
+`crowd_cheer_2.wav` (`SFX_MIX_GAIN_DB_OVERRIDE = 0.0`) since it already peaks near
+0dBFS on its own.
 
-**Known accepted limitation**: like `crowd_cheer_2.wav`, if the kill happens more than
-~14.8s into the clip, the lead-time clamps to 0 and the bed starts from clip t=0 but
-the swell now lands *late* relative to the kill instead of exactly on it. And even
-within the normal case, the bed's own natural runway is short (23s file) - if the
+**Fixed (was a known accepted limitation)**: if the kill happens before ~15.3s into the
+clip, `cogs.highlight._render_video` used to just clamp the delay to 0 and let the file
+play from its own t=0 - which meant the peak (still ~15.3s into the *file*) landed
+*late* relative to the kill, sometimes by several seconds, in exactly the common case
+of an early kill. A deployed clip made this audible (the cheer only peaked well after
+everything else was already over). Fixed by seeking *into* the cheer file
+with ffmpeg's per-input `-ss` instead of clamping the delay: when `kill_t*1000 <
+SFX_LEAD_MS`, the input skips `SFX_LEAD_MS - kill_t*1000` milliseconds of its own
+beginning so the peak position always lands at `kill_t` in real time, at the cost of a
+shorter (or, for very early kills, skipped entirely) build-up ramp. Verified: for a
+kill at real `t=8.564s` (well under 15.3s), the cheer's measured loudest instant now
+lands within the same render frame as the kill instead of ~6-10s later.
+
+Even with that fixed, the bed's own natural runway is still short (23s file) - if the
 kill happens very early and the post-kill commentary tail runs long, the bed will
-fade out (by design, not a cutoff) before the tail finishes. Both are consequences of
+fade out (by design, not a cutoff) before the tail finishes. That remains a
 using a bounded static asset instead of live per-render synthesis; not fixed here.
 
 ### Three more hard-won lessons (crowd_cheer_4.wav)
