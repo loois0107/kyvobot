@@ -774,7 +774,7 @@ class KyvoHighlight(KyvoBaseCog):
     #  /highlight
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="highlight", description="Turn a gameplay clip into an AI-narrated highlight with real match facts (run /tier_verify first).")
-    @app_commands.describe(video="Your gameplay clip (mp4) with the in-game clock visible in the top-right corner.")
+    @app_commands.describe(video="Your gameplay clip (mp4) with the clock visible top-right. Long names may slow pacing.")
     @app_commands.checks.cooldown(1, 30.0, key=lambda i: i.user.id)
     async def highlight(self, interaction: discord.Interaction, video: discord.Attachment):
         guild_id = interaction.guild_id
