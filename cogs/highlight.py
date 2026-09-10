@@ -37,10 +37,10 @@ if not OPENAI_API_KEY:
         "Set it before starting the bot (used for clock OCR + commentary generation)."
     )
 
-# 🛡️ 메인 캐스터 대사(실제 킬러/희생자 이름이 들어가는 한 줄)만 실시간 TTS로 합성한다 -
-# 빌드업 1/2단계·Hype·Sub는 화면 상황과 무관한 정적 음성 풀(assets/highlight_voice/)이라
-# 이 키가 없어도 동작하지만, 메인 캐스터 음성은 이 기능의 핵심이라 다른 필수 키들과 동일한
-# fail-fast 원칙을 적용한다.
+# 🛡️ 실제 킬러 닉네임이 들어가는 두 줄(1단계 Hype 닉네임 샤우팅, 3단계 Main 사실 전달)만
+# 실시간 TTS로 합성한다 - 0단계(3인 동시 폭발)와 2단계 Sub 추임새는 화면 상황과 무관한 정적
+# 음성 풀(assets/highlight_voice/)이라 이 키가 없어도 동작하지만, 실시간 두 줄이 이 기능의
+# 핵심이라 다른 필수 키들과 동일한 fail-fast 원칙을 적용한다.
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 if not ELEVENLABS_API_KEY:
     raise RuntimeError(
@@ -187,62 +187,137 @@ SFX_MIX_GAIN_DB_OVERRIDE = {"crowd_cheer_2.wav": 0.0, "crowd_cheer_4.wav": 0.0}
 # 0dBFS 바로 아래까지 밀어붙이면 손실 압축 특유의 인터샘플 오버슈트가 나온다는 뜻. 인코딩 후에도
 # 진짜로 0dBFS를 안 넘도록 사전에 -3.7dB 정도 여유를 더 준다.
 SFX_LIMITER_CEILING = 0.65
+# 🛡️ [alimiter level=false - 진짜 원인 발견] 해설 게인을 올리면서 0~9dB를 스윕했더니 최종
+# 피크가 게인에 비례하지 않고 특정 값(3.0/5.5/6.0/8.0/9.0dB)에서만 콕 집어 0dBFS를 살짝
+# 넘는 불안정한 패턴이 나왔다 - 원인을 파고보니 ffmpeg의 alimiter는 `level`(자동 레벨 보정)
+# 옵션이 **기본값 true**라, 리미터가 게인을 깎은 만큼 출력을 다시 끌어올려서 정작 "천장"
+# 자체를 제멋대로 무력화하고 있었다(입력 게인이 달라질 때마다 보정량도 달라지니 결과가
+# 비선형적으로 튄 것). `level=false`로 명시적으로 꺼서 진짜 하드 리미터로 만들었더니 게인을
+# 0~10dB 전부 스윕해도 피크가 -3.2~-3.8dB 범위에 안정적으로 고정됨을 확인(SFX_LIMITER_CEILING
+# =0.65의 이론치 -3.74dB와 거의 정확히 일치) - 더 이상 게인 값에 따라 클리핑 여부가 복불복이
+# 아니다. 이 alimiter 필터 자체는 이 세션 훨씬 이전(로컬 프로토타입 단계)에 한 번 배운 교훈
+# 이었는데 실제 프로덕션 코드로 옮겨질 때 빠졌던 것으로 보인다.
+VOICE_MIX_GAIN_DB = 6.0
 
 # ══════════════════════════════════════════════════════════
-#  2단계 반응 체인 (전면 재설계) - 1단계: 킬 순간에 Main+Hype+Sub 3목소리가 동시에
-#  "감탄사+닉네임" 샤우팅 / 2단계: Hype(사실 서술)->Sub(의문형 감탄)->Main(짧은 감탄)이
-#  살짝 겹치며 순서대로 이어짐.
+#  0~3단계 킬 리액션 시퀀스 (전면 재설계 - 오늘 저녁 로컬 프로토타입 v1~v9에서 검증) -
+#  전체 순서: 상황 멘트(0단계 전) -> "어어??"(0단계 전) -> 0단계(킬 순간 3인 동시 폭발) ->
+#  1단계(Hype 닉네임) -> 2단계(Sub 의문형) -> 3단계(Main 사실 전달)
+#  각 단계 시작은 "이전 단계 최장 음성 길이 × STAGE_OVERLAP_RATIO" - 고정 초가 아니다(0~3단계
+#  한정, 킬 이전 두 리드인 단계는 아래 별도 gap 규칙).
 # ══════════════════════════════════════════════════════════
-# 🛡️ [비용 설계] 실제 킬러 닉네임이 필요한 곳은 정확히 두 군데뿐 - (1) 1단계 샤우팅 중
-# "감탄사+닉네임"을 외치는 목소리, (2) 2단계에서 사실을 서술하는 목소리. 나머지 네 자리
-# (1단계의 나머지 두 목소리 + 2단계의 나머지 두 목소리)는 닉네임이 필요 없는 순수 감정
-# 표현이라 정적 풀로 미리 구워둔다 - 렌더당 ElevenLabs 실시간 호출은 정확히 2회로 고정
-# (이전 라운드까지는 1회였는데, "1단계도 실제 닉네임이 들어가야 한다"는 이번 요구사항 자체가
-# 두 번째 실시간 호출을 요구함 - 문자 수 자체는 짧은 외침이라 부담이 크지 않음, 실측 후 아래
-# 검증 결과에 남김).
+# 🛡️ [비용 설계] 실제 킬러 닉네임이 필요한 곳은 정확히 두 군데 - (1) 1단계 Hype의 닉네임
+# 샤우팅, (2) 3단계 Main의 사실 전달. 나머지 자리(상황 멘트+어어??+0단계 세 목소리+2단계
+# Sub)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀로 미리 구워둔다 - 렌더당 ElevenLabs
+# 실시간 호출은 정확히 2회로 고정(문자 수 자체는 짧은 외침/한 문장이라 부담이 크지 않음).
 VOICE_DIR = os.path.join(REPO_ROOT, "assets", "highlight_voice")
 
-# ── 1단계(킬 순간, 3인 동시 샤우팅) ──
-# Main만 실시간 TTS로 "감탄사+닉네임"을 외친다(MAIN_SHOUT_TEMPLATE). Hype/Sub는 닉네임을
-# 넣을 수 없는 정적 풀이라 순수 감탄사만 - Hype는 기존 hype_*.wav(예전 "메인 종료 후 순차
-# 재생" 역할)를 재사용한다. Sub는 새로 녹음(sub_shout_*.wav) - 기존 sub_*.wav(analyst 멘트)는
-# 이 역할에 안 맞음.
-# 🛡️ [버그 수정] hype_a.wav/hype_b.wav가 각각 "미쳤다!!"/"대박이다!!"로 반말체 녹음돼 있어서
-# HYPE_SHOUT_POOL에서 random.choice로 뽑힐 때마다(2/3 확률) 존댓말 정책을 어긴 채 실제
-# 배포됐던 게 실측으로 확인됨 - hype_c.wav만 존댓말이라 안 걸리고 넘어갔었다. 두 파일 다
-# 같은 감탄사 프리픽스("와아아아악!!"/"우와아!!")는 유지하고 종결어미만 존댓말로 다시 녹음.
-HYPE_SHOUT_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_*.wav")))
-SUB_SHOUT_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
-HYPE_SHOUT_TEXT = {
-    "hype_a.wav": "와아아아악!! 미쳤어요!!", "hype_b.wav": "우와아!! 대박이에요!!",
-    "hype_c.wav": "미쳤어요 진짜!!",
+# ── 킬 이전 리드인 1/2: 상황 멘트 -> "어어??" -> (0단계로 이어짐) ──
+# 🛡️ [환각 위험 차단] "소리지르기 전에 상황 멘트"라는 요청 자체에 예시로 "탑쪽은 신경전이
+# 벌어지는 중이네요" 같은 특정 라인(탑) 지목 문구가 포함돼 있었는데, 이건 실제로 위험하다 -
+# 킬이 탑에서 안 났으면 명백한 오지어낸 사실이 된다(SYSTEM_PROMPT가 지키는 "목록에 없는
+# 내용은 절대 지어내지 마라" 원칙과 정면으로 어긋남). 그래서 이 문구는 채택하지 않고, 위치/
+# 챔피언/상황을 전혀 특정하지 않는 순수 분위기 감탄("구도 좋은데요?" 계열)만 골랐다 -
+# 어떤 클립에 붙어도 항상 사실일 수 있는 문장들이라 환각 위험이 없다(예전 BUILDUP_TEXT와
+# 동일한 원칙).
+PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")))
+PRE_BUILDUP_TEXT = {
+    "pre_buildup_a.wav": "구도 좋은데요?",
+    "pre_buildup_b.wav": "분위기가 심상치 않은데요?",
+    "pre_buildup_c.wav": "긴장감이 느껴지는데요?",
 }
-SUB_SHOUT_TEXT = {
-    "sub_shout_a.wav": "우와아아아!!", "sub_shout_b.wav": "허어어!!",
+# 🛡️ ["어어??" 신규] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣는 "이상 감지" 반응 - 옛날
+# buildup1_*.wav("어어?!" 계열, Main 목소리) 정적 풀이 이 구조 재설계 전에 만들어져 있던 걸
+# 그대로 재사용한다(새 TTS 없음). 파일이 이미 짧아서(0.8~1.5초) "짧게"라는 요구사항도 그대로
+# 충족.
+# 🛡️ [buildup1_b.wav 제외] "어?! 뭔가...?!" 계열보다 "어어?!" 계열을 우선 쓰라는 요청으로,
+# 풀을 buildup1_a.wav 하나로만 좁혔다(풀에 하나뿐이라 "우선"이 곧 "유일"). buildup1_b.wav
+# 파일 자체는 디스크에 남아있지만 더는 참조되지 않는다.
+EOEO_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_a.wav")))
+EOEO_TEXT = {
+    "buildup1_a.wav": "어어?!",
 }
-MAIN_SHOUT_TEMPLATE = "우와아아아악!! {killer}~~!!"
+# 🛡️ [앵커링 기준 = 클립 시작(t=0), kill_t 역산 아님] 처음엔 "0단계(킬) 직전에 끝나도록"
+# kill_t에서 거꾸로 역산했는데, 실제로 들어보니 "영상 시작하자마자" 나와야 한다는 요구와
+# 다른 결과가 나왔다(kill_t가 클립 중간쯤이면 리드인도 자동으로 중간쯤에 옴 - 클립 길이
+# 자체는 계산식에 아예 안 들어가서 "초반"을 보장 못 함, 실측으로 확인된 버그 아닌 설계
+# 오해). 이번엔 클립 시작(t=0) 기준으로 앞에서부터 배치하고, kill_t와 안 겹치는지만
+# 안전장치로 검사한다 - 자리가 없으면(비정상적으로 짧은 클립/이른 킬) 예전 빌드업1/2단계와
+# 같은 원칙으로 스킵한다(억지로 겹치게 밀어넣지 않음).
+PRE_BUILDUP_START_OFFSET_SEC = 0.4  # 상황 멘트: 클립 시작 후 이만큼 뒤에 시작(0.3~0.5 범위)
+PRE_BUILDUP_GAP_SEC = 0.2  # 상황 멘트 종료 ~ "어어??" 시작 사이 간격
+EOEO_GAP_SEC = 0.2         # "어어??" 종료 ~ 0단계(킬 시점) 시작 사이 최소 안전 여백(충돌 검사용)
 
-# ── 2단계(리액션 체인, Hype -> Sub -> Main 순서로 살짝 겹치며 진행) ──
-# Hype만 실시간 TTS로 사실을 서술한다(_generate_commentary, 예전엔 Main의 역할이었음 -
-# _i_or_ga/_eul_or_reul 조사 검증도 이번에 여기로 같이 옮김). Sub(의문형 감탄)/Main(짧은
-# 감탄)은 상황과 무관한 순수 감정 표현이라 정적 풀 - 둘 다 새로 녹음(sub_question_*.wav,
-# main_react_*.wav).
+# ── 0단계(킬 순간, 3인 동시 폭발 - 닉네임 없는 순수 감탄사) ──
+# 셋 다 정적 풀. Hype/Sub는 기존 1단계(구조 변경 전) 풀을 그대로 재사용 - 역할만 바뀌었을 뿐
+# 파일/텍스트는 그대로. Main은 이 역할의 정적 풀이 없어서 새로 녹음(main_explode_*.wav).
+# 🛡️ [버그 수정, 이미 반영됨] hype_a.wav/hype_b.wav가 각각 "미쳤다!!"/"대박이다!!"로 반말체
+# 녹음돼 있어서 HYPE_EXPLODE_POOL에서 random.choice로 뽑힐 때마다(2/3 확률) 존댓말 정책을
+# 어긴 채 실제 배포됐던 게 실측으로 확인됨 - hype_c.wav만 존댓말이라 안 걸리고 넘어갔었다.
+# 두 파일 다 같은 감탄사 프리픽스("와아아아악!!"/"우와아!!")는 유지하고 종결어미만 존댓말로
+# 다시 녹음.
+# 🛡️ [체감 비중 강화, 3차 - 재녹음 방식 자체를 교체] 1~2차("완전!!"/"진짜!!" 등 짧은 문장을
+# 이어붙이는 방식)는 문장 경계마다 TTS가 자연스러운 숨쉬기 무음을 넣어서, silencedetect로
+# 실측해보니 파일마다 서로 안 맞는 타이밍에 무음 구간이 1~3곳씩 있었다 - 세 목소리가 계속
+# 겹쳐서 울리는 게 아니라 "끊기는 지점마다 한둘만 들리는" 문제의 실제 원인이었음(에코박스
+# 확인). 그래서 이번엔 문장을 이어붙이는 대신 감탄사 자체의 모음을 길게 늘이는 방식으로
+# 바꿨다(닉네임과 달리 의미 있는 고유명사가 아니라 순수 감탄사라 늘여 발음해도 안전).
+# 🛡️ [재검증 결과 - 정밀 판정 기준 도입] silencedetect(noise=-35dB:d=0.15, "0.15초 이상"만
+# 잡는 기준)만으로는 부족하다는 게 실측으로 확인됨 - 모음 15개 안팎으로 처음 보정했던 버전도
+# 이 기준은 통과했지만, 더 민감한 기준(noise=-30dB, 프레임 20ms RMS, peak 대비 -30dB 이상
+# 깊은 딥을 "진짜 딥"으로 판정)으로 재측정하니 0.15초보다 짧지만 -40~-90dB까지 떨어지는 딥이
+# 파일당 여러 곳(3~6곳) 있었고 파형에서도 소리가 여러 뭉치로 쪼개져 보였다. ElevenLabs
+# Creator 티어로 업그레이드(문자 한도 121,000) 후 모음 개수를 6~10개로 더 줄이고, 파일당
+# 여러 번 생성해서 "0.15초 이상 무음 0곳 + 정밀 기준 깊은 딥 0곳"을 만족하는 테이크를 자동
+# 채택하는 방식(최대 12~14회 재시도)으로 6개 파일 전부 재녹음했다 - 최종적으로 6개 모두 두
+# 기준 다 통과(완전한 무음 없는 연속음). sub_shout_b는 "허"+"어" 계열 텍스트로 28회를
+# 시도해도 매번 1곳이 남아서, 모음 자체를 "히"+"이" 계열로 바꾸니 7회 만에 해결됐다 - 특정
+# 음소(어) 자체가 이 목소리에서 유독 끊기기 쉬웠던 것으로 보인다.
+MAIN_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "main_explode_*.wav")))
+HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_*.wav")))
+SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
+MAIN_EXPLODE_TEXT = {
+    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.52s, 무음/깊은 딥 없음(정밀 기준 통과)
+}
+HYPE_EXPLODE_TEXT = {
+    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, 무음/깊은 딥 없음(정밀 기준 통과)
+    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.76s, 무음/깊은 딥 없음(정밀 기준 통과)
+    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.36s, 무음/깊은 딥 없음(정밀 기준 통과)
+}
+SUB_EXPLODE_TEXT = {
+    "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.60s, 무음/깊은 딥 없음(정밀 기준 통과)
+    "sub_shout_b.wav": "히" + "이" * 8 + "!!",  # 1.44s, 무음/깊은 딥 없음(정밀 기준 통과)
+}
+
+# ── 1단계(Hype 닉네임 샤우팅, 실시간 TTS) ──
+# 🛡️ [발음 표기] 이름 음절을 늘려 쓰는 방식("장이이인정시이인!!")은 TTS 발음 경계와 안 맞아
+# "장애~인정신"처럼 들리는 문제가 로컬 프로토타입에서 확인됨 - 음절은 그대로 두고 이름 끝에
+# 물결표만 붙이는 방식(B)이 더 자연스러웠고, 여기에 볼륨 스웰(D2, 뒷부분만 서서히 커짐)을
+# 결합해서 "길게 끄는 느낌"을 오디오 후처리로 흉내낸다(_apply_nickname_swell). 0단계가 이미
+# "우와아아아악!!" 감탄사를 셋이 같이 외치므로, 여기선 닉네임만 - 감탄사 중복 없음.
+HYPE_NICKNAME_SHOUT_TEMPLATE = "{killer}~~!!"
+NICKNAME_SWELL_START_RATIO = 0.55   # 이 지점부터(대략 물결표 여운 구간) 볼륨이 커지기 시작
+NICKNAME_SWELL_RISE = 0.6           # 클립 끝에서 최대 몇 배(1+RISE)까지 커지는지
+
+# ── 2단계(Sub 의문형 감탄, 정적 풀) ──
 SUB_QUESTION_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_question_*.wav")))
-MAIN_REACT_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "main_react_*.wav")))
 SUB_QUESTION_TEXT = {
     "sub_question_a.wav": "진짜 돌았는데요??!!", "sub_question_b.wav": "이게 실화예요??!!",
-}
-MAIN_REACT_TEXT = {
-    "main_react_a.wav": "와....", "main_react_b.wav": "허.....",
+    "sub_question_c.wav": "미쳤는데요 진짜??!!",
 }
 
-STAGE1_STAGE2_GAP_SEC = 0.15
-# 🛡️ [겹침 비율] "완전 동시(뭉개짐)도 완전 순차(지루함)도 아니게" - 앞 목소리가 70~80%
-# 지점에 왔을 때 다음 목소리가 시작되도록. 실측(각 문장 1~3초대) 기준 75%는 앞 목소리의
-# 마지막 음절이 살짝 겹치면서도 새 목소리가 끼어드는 느낌이 나되, 문장 전체가 뭉개지진
-# 않는 지점이라 중간값으로 골랐다 - 정확한 "자연스러움"은 결국 사람이 들어봐야 하는
-# 판단이라, 이 상수 하나로 나중에 쉽게 튜닝할 수 있게 남겨둔다.
-STAGE2_OVERLAP_RATIO = 0.75
+# ── 3단계(Main 사실 전달, 실시간 TTS) ── - _generate_commentary/SYSTEM_PROMPT/
+# _commentary_names_killer/_i_or_ga/_eul_or_reul 전부 그대로 재사용, 담당 목소리만
+# Hype에서 Main으로 이동.
+
+# 🛡️ [간격 규칙] 고정 초 오프셋 대신 "이전 단계에서 가장 늦게 끝나는 목소리 길이 × RATIO"로
+# 다음 단계 시작을 잡는다 - 로컬 프로토타입 v5~v9에서 검증된 방식. "완전 동시(뭉개짐)도
+# 완전 순차(지루함)도 아니게" 65%로 골랐다(짧은 문장 기준 사람이 듣기에 적당한 겹침이었음).
+# 다만 이 방식은 이름 길이에 비례해서 간격도 같이 늘어난다 - 실측(v9)으로 15음절 닉네임에서
+# 전체 길이가 3글자 닉네임 대비 +50%까지 늘어지는 걸 확인함. Riot 닉네임 자체를 제한할 수는
+# 없어서(강제 불가) /highlight 명령어 설명에 안내 문구만 추가했고(이미 반영됨), 이 트레이드
+# 오프 자체는 알려진 한계로 남겨둔다.
+STAGE_OVERLAP_RATIO = 0.65
 RENDER_TAIL_BUFFER_SEC = 0.8      # 마지막으로 끝나는 목소리 종료 후 여유
 
 ELEVENLABS_VOICE_IDS = {
@@ -253,17 +328,38 @@ ELEVENLABS_VOICE_IDS = {
 ELEVENLABS_MODEL_ID = "eleven_v3"
 
 
-def plan_stage2_chain(stage1_end: float, hype_fact_dur: float, sub_question_dur: float,
-                       gap: float = STAGE1_STAGE2_GAP_SEC,
-                       overlap_ratio: float = STAGE2_OVERLAP_RATIO) -> dict:
-    """2단계(Hype 사실서술 -> Sub 의문형 -> Main 짧은 감탄) 타이밍 계획(순수 함수, 테스트
-    가능). 1단계가 끝난 stage1_end에 gap을 두고 Hype가 시작하고, 그 뒤로는 각 목소리가
-    앞 목소리 재생시간의 overlap_ratio 지점에 다음 목소리가 시작되도록(= 완전히 겹치지도,
-    완전히 순차적이지도 않게) 배치한다."""
-    hype_start = stage1_end + gap
-    sub_start = hype_start + hype_fact_dur * overlap_ratio
-    main_start = sub_start + sub_question_dur * overlap_ratio
-    return {"hype_start": hype_start, "sub_start": sub_start, "main_start": main_start}
+def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
+                        ratio: float = STAGE_OVERLAP_RATIO) -> dict:
+    """0~3단계 타이밍 계획(순수 함수, 테스트 가능). kill_t를 기준(0)으로, 각 단계 시작을
+    "직전 단계에서 가장 늦게 끝나는 목소리 길이 × ratio" 지점으로 잡는다 - 로컬 프로토타입
+    v5~v9에서 검증된 방식 그대로. 반환값은 kill_t 기준 상대 오프셋(t1/t2/t3)이라, 호출부에서
+    kill_t를 더해 절대 시각으로 바꿔 쓴다."""
+    t1 = stage0_dur * ratio
+    t2 = t1 + stage1_dur * ratio
+    t3 = t2 + stage2_dur * ratio
+    return {"t1": t1, "t2": t2, "t3": t3}
+
+
+def plan_lead_in_forward(kill_t: float, pre_buildup_dur: float, eoeo_dur: float,
+                          start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
+                          mid_gap: float = PRE_BUILDUP_GAP_SEC,
+                          end_gap: float = EOEO_GAP_SEC) -> tuple[float | None, float | None]:
+    """상황 멘트 -> "어어??" 시작 시각(순수 함수, 테스트 가능) - kill_t 역산이 아니라 클립
+    시작(t=0) 기준으로 앞에서부터 배치한다(상황 멘트는 start_offset부터, "어어??"는 상황
+    멘트 종료+mid_gap부터). kill_t와 겹치지 않는지만 안전장치로 검사한다:
+    - 상황 멘트조차 end_gap 여유를 두고 kill_t 전에 안 끝나면(비정상적으로 짧은 클립/이른
+      킬) 둘 다 스킵(None, None).
+    - 상황 멘트는 들어가는데 "어어??"가 kill_t와 겹치면 "어어??"만 스킵(pre_start, None) -
+      상황 멘트 혼자라도 자연스럽게 재생된다.
+    예전 빌드업1/2단계의 '자리 없으면 스킵' 패턴과 동일한 원칙(억지로 겹치게 밀어넣지
+    않음)."""
+    pre_start = start_offset
+    if pre_start + pre_buildup_dur + end_gap > kill_t:
+        return None, None
+    eoeo_start = pre_start + pre_buildup_dur + mid_gap
+    if eoeo_start + eoeo_dur + end_gap > kill_t:
+        return pre_start, None
+    return pre_start, eoeo_start
 
 
 def _mmss_to_ms(mmss: str) -> int:
@@ -333,8 +429,8 @@ def _game_ms_to_clip_t(game_ms: float, mapping: tuple[float, float]) -> float:
     return (game_ms - intercept) / slope
 
 
-# 🛡️ [비용 예측 가능성] 1단계+2단계 반응 체인(위 plan_stage2_chain)+실시간 TTS 2회는 킬 1건당
-# 비용이 고정이라, 렌더당 비용을 예측 가능하게 만들려면 클립당 킬 개수 자체를 상한 걸어야 한다.
+# 🛡️ [비용 예측 가능성] 0~3단계 킬 리액션 시퀀스(위 plan_kill_sequence)+실시간 TTS 2회는 킬
+# 1건당 비용이 고정이라, 렌더당 비용을 예측 가능하게 만들려면 클립당 킬 개수 자체를 상한 걸어야 한다.
 # 지금은 가장 단순하고 안전한 값인 1로 제한 - 클립에 킬이 여러 개(팀파이트/에이스)여도
 # 시간상 가장 먼저 오는 킬 하나만 다룬다. 나머지가 조용히 버려지는 트레이드오프는 알려진
 # 한계로 남겨둠(추후 필요하면 유저에게 "N개 중 1개만 다뤘습니다" 안내를 붙이는 걸 고려).
@@ -435,11 +531,10 @@ def _pick_match_by_game_time_range(matches_detail: list[dict], clip_creation: da
     return best
 
 
-# 🛡️ [역할 이동] 예전엔 이 문장이 "감탄사+이름 외침"으로 시작해서 Main 혼자 전부(외침+사실
-# 전달)를 담당했다. 이번 재설계로 "감탄사+닉네임 외침"은 1단계(Main+Hype+Sub 동시 샤우팅,
-# MAIN_SHOUT_TEMPLATE)가 전담하게 됐고, 이 문장(2단계 Hype 담당)은 순수하게 "누가 누구를
-# 처치했는지"를 서술하는 역할만 남았다 - 그래서 "감탄사+이름으로 시작하라"는 구조 규칙은
-# 빼고, 사실 서술에만 집중하도록 되돌렸다.
+# 🛡️ [역할 이동] "감탄사+닉네임 외침"은 0단계(3인 동시 폭발)+1단계(Hype 닉네임 샤우팅)가
+# 전담하므로, 이 문장(0~3단계 재설계 이후 3단계 Main 담당 - 예전엔 2단계 Hype였다가 이번에
+# 다시 옮겨짐)은 순수하게 "누가 누구를 처치했는지"를 서술하는 역할만 맡는다 - 그래서
+# "감탄사+이름으로 시작하라"는 구조 규칙 없이 사실 서술에만 집중한다.
 SYSTEM_PROMPT = (
     "너는 LCK 결승전 하이라이트를 중계하는 초하이텐션 한국어 게임 캐스터다. "
     "아래 '확정된 사실 목록'에 있는 킬 이벤트 각각에 대해, 이미 함성과 샤우팅이 한 번 터진 뒤 "
@@ -569,11 +664,33 @@ class KyvoHighlight(KyvoBaseCog):
             raise RuntimeError(f"배경음 효과음을 찾을 수 없음: {BACKGROUND_SFX_PATH}")
         return BACKGROUND_SFX_PATH
 
+    @staticmethod
+    def _apply_nickname_swell(wav_path: str, duration: float, out_path: str) -> None:
+        """1단계 Hype 닉네임 샤우팅의 뒷부분(물결표 여운 구간으로 추정되는 지점)에만 볼륨을
+        서서히 키워 "길게 끄는 느낌"을 더한다 - 이름 음절 자체(앞쪽)는 안 건드림. 로컬
+        프로토타입 v8에서 검증된 값(시작점=길이의 55%, 최대 +60%) 그대로. 지속시간은 그대로
+        유지되고(순수 볼륨 오토메이션) 음량만 바뀐다.
+        🛡️ volume=eval=frame을 프레임 단위로 그대로 쓰면 프레임 경계마다 계단식 클릭 노이즈가
+        남는다는 게 이 세션 초반(crowd_cheer_4.wav 빌드)에 스펙트로그램으로 실측 확인된 교훈 -
+        asetnsamples로 프레임을 잘게(64샘플) 쪼개 계단을 사람 귀에 안 들릴 만큼 작게 만드는
+        동일 기법을 재사용한다."""
+        start_t = max(duration * NICKNAME_SWELL_START_RATIO, 0.01)
+        span = max(duration - start_t, 0.05)
+        vol_expr = f"if(gte(t,{start_t:.3f}),1+{NICKNAME_SWELL_RISE}*(t-{start_t:.3f})/{span:.3f},1)"
+        subprocess.run(
+            [FFMPEG_EXE, "-y", "-i", wav_path, "-af",
+             f"asetnsamples=n=64:p=0,volume=eval=frame:volume='{vol_expr}'",
+             out_path],
+            capture_output=True, check=True,
+        )
+
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
-        main_shout/hype_shout/sub_shout(1단계)/hype_fact/sub_question/main_react(2단계) 중
-        실제로 쓰인 것만 있고, 각 엔트리는 {"wav","text","start","duration"}. 타이밍 자체는
+        pre_buildup(상황 멘트)/eoeo("어어??") (둘 다 킬 이전 리드인, 자리 없으면 없을 수도
+        있음)/main_explode/hype_explode/sub_explode(0단계)/hype_nickname(1단계)/
+        sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
+        {"wav","text","start","duration"}. 타이밍 자체는
         호출부에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로 ffmpeg 인풋/필터그래프를
         조립하기만 한다."""
         total_duration = schedule["total_duration"]
@@ -615,7 +732,7 @@ class KyvoHighlight(KyvoBaseCog):
         # 정확한 인덱스를 매긴다.
         next_input_idx = 2  # 0=video, 1=cheer
         voice_indices = {}
-        for key in ("main_shout", "hype_shout", "sub_shout", "hype_fact", "sub_question", "main_react"):
+        for key in ("pre_buildup", "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact"):
             entry = schedule.get(key)
             if entry is None:
                 continue
@@ -654,14 +771,17 @@ class KyvoHighlight(KyvoBaseCog):
         for key, idx in voice_indices.items():
             entry = schedule[key]
             delay_ms = max(0, int(entry["start"] * 1000))
-            audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[v_{key}];")
+            audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={VOICE_MIX_GAIN_DB}dB[v_{key}];")
             mix_labels.append(f"[v_{key}]")
 
         n_mix = len(mix_labels)
+        # 🛡️ level=false: alimiter의 기본값(자동 레벨 보정)을 꺼서 limit이 진짜 하드 천장으로
+        # 작동하게 한다 - 켜져 있으면 리미터가 깎은 만큼 출력을 다시 끌어올려서 게인 값에 따라
+        # 클리핑 여부가 불안정하게 튀는 게 실측으로 확인됨(VOICE_MIX_GAIN_DB 주석 참고).
         audio_parts.append(
             f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=first:"
             f"dropout_transition=0:normalize=0[mixed];"
-            f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50[aout]"
+            f"[mixed]alimiter=limit={SFX_LIMITER_CEILING}:attack=5:release=50:level=false[aout]"
         )
         full_audio = "".join(audio_parts)
 
@@ -710,9 +830,9 @@ class KyvoHighlight(KyvoBaseCog):
 
     async def _synthesize_voice_line(self, text: str, voice_key: str, work_dir: str, out_basename: str) -> str:
         """실제 킬러/희생자 이름이 들어가는 대사를 ElevenLabs로 실시간 합성 - 렌더당 정확히
-        2회 호출된다(1단계 Main의 "감탄사+닉네임" 외침, 2단계 Hype의 사실 서술). voice_key는
-        ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub") 중 하나. 나머지 네 자리(1단계
-        Hype/Sub, 2단계 Sub/Main)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀에서 고른다."""
+        2회 호출된다(1단계 Hype의 닉네임 샤우팅, 3단계 Main의 사실 서술). voice_key는
+        ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub") 중 하나. 나머지 네 자리(0단계 세
+        목소리 + 2단계 Sub)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀에서 고른다."""
         tagged_text = f"[excited][shouts] {text}"
         voice_id = ELEVENLABS_VOICE_IDS[voice_key]
         async with aiohttp.ClientSession() as session:
@@ -1015,89 +1135,109 @@ class KyvoHighlight(KyvoBaseCog):
         kill_t = kills_with_names[0]["clip_t_sec"]
         killer_name = kills_with_names[0]["killer"]
         victim_name = kills_with_names[0]["victim"]
-        hype_fact_text = lines_raw[0]["text"]
+        main_fact_text = lines_raw[0]["text"]
 
-        # 🛡️ [킬러 이름 검증 - 2단계 Hype로 이동] GPT는 온도 0.8로 자유 생성돼서 "킬러 이름을
+        # 🛡️ [킬러 이름 검증 - 3단계 Main 담당] GPT는 온도 0.8로 자유 생성돼서 "킬러 이름을
         # 강조하라"는 프롬프트 지시를 안 따르고 희생자만 부각시킨 문장을 내놓는 경우가 실제로
-        # 확인됨 - 코드가 이걸 검증하는 지점이 아예 없었던 게 실질적 원인. 이 검증은 예전엔
-        # Main(사실 서술까지 겸함)에 있었는데, 사실 서술 역할 자체가 2단계 Hype로 옮겨졌으므로
-        # 검증도 그대로 따라온다. LLM을 재호출하면 비용/시간이 또 드니, 검증 실패 시 즉시 안전한
-        # 고정 템플릿으로 대체한다(재시도 없음).
-        if not _commentary_names_killer(hype_fact_text, killer_name):
+        # 확인됨 - 코드가 이걸 검증하는 지점이 아예 없었던 게 실질적 원인. 사실 서술 역할이
+        # 3단계 Main으로 옮겨왔으므로 검증도 그대로 따라온다. LLM을 재호출하면 비용/시간이 또
+        # 드니, 검증 실패 시 즉시 안전한 고정 템플릿으로 대체한다(재시도 없음).
+        if not _commentary_names_killer(main_fact_text, killer_name):
             print(f"[HIGHLIGHT][WARN] Commentary text missing killer name (guild={guild_id}) - "
-                  f"falling back to template. killer={killer_name!r} text={hype_fact_text!r}", flush=True)
-            hype_fact_text = f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
+                  f"falling back to template. killer={killer_name!r} text={main_fact_text!r}", flush=True)
+            main_fact_text = f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
 
-        # ── 1단계(킬 순간 3인 동시 샤우팅)의 Main + 2단계(리액션)의 Hype만 실시간 TTS
+        # ── 1단계(Hype 닉네임 샤우팅) + 3단계(Main 사실 전달)만 실시간 TTS
         # (렌더당 ElevenLabs 호출 정확히 2회) - 나머지 네 자리는 정적 풀에서 고른다.
-        main_shout_text = MAIN_SHOUT_TEMPLATE.format(killer=killer_name)
+        hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=killer_name)
         try:
-            main_shout_wav = await self._synthesize_voice_line(main_shout_text, "main", work_dir, "main_shout")
-            hype_fact_wav = await self._synthesize_voice_line(hype_fact_text, "hype", work_dir, "hype_fact")
+            hype_nickname_wav_raw = await self._synthesize_voice_line(hype_nickname_text, "hype", work_dir, "hype_nickname_raw")
+            main_fact_wav = await self._synthesize_voice_line(main_fact_text, "main", work_dir, "main_fact")
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] ElevenLabs TTS failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
             return
 
-        if not (HYPE_SHOUT_POOL and SUB_SHOUT_POOL and SUB_QUESTION_POOL and MAIN_REACT_POOL):
+        if not (PRE_BUILDUP_POOL and EOEO_POOL and MAIN_EXPLODE_POOL and HYPE_EXPLODE_POOL
+                and SUB_EXPLODE_POOL and SUB_QUESTION_POOL):
             print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
-                  f"hype_shout={len(HYPE_SHOUT_POOL)} sub_shout={len(SUB_SHOUT_POOL)} "
-                  f"sub_question={len(SUB_QUESTION_POOL)} main_react={len(MAIN_REACT_POOL)}", flush=True)
+                  f"pre_buildup={len(PRE_BUILDUP_POOL)} eoeo={len(EOEO_POOL)} "
+                  f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
+                  f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
             return
 
-        hype_shout_file = random.choice(HYPE_SHOUT_POOL)
-        sub_shout_file = random.choice(SUB_SHOUT_POOL)
+        pre_buildup_file = random.choice(PRE_BUILDUP_POOL)
+        eoeo_file = random.choice(EOEO_POOL)
+        main_explode_file = random.choice(MAIN_EXPLODE_POOL)
+        hype_explode_file = random.choice(HYPE_EXPLODE_POOL)
+        sub_explode_file = random.choice(SUB_EXPLODE_POOL)
         sub_question_file = random.choice(SUB_QUESTION_POOL)
-        main_react_file = random.choice(MAIN_REACT_POOL)
 
         try:
-            main_shout_duration = await self._to_executor(self._probe_audio_duration, main_shout_wav)
-            hype_shout_duration = await self._to_executor(self._probe_audio_duration, hype_shout_file)
-            sub_shout_duration = await self._to_executor(self._probe_audio_duration, sub_shout_file)
-            hype_fact_duration = await self._to_executor(self._probe_audio_duration, hype_fact_wav)
+            pre_buildup_duration = await self._to_executor(self._probe_audio_duration, pre_buildup_file)
+            eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
+            main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
+            hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
+            sub_explode_duration = await self._to_executor(self._probe_audio_duration, sub_explode_file)
+            hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
+            main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
             sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-            main_react_duration = await self._to_executor(self._probe_audio_duration, main_react_file)
+            # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
+            hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
+            await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
         except Exception as e:
-            print(f"[HIGHLIGHT][ERROR] Failed to probe voice-line durations (guild={guild_id}): "
+            print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
             return
 
-        # 1단계: Main+Hype+Sub 셋 다 kill_t에 정확히 동시 시작. 셋 중 가장 길게 끝나는 목소리
-        # 뒤로 2단계가 이어진다.
-        stage1_end = kill_t + max(main_shout_duration, hype_shout_duration, sub_shout_duration)
+        # 0단계: Main+Hype+Sub 셋 다 kill_t에 정확히 동시 시작(닉네임 없는 순수 폭발).
+        # plan_kill_sequence()는 순수 함수 - 1/2/3단계 시작을 "직전 단계 최장 목소리 길이 ×
+        # STAGE_OVERLAP_RATIO" 지점으로 잡는다(고정 초 아님, 0단계 길이와 무관하게 1/2/3단계
+        # 상호 간격은 각자 자기 길이 × 비율로만 정해진다 - 0단계가 길어져도 t2-t1/t3-t2 간격
+        # 자체는 안 변하고, 셋 다 kill_t 기준으로 똑같이 더 뒤로 밀릴 뿐이다).
+        stage0_dur = max(main_explode_duration, hype_explode_duration, sub_explode_duration)
+        seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, sub_question_duration)
+        hype_nickname_start = kill_t + seq["t1"]
+        sub_question_start = kill_t + seq["t2"]
+        main_fact_start = kill_t + seq["t3"]
 
-        # plan_stage2_chain()은 순수 함수 - Hype(사실서술)->Sub(의문형)->Main(짧은 감탄)이
-        # STAGE2_OVERLAP_RATIO만큼 겹치며 순서대로 이어지게 배치한다.
-        chain = plan_stage2_chain(stage1_end, hype_fact_duration, sub_question_duration)
-        hype_start = chain["hype_start"]
-        sub_start = chain["sub_start"]
-        main_react_start = chain["main_start"]
+        # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트 -> "어어??" 순서로 배치하고,
+        # kill_t와 안 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
+        pre_buildup_start, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_duration, eoeo_duration)
 
         end_times = [
-            kill_t + main_shout_duration, kill_t + hype_shout_duration, kill_t + sub_shout_duration,
-            hype_start + hype_fact_duration, sub_start + sub_question_duration,
-            main_react_start + main_react_duration,
+            kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
+            hype_nickname_start + hype_nickname_duration, sub_question_start + sub_question_duration,
+            main_fact_start + main_fact_duration,
         ]
         total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
 
         schedule = {
             "kill_t": kill_t,
             "total_duration": total_duration,
-            "main_shout": {"wav": main_shout_wav, "text": main_shout_text, "start": kill_t, "duration": main_shout_duration},
-            "hype_shout": {"wav": hype_shout_file, "text": HYPE_SHOUT_TEXT[os.path.basename(hype_shout_file)],
-                           "start": kill_t, "duration": hype_shout_duration},
-            "sub_shout": {"wav": sub_shout_file, "text": SUB_SHOUT_TEXT[os.path.basename(sub_shout_file)],
-                          "start": kill_t, "duration": sub_shout_duration},
-            "hype_fact": {"wav": hype_fact_wav, "text": hype_fact_text, "start": hype_start, "duration": hype_fact_duration},
+            "main_explode": {"wav": main_explode_file, "text": MAIN_EXPLODE_TEXT[os.path.basename(main_explode_file)],
+                              "start": kill_t, "duration": main_explode_duration},
+            "hype_explode": {"wav": hype_explode_file, "text": HYPE_EXPLODE_TEXT[os.path.basename(hype_explode_file)],
+                              "start": kill_t, "duration": hype_explode_duration},
+            "sub_explode": {"wav": sub_explode_file, "text": SUB_EXPLODE_TEXT[os.path.basename(sub_explode_file)],
+                             "start": kill_t, "duration": sub_explode_duration},
+            "hype_nickname": {"wav": hype_nickname_wav, "text": hype_nickname_text,
+                               "start": hype_nickname_start, "duration": hype_nickname_duration},
             "sub_question": {"wav": sub_question_file, "text": SUB_QUESTION_TEXT[os.path.basename(sub_question_file)],
-                              "start": sub_start, "duration": sub_question_duration},
-            "main_react": {"wav": main_react_file, "text": MAIN_REACT_TEXT[os.path.basename(main_react_file)],
-                           "start": main_react_start, "duration": main_react_duration},
+                              "start": sub_question_start, "duration": sub_question_duration},
+            "main_fact": {"wav": main_fact_wav, "text": main_fact_text,
+                          "start": main_fact_start, "duration": main_fact_duration},
         }
+        if eoeo_start is not None:
+            schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
+                                 "start": eoeo_start, "duration": eoeo_duration}
+        if pre_buildup_start is not None:
+            schedule["pre_buildup"] = {"wav": pre_buildup_file, "text": PRE_BUILDUP_TEXT[os.path.basename(pre_buildup_file)],
+                                        "start": pre_buildup_start, "duration": pre_buildup_duration}
 
         out_mp4 = os.path.join(work_dir, "highlight_final.mp4")
         try:
