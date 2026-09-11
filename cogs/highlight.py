@@ -65,6 +65,29 @@ HIGHLIGHT_MAX_CONCURRENT = int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT", "1"))
 FFMPEG_EXE = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 🛡️ [오버레이 UI 사전 조사용] LCK 스타일 오버레이(파형 애니메이션 등)를 구현하기 전에,
+# 배포 서버(Render)의 ffmpeg가 필요한 필터(showwaves/showvolume/overlay/zoompan/geq)를
+# 실제로 갖췄는지 미리 확인해두기 위한 로그. drawtext 때(로컬에선 되는데 Render 서버
+# 바이너리엔 없어서 실배포 후에야 발견된 사고 - 위 FFMPEG_EXE 주석 참고)와 같은 사고를
+# 구현 전에 미리 잡으려는 목적. showwaves/showvolume/overlay/zoompan/geq는 drawtext(별도
+# libfreetype 필요)와 달리 libavfilter 코어 내장 필터라 특별 빌드 옵션이 필요 없지만,
+# 배포 서버에서 직접 확인하기 전까진 추론일 뿐이라 이 로그로 실측한다.
+_OVERLAY_UI_CHECK_FILTERS = ["showwaves", "showvolume", "overlay", "zoompan", "geq"]
+
+
+def _log_ffmpeg_filter_support() -> None:
+    try:
+        result = subprocess.run([FFMPEG_EXE, "-filters"], capture_output=True, text=True, timeout=10)
+        output = result.stdout + result.stderr
+        available = set(re.findall(r"^\s*[T.][S.][C.]\s+(\S+)", output, re.MULTILINE))
+        status = {name: (name in available) for name in _OVERLAY_UI_CHECK_FILTERS}
+        all_present = all(status.values())
+        detail = ", ".join(f"{name}={'OK' if ok else 'MISSING'}" for name, ok in status.items())
+        print(f"[HIGHLIGHT][FFMPEG_FILTERS] ffmpeg={FFMPEG_EXE} all_present={all_present} - {detail}", flush=True)
+    except Exception as e:
+        print(f"[HIGHLIGHT][FFMPEG_FILTERS][ERROR] Failed to check ffmpeg filter support: "
+              f"{type(e).__name__}: {e}", flush=True)
+
 SFX_DIR = os.path.join(REPO_ROOT, "assets", "highlight_sfx")
 # 🛡️ [배경음 고정] assets/highlight_sfx/에는 crowd_cheer_1~4.wav 4개가 있는데, 1/2/3.wav는
 # "즉시 폭발형" 짧은 스팅어(2.7~13.3초)로 설계됐고, 오직 crowd_cheer_4.wav만 클립 전체에 지속되는
@@ -1297,6 +1320,7 @@ async def setup(bot):
     if not HIGHLIGHT_FEATURE_ENABLED:
         print("[HIGHLIGHT] HIGHLIGHT_FEATURE_ENABLED is not set - skipping cog registration (command will not appear).", flush=True)
         return
+    _log_ffmpeg_filter_support()
     cog = KyvoHighlight(bot)
     await bot.add_cog(cog)
     print("[⚡ HIGHLIGHT] Cog extension setup complete.", flush=True)
