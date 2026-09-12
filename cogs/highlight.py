@@ -405,6 +405,58 @@ def plan_lead_in_forward(kill_t: float, pre_buildup_dur: float, eoeo_dur: float,
     return pre_start, eoeo_start
 
 
+# ══════════════════════════════════════════════════════════
+#  LCK 스타일 오버레이 UI (FIRST BLOOD / SOLO KILL HUD)
+# ══════════════════════════════════════════════════════════
+OVERLAY_DIR = os.path.join(REPO_ROOT, "assets", "highlight_overlay")
+# 🛡️ [v4 - 완성 배너로 전면 교체, 구조 단순화] 여기까지는 사선 절삭 패널(geq 베이킹) +
+# 이벤트 라벨 PNG(PIL, Archivo Black) + POWERED BY KYVOBOT/킬 카운트 drawtext를 각각 따로
+# 합성하는 구조였는데, 사용자가 캔바에서 배경+텍스트+스폰서 문구가 전부 포함된 완성 배너를
+# 이벤트별로 직접 만들어 왔다(panel_first_blood.png/panel_solokill.png, 1920x120, 완전
+# 불투명). 이제 그 완성 배너 하나만 골라 overlay하면 끝이라 드로텍스트/폰트/색상 상수/경로
+# 이스케이프 헬퍼가 전부 필요 없어졌다 - 이전 버전들의 사선 절삭·알파채널·좌우비대칭·폰트
+# 이스케이프 관련 교훈은 이제 이 코드가 아니라 캔바에서 완성 이미지를 만들 때 사용자가 직접
+# 처리하는 영역이 됐다.
+HUD_BANNER_PNGS = {
+    "FIRST BLOOD": os.path.join(OVERLAY_DIR, "panel_first_blood.png"),
+    "SOLO KILL": os.path.join(OVERLAY_DIR, "panel_solokill.png"),
+}
+# 🛡️ [1단계 - 방송 뷰포트 축소 + 여백 프레임] 이전 버전(사용자가 제시한 정확한 공식)은
+# 배너를 항상 "화면 맨 아래에 딱 붙여서" 얹었는데, 이건 게임 원본 픽셀 위에 그대로 겹치는
+# 것이라 실제 라이브 클립에서는 스킬바를, 리플레이 클립에서는 스크러버를 가리는 문제가
+# 실측으로 확인됐다(미해결로 남아있던 버그). 이번 라운드에서 조사한 실제 LCK 방송 레이아웃
+# 관례(좌우는 거의 안 줄이고 상/하로만 여백을 확보)를 반영해, 게임 화면 자체를 가로세로
+# 동일 비율로 축소(왜곡 없음)하고 캔버스 크기(final_width x final_height)는 그대로 유지한
+# 채 화면 상단 중앙에 배치한다. 그 결과 화면 하단에 실제로 게임 픽셀이 전혀 없는 여백 띠가
+# 생기고(좌우에도 대칭으로 작은 여백이 남지만 이번 라운드에서는 비워둠 - 3단계 사이드 패널
+# 후보), 배너는 이 여백 안에만 배치되므로 어떤 클립 UI와도 구조적으로 겹칠 수 없다.
+GAME_VIEWPORT_SCALE = 0.90  # 게임 화면을 가로/세로 동일 비율로 10% 축소 - 조사에서 추정한
+                            # LCK 하단 여백 비율(약 10~13%)과 맞아떨어지는 값
+HUD_SLIDE_SEC = 0.4  # 배너 슬라이드업/다운 소요 시간 - PRE_BUILDUP_START_OFFSET_SEC과 같은 템포
+# 🛡️ [배너 크기/위치 - 여백 띠 안에서 원본 비율 유지] 배너는 이제 위에서 만든 하단 여백 띠
+# (높이 = final_height - 축소된 게임 높이)를 정확히 꽉 채운다. panel_*.png 원본 종횡비
+# (1920x120=16:1, PIL로 실측 확인)를 _render_video에서 런타임에 직접 읽어서 유지하므로,
+# 예전처럼 폭/높이를 독립 비율로 계산하다 텍스트가 미세하게 눌리던 문제가 없다. 가로는
+# 캔버스 전체 폭 기준 중앙 정렬 - 실제 LCK 하단 배너도 게임 뷰포트보다 넓게 걸치는 경우가
+# 많아 이 쪽이 더 방송처럼 보인다.
+
+
+def _hud_slide_y_expr(start: float, end: float, slide: float, visible_y: str, hidden_y: str) -> str:
+    """LowerThirdBanner의 슬라이드업/다운 y좌표 계산(순수 함수, 테스트 가능) - overlay/drawtext의
+    y= 표현식에 그대로 쓸 문자열을 만든다. t가 [start, start+slide) 구간이면 hidden_y에서
+    visible_y로 선형 보간(슬라이드업), [start+slide, end) 구간이면 visible_y 고정, [end, end+slide)
+    구간이면 visible_y에서 hidden_y로 선형 보간(슬라이드다운), 그 외엔 hidden_y. visible_y/hidden_y는
+    ffmpeg 표현식 문자열이라 "H-160"처럼 overlay가 제공하는 심볼(H=영상 높이)을 포함해도 된다 -
+    실제 픽셀 값은 렌더 시점에 ffmpeg가 계산하므로 여기선 문자열 조립만 한다."""
+    return (
+        f"if(lt(t,{start:.3f}),({hidden_y}),"
+        f"if(lt(t,{start + slide:.3f}),({hidden_y})+(t-{start:.3f})/{slide}*(({visible_y})-({hidden_y})),"
+        f"if(lt(t,{end:.3f}),({visible_y}),"
+        f"if(lt(t,{end + slide:.3f}),({visible_y})+(t-{end:.3f})/{slide}*(({hidden_y})-({visible_y})),"
+        f"({hidden_y})))))"
+    )
+
+
 def _mmss_to_ms(mmss: str) -> int:
     # 🛡️ [엄격 파싱] GPT-4o-mini 비전 OCR(_read_clock)은 "MM:SS 형식으로만 답해"라고
     # 프롬프트로 지시하지만, 응답 자체를 강제하는 장치가 없어서 거부/설명문/여분의 텍스트가
@@ -742,7 +794,7 @@ class KyvoHighlight(KyvoBaseCog):
         )
 
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
-                       schedule: dict, work_dir: str, out_mp4: str) -> str:
+                       video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
         pre_buildup(상황 멘트)/eoeo("어어??") (둘 다 킬 이전 리드인, 자리 없으면 없을 수도
         있음)/main_explode/hype_explode/sub_explode(0단계)/hype_nickname(1단계)/
@@ -797,13 +849,46 @@ class KyvoHighlight(KyvoBaseCog):
             voice_indices[key] = next_input_idx
             next_input_idx += 1
 
-        # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다) ──
+        # 🛡️ [오버레이 HUD 입력] FIRST BLOOD/SOLO KILL일 때만(schedule에 "hud" 키가 있을
+        # 때만) 완성 배너 PNG를 추가 입력으로 붙인다 - 해당 없는 킬(추격전 등)에서는 아예
+        # 입력조차 안 넣어서 필터그래프가 더 무거워지지 않는다.
+        hud = schedule.get("hud")
+        hud_panel_idx = None
+        if hud is not None:
+            inputs += ["-i", HUD_BANNER_PNGS[hud["event_label"]]]
+            hud_panel_idx = next_input_idx
+            next_input_idx += 1
+
+        # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다. 단, HUD 오버레이는
+        # 예외 - 오디오와 무관하게 화면에 그리는 유일한 요소) ──
         video_filters = []
         # 🛡️ 유저가 1440p/4K 등 고해상도 클립을 올리면(크기만 100MB 이내면 통과되므로
         # 충분히 가능) 목표 비트레이트가 픽셀 수 대비 너무 낮아져 화질이 심하게 뭉개진다 -
         # 스케일을 먼저 걸어 픽셀 수 자체를 낮춰둔다. -2로 짝수 높이 보장(libx264 요구사항).
         if video_width > MAX_OUTPUT_WIDTH:
             video_filters.append(f"scale={MAX_OUTPUT_WIDTH}:-2")
+            # HUD 배너 비율 계산은 실제로 화면에 나오는 최종 해상도를 기준으로 해야 한다 -
+            # scale=-2가 짝수로 반올림하는 것까지 그대로 흉내내서 final_width/height를 미리
+            # 구해둔다(ffmpeg가 실제로 무슨 픽셀을 뽑는지와 1px 이내로 맞음, 배너 비율
+            # 계산엔 그 정도 오차는 무관하다).
+            final_width = MAX_OUTPUT_WIDTH
+            final_height = int(round(video_height * MAX_OUTPUT_WIDTH / video_width / 2) * 2)
+        else:
+            final_width, final_height = video_width, video_height
+
+        # 🛡️ [방송 뷰포트 축소] 게임 화면을 GAME_VIEWPORT_SCALE 비율로 균일 축소(가로세로
+        # 동시에, 왜곡 없음)한 뒤 캔버스(final_width x final_height, 위에서 계산한 값 그대로
+        # 유지)에 상단 중앙 정렬로 pad한다 - scale+pad 두 필터로 "축소 + 주변 여백 생성"이
+        # 동시에 끝나서 별도 배경색 입력이나 추가 overlay 스텝이 필요 없다. -2 대신 짝수
+        # 반올림을 직접 계산하는 이유는 pad의 x좌표/캔버스 크기 계산에 정확한 정수 값이
+        # 바로 필요해서(MAX_OUTPUT_WIDTH 분기의 final_height 계산과 동일한 패턴).
+        scaled_w = int(round(final_width * GAME_VIEWPORT_SCALE / 2) * 2)
+        scaled_h = int(round(final_height * GAME_VIEWPORT_SCALE / 2) * 2)
+        pad_x = (final_width - scaled_w) // 2
+        video_filters.append(f"scale={scaled_w}:{scaled_h}")
+        video_filters.append(f"pad={final_width}:{final_height}:{pad_x}:0:black")
+        margin_height = final_height - scaled_h  # 하단 여백 띠의 실제 높이(반올림 오차까지 반영)
+
         # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
         # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
         # 정지시키는 대신 마지막 프레임을 그대로 붙잡아 늘리는 가장 단순한 방법(tpad) -
@@ -811,7 +896,37 @@ class KyvoHighlight(KyvoBaseCog):
         extra_video_sec = max(0.0, total_duration - video_duration)
         if extra_video_sec > 0.01:
             video_filters.append(f"tpad=stop_mode=clone:stop_duration={extra_video_sec:.3f}")
-        video_chain = "[0:v]" + ",".join(video_filters) + "[vout]" if video_filters else "[0:v]copy[vout]"
+        video_base_label = "vbase" if hud is not None else "vout"
+        video_chain = (("[0:v]" + ",".join(video_filters) + f"[{video_base_label}]") if video_filters
+                        else f"[0:v]copy[{video_base_label}]")
+
+        if hud is not None:
+            # 🛡️ [여백 띠 안에 원본 비율 유지 배치] 배너 높이는 위에서 만든 하단 여백
+            # (margin_height)을 그대로 꽉 채우고, 폭은 panel_*.png 원본 종횡비를 유지하도록
+            # 실제 PNG 크기를 런타임에 읽어서 계산한다(하드코딩된 비율 상수가 원본과 어긋나
+            # 텍스트가 눌리던 이전 버전의 문제를 근본적으로 없앰 - PIL로 1920x120=16:1 확인됨).
+            # 가로는 캔버스 전체 폭 기준 중앙 정렬. min()으로 캔버스 폭을 넘지 않게 방어.
+            with Image.open(HUD_BANNER_PNGS[hud["event_label"]]) as banner_im:
+                banner_native_w, banner_native_h = banner_im.size
+            banner_height = margin_height
+            banner_width = min(final_width, int(round(banner_height * banner_native_w / banner_native_h)))
+            x_start = (final_width - banner_width) // 2
+            y_start_visible = final_height - banner_height  # 여백 띠의 최상단 = 축소된 게임 화면 바로 아래
+
+            hud_start, hud_end, slide = hud["start"], hud["end"], HUD_SLIDE_SEC
+            banner_x = str(x_start)
+            visible_y = str(y_start_visible)
+            hidden_y = str(final_height + 10)  # 슬라이드 시작 전/후엔 화면 밖으로
+            panel_y = _hud_slide_y_expr(hud_start, hud_end, slide, visible_y, hidden_y)
+            hud_visible_window = f"between(t,{hud_start:.3f},{hud_end + slide:.3f})"
+
+            hud_chain = (
+                f";[{hud_panel_idx}:v]scale={banner_width}:{banner_height}[vhudscaled]"
+                f";[{video_base_label}][vhudscaled]overlay=x='{banner_x}':y='{panel_y}':"
+                f"enable='{hud_visible_window}'[vout]"
+            )
+        else:
+            hud_chain = ""
 
         # ── 오디오 (화면 처리와 무관하게 그대로 유지) ──
         # 🛡️ amix duration=first는 "첫 번째로 나열된 스트림"의 길이만 본다 - 게임 오디오를
@@ -842,7 +957,7 @@ class KyvoHighlight(KyvoBaseCog):
         )
         full_audio = "".join(audio_parts)
 
-        filter_complex = f"{video_chain};{full_audio}"
+        filter_complex = f"{video_chain}{hud_chain};{full_audio}"
 
         # 🛡️ crf 고정값 대신 total_duration에서 역산한 목표 비트레이트로 인코딩 -
         # 콘텐츠 복잡도/해상도와 무관하게 파일 크기가 항상 TARGET_OUTPUT_SIZE_MB 근처로
@@ -1195,6 +1310,17 @@ class KyvoHighlight(KyvoBaseCog):
                 "clip_t_sec": k["clip_t_sec"],
             })
 
+        # 🛡️ [오버레이 이벤트 판별 - FIRST BLOOD / SOLO KILL] Riot API 추가 호출 없이 이미
+        # 받아온 데이터로만 판별한다. FIRST BLOOD = 이 매치의 가장 이른 CHAMPION_KILL(kills가
+        # _extract_champion_kills에서 timestamp_ms로 이미 정렬돼 있으므로 kills[0]과 동일
+        # 시각인지 비교하면 된다). SOLO KILL = 어시스트 0명. 둘 다 해당하면(매치 첫 킬에
+        # 어시스트가 없는 경우) FIRST BLOOD를 우선 표시한다. 어느 쪽도 아니면(추격전 킬 등)
+        # HUD 자체를 안 띄운다 - PENTA KILL 등 나머지 이벤트는 다중 킬 백엔드가 나올 때까지
+        # 보류(MAX_KILLS_PER_CLIP=1이라 판별 대상도 항상 이 킬 1건뿐).
+        is_first_blood = selected[0]["timestamp_ms"] == kills[0]["timestamp_ms"]
+        is_solo_kill = not selected[0]["assist_ids"]
+        hud_event = "FIRST BLOOD" if is_first_blood else ("SOLO KILL" if is_solo_kill else None)
+
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_scripting"))
         try:
             lines_raw = await self._generate_commentary(kills_with_names)
@@ -1310,10 +1436,18 @@ class KyvoHighlight(KyvoBaseCog):
         if pre_buildup_start is not None:
             schedule["pre_buildup"] = {"wav": pre_buildup_file, "text": PRE_BUILDUP_TEXT[os.path.basename(pre_buildup_file)],
                                         "start": pre_buildup_start, "duration": pre_buildup_duration}
+        # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
+        # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
+        # 같이 퇴장하는 것으로 잡았다(플레이어에게 "이 킬에 대한 설명이 끝났다"는 인상과
+        # HUD 퇴장을 맞추기 위함) - plan_kill_sequence/plan_lead_in_forward와 마찬가지로
+        # 새 상수를 발명하지 않고 이미 계산된 값(main_fact_start/duration)만 소비한다.
+        if hud_event is not None:
+            schedule["hud"] = {"event_label": hud_event, "start": kill_t,
+                                "end": main_fact_start + main_fact_duration}
 
         out_mp4 = os.path.join(work_dir, "highlight_final.mp4")
         try:
-            await self._to_executor(self._render_video, video_path, duration, width, schedule, work_dir, out_mp4)
+            await self._to_executor(self._render_video, video_path, duration, width, height, schedule, work_dir, out_mp4)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Render failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
