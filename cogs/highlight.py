@@ -167,12 +167,27 @@ MAX_CLIP_DURATION_SECONDS = 45.0
 # 넓혀야 creation_time 근접도 비교가 의미 있어진다.
 MATCH_LOOKUP_COUNT_NORMAL = 5
 MATCH_LOOKUP_COUNT_FALLBACK = 20
-# 🛡️ [2차 안전장치] "가장 가까운 후보"를 고르는 것과 "그 후보가 실제로 말이 되는 정도로
-# 가까운가"는 별개 문제 - 실측으로 확인된 정상 리플레이 사용 범위(3시간)와 완전히 잘못된
-# 경우(원본 클립이 8일+ 지나 최근 기록에서 아예 밀려난 경우)를 기준으로 24시간을 임계값으로
-# 잡았다. 정상 케이스(3h)엔 8배, 실패 케이스(8일+)엔 실제 간격의 1/7 수준이라 양쪽 다
-# 넉넉한 여유가 있다. 이걸 넘으면 "그럴듯한 오답"보다 명확한 실패가 낫다고 판단해 None 처리.
-MATCH_GAME_TIME_MAX_STALENESS_SEC = 24 * 60 * 60
+# 🛡️ [2차 안전장치 - 임계값 재검토, 24h -> 6h] "가장 가까운 후보"를 고르는 것과 "그 후보가
+# 실제로 말이 되는 정도로 가까운가"는 별개 문제. 원래 24시간이었는데, 이 값의 근거("정상
+# 리플레이 사용 범위 3시간"으로 8배 여유)는 실측이 아니라 가정이었다 - 실제 배포 사고에서
+# 이 로직이 14시간 이상 떨어진 후보를 "가장 가까운 매치"로 골라 완전히 다른 매치의 킬러/
+# 희생자/타이밍이 그대로 서술되는 문제가 실측 로그로 확인됐다(24h 임계값이 이 명백한 오답을
+# 못 걸러냄).
+#
+# 처음엔 사용자가 예시로 든 1~2시간을 그대로 썼는데(2h로 구현), 이번 세션 내내 검증에 써온
+# 실제 클립("장인정신" 킬 클립, League of Legends (TM) Client 2026-09-09 04-46-30.mp4)으로
+# 회귀 테스트를 돌려보니 그 클립의 실제 정답 매치(KR_8374071995)조차 게임 종료~클립
+# creation_time 간격이 **+3.15시간**으로 실측되어, 2시간 임계값이 이 정상 케이스까지
+# 걸러버리는 걸 실측으로 확인했다(회귀 발견 - "no match found"로 실패). 즉 2시간은 이
+# 계정의 실제 정상 사용 패턴보다도 타이트했다.
+#
+# 그래서 6시간으로 다시 잡았다: 확인된 정상 케이스(3.15h)의 약 2배 여유를 두면서, 사고
+# 케이스(14h+)와는 2배 이상 차이 나게 확실히 갈라놓는 값이다. 이것도 여전히 "실측 데이터
+# 1건 + 사고 데이터 1건"으로 정한 값이라 완전히 확정은 아니다 - 정상 사용자가 실제로 6시간
+# 넘게 걸리는 패턴이 흔하다는 게 나중에 드러나면 다시 조정이 필요할 수 있다(알려진 한계).
+# 이 임계값을 넘으면 "그럴듯한 오답"보다 명확한 실패가 낫다고 판단해 None 처리하는 기존
+# 철학은 그대로 유지.
+MATCH_GAME_TIME_MAX_STALENESS_SEC = 6 * 60 * 60
 
 # 🛡️ [출력 용량 제어] 디스코드 업로드 한도(서버 부스트 레벨에 따라 다르지만 25MB가 기준선)를
 # 넘기지 않도록, 실측 결과(오늘 실제 배포 코드 경로로 렌더한 파일이 15.78s에 6.74MB = 0.427MB/s)
@@ -391,8 +406,22 @@ def plan_lead_in_forward(kill_t: float, pre_buildup_dur: float, eoeo_dur: float,
 
 
 def _mmss_to_ms(mmss: str) -> int:
-    m, s = mmss.strip().split(":")
-    return (int(m) * 60 + int(s)) * 1000
+    # 🛡️ [엄격 파싱] GPT-4o-mini 비전 OCR(_read_clock)은 "MM:SS 형식으로만 답해"라고
+    # 프롬프트로 지시하지만, 응답 자체를 강제하는 장치가 없어서 거부/설명문/여분의 텍스트가
+    # 섞여 나올 가능성이 있다. 예전엔 split(":") + int()에만 의존했는데, 이건 우연히
+    # "그럴듯하게 숫자로 파싱되는" 응답을 조용히 통과시킬 여지가 있었다(예: 콜론이 여러 개
+    # 섞인 설명문 일부가 우연히 두 숫자로 쪼개지는 경우) - 정규식으로 "숫자:숫자" 형태만
+    # 엄격하게 허용하고, 그 외엔 전부 예외를 던져 호출부의 실패 처리(재시도 -> 그래도 실패
+    # 시 highlight_err_clock_read_failed)로 넘어가게 한다.
+    match = re.fullmatch(r"(\d{1,3}):(\d{2})", mmss.strip())
+    if not match:
+        raise ValueError(f"MM:SS 형식이 아님: {mmss!r}")
+    m, s = int(match.group(1)), int(match.group(2))
+    if s > 59:
+        # 초 자리가 2자리 숫자라는 것만으론 "60~99초" 같은 물리적으로 불가능한 값을 못
+        # 걸러낸다(예: "05:99") - 진짜 시계라면 절대 나올 수 없는 값이라 형식 오류로 취급.
+        raise ValueError(f"초가 60 이상이라 유효한 시계 값이 아님: {mmss!r}")
+    return (m * 60 + s) * 1000
 
 
 def _eul_or_reul(word: str) -> str:
@@ -1016,6 +1045,15 @@ class KyvoHighlight(KyvoBaseCog):
                 clock_samples.append({"clip_t_sec": t, "game_ms": _mmss_to_ms(mmss)})
             return _fit_linear_mapping(clock_samples)
 
+        # 🛡️ [조기 종료 안전장치 - 명시적 sentinel] try/except의 return만으로도 구조상 아래
+        # 매치 판별로 안 넘어가는 게 맞지만(예외 발생 시 except 블록에서 바로 return), 실제
+        # 배포 사고(사실관계가 완전히 다른 매치가 선택된 사고) 조사 과정에서 "시계 인식이
+        # 사실상 실패했는데도 그 이후 로직이 진행된 것처럼 보인다"는 의심이 나온 적이 있어서,
+        # mapping을 None으로 시작해두고 성공 시에만 값이 들어가게 한 뒤, try/except 블록
+        # 직후 "mapping이 정말로 채워졌는지"를 한 번 더 명시적으로 확인한다 - 예외 처리
+        # 로직에 나중에 실수로 return이 빠지거나 흐름이 바뀌어도 이 두 번째 검사가 마지막
+        # 방어선이 된다.
+        mapping = None
         try:
             try:
                 mapping = await try_crop_ratio(CLOCK_CROP_RATIO_NORMAL)
@@ -1025,6 +1063,11 @@ class KyvoHighlight(KyvoBaseCog):
                 mapping = await try_crop_ratio(CLOCK_CROP_RATIO_REPLAY)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Clock OCR/mapping failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
+            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clock_read_failed"))
+            return
+        if mapping is None:
+            print(f"[HIGHLIGHT][ERROR] Clock mapping is None after try/except with no exception raised - "
+                  f"this should be unreachable (guild={guild_id})", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clock_read_failed"))
             return
 
