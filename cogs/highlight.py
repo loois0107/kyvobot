@@ -584,6 +584,57 @@ def _participant_id_to_name(match_detail: dict) -> dict[int, dict]:
     return mapping
 
 
+def _extract_bans(match_detail: dict) -> dict[int, list[int]]:
+    """teamId(100/200) -> 실제로 밴된 챔피언 id(숫자) 리스트. match_detail은 이미 매
+    렌더마다 fetch하는 응답이라 추가 API 호출이 필요 없다 - 조사에서 확인된 그대로.
+    championId=-1(솔로랭크에서 밴 시간 안에 못 고른 "밴 없음" 슬롯 - 실제 매치
+    KR_8374071995에서 2건 실측 확인됨)은 걸러낸다 - 그대로 두면 존재하지 않는
+    챔피언 아이콘을 찾으려다 실패하게 된다."""
+    result = {}
+    for t in match_detail["info"]["teams"]:
+        result[t["teamId"]] = [b["championId"] for b in t.get("bans", []) if b.get("championId", -1) != -1]
+    return result
+
+
+def _reconstruct_kill_snapshot(timeline: dict, participant_id: int, at_ms: int) -> dict:
+    """주어진 participant의 at_ms 시점 기준 아이템 목록/레벨을 타임라인 이벤트 스트림을
+    처음부터 재생해서 정확하게 재구성한다. 🛡️ [조사에서 확인된 배경] participantFrames는
+    60초 간격 스냅샷이라 킬 시점과 최대 ±59초 오차가 난다(실측: 97.6초 킬에 가장 가까운
+    프레임이 120초 - 22초 차이) - 반면 ITEM_PURCHASED/ITEM_SOLD/ITEM_UNDO/LEVEL_UP은
+    각각 정확한 타임스탬프를 갖고 있어서(전부 실제 응답에서 필드 확인됨) 이벤트를 순서대로
+    재생하면 임의 시점의 정확한 상태를 만들 수 있다. 골드는 초당 자동 증가분까지 섞여있어
+    이벤트만으론 정밀 재구성이 어려워 이번 범위에서 제외(조사에서 이미 확인된 한계).
+    아이템은 Match-v5 타임라인에 슬롯 번호가 없어 "현재 보유 중인 아이템 id 리스트"로만
+    추적한다(순서/슬롯 위치 정보 없음 - UI에서 순서대로 나열하면 됨)."""
+    items: list[int] = []
+    level = 1
+    for frame in timeline["info"]["frames"]:
+        for ev in frame.get("events", []):
+            if ev.get("timestamp", 0) > at_ms:
+                return {"items": items, "level": level}
+            if ev.get("participantId") != participant_id:
+                continue
+            ev_type = ev.get("type")
+            if ev_type == "ITEM_PURCHASED":
+                items.append(ev["itemId"])
+            elif ev_type == "ITEM_SOLD":
+                if ev["itemId"] in items:
+                    items.remove(ev["itemId"])
+            elif ev_type == "ITEM_UNDO":
+                # 🛡️ 실제 응답 필드 확인(ITEM_UNDO 샘플: beforeId=1036, afterId=0,
+                # goldGain=350) - beforeId(취소 전 아이템)를 제거하고, afterId가 0이
+                # 아니면(다른 아이템으로 교체된 취소) 그걸 대신 추가한다.
+                before_id = ev.get("beforeId", 0)
+                after_id = ev.get("afterId", 0)
+                if before_id and before_id in items:
+                    items.remove(before_id)
+                if after_id:
+                    items.append(after_id)
+            elif ev_type == "LEVEL_UP":
+                level = ev.get("level", level)
+    return {"items": items, "level": level}
+
+
 def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
     for md in matches_detail:
         info = md["info"]
