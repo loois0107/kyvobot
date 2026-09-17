@@ -421,24 +421,155 @@ HUD_BANNER_PNGS = {
     "FIRST BLOOD": os.path.join(OVERLAY_DIR, "panel_first_blood.png"),
     "SOLO KILL": os.path.join(OVERLAY_DIR, "panel_solokill.png"),
 }
-# 🛡️ [1단계 - 방송 뷰포트 축소 + 여백 프레임] 이전 버전(사용자가 제시한 정확한 공식)은
-# 배너를 항상 "화면 맨 아래에 딱 붙여서" 얹었는데, 이건 게임 원본 픽셀 위에 그대로 겹치는
-# 것이라 실제 라이브 클립에서는 스킬바를, 리플레이 클립에서는 스크러버를 가리는 문제가
-# 실측으로 확인됐다(미해결로 남아있던 버그). 이번 라운드에서 조사한 실제 LCK 방송 레이아웃
-# 관례(좌우는 거의 안 줄이고 상/하로만 여백을 확보)를 반영해, 게임 화면 자체를 가로세로
-# 동일 비율로 축소(왜곡 없음)하고 캔버스 크기(final_width x final_height)는 그대로 유지한
-# 채 화면 상단 중앙에 배치한다. 그 결과 화면 하단에 실제로 게임 픽셀이 전혀 없는 여백 띠가
-# 생기고(좌우에도 대칭으로 작은 여백이 남지만 이번 라운드에서는 비워둠 - 3단계 사이드 패널
-# 후보), 배너는 이 여백 안에만 배치되므로 어떤 클립 UI와도 구조적으로 겹칠 수 없다.
-GAME_VIEWPORT_SCALE = 0.90  # 게임 화면을 가로/세로 동일 비율로 10% 축소 - 조사에서 추정한
-                            # LCK 하단 여백 비율(약 10~13%)과 맞아떨어지는 값
+# 🛡️ [레이아웃 진화 - 2/3단계에서 쓰던 overlay_frame.png 완전 폐기, 4단계 기준]
+# 2단계는 사용자가 캔바로 만든 완성 프레임(overlay_frame.png, 1920x1080, 알파 채널로 뚫린
+# 투명 구멍)의 실측 밴드 경계를 그대로 따라가는 구조였고, 3단계는 그 프레임을 게임 위에
+# 반투명으로 얹는 하이브리드였다. 이번 4단계(상단 2단+하단 포지션 매칭 5행)는 필요한
+# 공간이 그 프레임보다 훨씬 커서(공간 계산 조사 결과) 프레임 자산 자체를 안 쓰기로 했다 -
+# UI_BG_COLOR 단색 배경 + drawbox/drawtext로 직접 그린다("완성 그래픽" 원칙에서 벗어나는
+# 부분, 보고서에 명시함). overlay_frame.png 파일 자체는 레포에 남아있지만(다음에 이 비율에
+# 맞는 새 배경 에셋을 받으면 재활용 가능) 현재 렌더 경로에서는 참조하지 않는다.
+
+# 🛡️ [Chakra Petch -> FontKR.otf로 교체 - 실측으로 발견] 처음엔 배너와 통일감을 주려고
+# Chakra Petch(Bold/SemiBold)를 썼는데, 실제 ffmpeg drawtext 렌더 결과를 눈으로 확인해보니
+# 닉네임/"타워"/"킬" 등 한글이 전부 빈 사각형(tofu)으로 나왔다 - Chakra Petch는 태국어+
+# 라틴 문자만 지원하는 폰트라 한글 글리프가 없다(숫자는 라틴 문자라 정상 표시됨, 그래서
+# 처음엔 눈치채기 어려웠음). 이미 `cogs/welcome.py`에 똑같은 교훈이 기록돼 있었다("Font.ttf
+# (Roboto Bold)는 한글 글리프가 아예 없어서... FontKR.otf(Pretendard Bold)를 로드") - 그
+# 폰트(레포 루트, 다른 cog들도 이미 씀)를 그대로 재사용한다. 스코어바/KDA 전용이라 굵기
+# 구분 없이 하나만 쓴다.
+SCOREBAR_FONT_KR = os.path.join(REPO_ROOT, "FontKR.otf")
+# 🛡️ [하단 패널 가독성 개선 - Pretendard Black] FontKR.otf(Bold)로는 패널이 작아질수록
+# (실측 row_h_raw가 30px 안팎) 획이 가늘어 보여서 배경 그라데이션과 잘 안 구분됐다.
+# Pretendard 프로젝트(FontKR-OFL.txt로 이미 라이선스 커버됨, 같은 저작자)의 최고 굵기인
+# Black 웨이트를 jsdelivr GitHub 미러(cdn.jsdelivr.net/gh/orioncactus/pretendard@main/...)에서
+# 받아 FontKR-Black.otf로 저장 - name 테이블에서 "Pretendard Black"임을 직접 확인함.
+# 하단 그리드(CS/KDA/레벨배지) 전용, 상단 스코어바는 기존 Bold 그대로 유지(이미 잘 보임).
+SCOREBAR_FONT_KR_BLACK = os.path.join(REPO_ROOT, "FontKR-Black.otf")
+TEAM_BLUE_COLOR = "#4C8BF5"
+TEAM_RED_COLOR = "#F14C4C"
+
 HUD_SLIDE_SEC = 0.4  # 배너 슬라이드업/다운 소요 시간 - PRE_BUILDUP_START_OFFSET_SEC과 같은 템포
-# 🛡️ [배너 크기/위치 - 여백 띠 안에서 원본 비율 유지] 배너는 이제 위에서 만든 하단 여백 띠
-# (높이 = final_height - 축소된 게임 높이)를 정확히 꽉 채운다. panel_*.png 원본 종횡비
-# (1920x120=16:1, PIL로 실측 확인)를 _render_video에서 런타임에 직접 읽어서 유지하므로,
-# 예전처럼 폭/높이를 독립 비율로 계산하다 텍스트가 미세하게 눌리던 문제가 없다. 가로는
-# 캔버스 전체 폭 기준 중앙 정렬 - 실제 LCK 하단 배너도 게임 뷰포트보다 넓게 걸치는 경우가
-# 많아 이 쪽이 더 방송처럼 보인다.
+# 🛡️ [배너 위치 - 이번에도 하단 전체 영역을 시간대로 나눠 씀] 4단계 재설계로 하단 영역이
+# 헤더+5행(약 356px @1080)으로 훨씬 커졌지만, 배너는 여전히 원본 16:1 종횡비를 유지한 채
+# 캔버스 폭에 맞춰 리사이즈하면 높이가 그 356px보다 훨씬 얇아서(캔버스 1920 기준 폭
+# 1920이면 높이 120, 실제로는 그보다 좁게 잡음) 세로로 가운데 정렬된다 - 위아래 남는
+# 공간은 그대로 빈 배경. 같은 하단 전체 영역(헤더+포지션 5행)을 배너가 뜨는 구간엔
+# 통째로 가리는 방식을 그대로 유지한다(시간대로 나눠 쓰는 기존 전략 - 3~4초짜리 이벤트
+# 구간만 잠깐 가리는 쪽이 공간을 나누는 것보다 가독성이 낫다는 게 계속 확인돼서 유지).
+
+# 🛡️ [Data Dragon] Riot API 키/rate limiter와 완전히 무관한 별개의 정적 CDN이라 10명
+# 전원의 아이콘을 받아도 Riot 쪽 호출 예산에는 전혀 영향이 없다(조사에서 확인된 그대로).
+# championId는 Match-v5의 championName 필드를 그대로 쓴다.
+DDRAGON_VERSIONS_URL = "https://ddragon.leagueoflegends.com/api/versions.json"
+DDRAGON_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{champion_id}.png"
+# 🛡️ [아이템 아이콘] item_id=0(빈 슬롯)은 Data Dragon에 애초에 없는 파일이라 요청 자체를
+# 안 보낸다(호출부에서 사전 필터링).
+DDRAGON_ITEM_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/img/item/{item_id}.png"
+# 🛡️ [4단계 - 스펠/룬 아이콘, 재조사로 확인됨] 예전 조사에서 "룬은 Data Dragon에 없을 것"
+# 이라 의심했는데, 이번에 실제 네트워크 호출로 재확인한 결과 둘 다 있었다:
+#   - 소환사 스펠: summoner.json에서 숫자 key(예: "4")->파일명("SummonerFlash.png") 역매핑
+#     후 cdn/{version}/img/spell/{파일명} - 다운로드 성공 확인
+#   - 룬: runesReforged.json에서 숫자 id(예: 8112)->아이콘 경로 역매핑 후
+#     **cdn/img/{경로}** (다른 아이콘들과 달리 버전 번호가 URL에 안 들어감 - 룬만의
+#     특이사항, 실제 호출로 확인됨) - Match-v5 참가자의 perks.styles[0].selections[0].perk
+#     가 키스톤 룬 id.
+CHAMPION_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "champion_icons_cache")
+ITEM_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "item_icons_cache")
+DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
+
+# 🛡️ [오브젝트 아이콘 - Community Dragon, 비공식 미러] Riot 공식 Data Dragon엔 없지만
+# raw.communitydragon.org의 실제 게임 에셋 덤프에 있다(실제 200 응답+PNG 바이트 확인함) -
+# 타워는 minimap/icons/, 드래곤은 scoreboard/ 아래에 있다는 게 이번에 새로 확인된 경로.
+# Riot이 공식 지원하는 채널이 아니라 예고 없이 경로가 바뀌거나 사라질 수 있다는 게 알려진
+# 리스크.
+CDRAGON_TOWER_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/tower.png"
+CDRAGON_DRAGON_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/scoreboard/_dragon.png"
+STATIC_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "static_icons_cache")
+
+# 🛡️ [6단계 - 미리캔버스 완성 배경(overlay_frame_v2.png)으로 drawbox 전면 교체] 5단계는
+# drawbox로 단색/틴트 배경을 직접 그렸는데("완성 그래픽" 원칙에서 벗어난다고 명시했던
+# 부분), 이번에 사용자가 그 스펙 그대로 미리캔버스로 만든 완성 PNG를 받아서 이제 진짜
+# 이미지 오버레이로 교체한다. PIL로 알파 채널을 픽셀 단위 재실측(여러 행에서 교차 검증,
+# 자동탐지가 아니라 직접 다중 좌표 샘플링) - overlay_frame_v2.png 자체가 1920x1080
+# 네이티브라 이 실측값도 전부 1920x1080 기준 비율로 저장한다(5단계까지는 2560x1435
+# 참고 사진 기준이었음 - 에셋이 바뀌었으니 비율의 기준도 그 에셋 자신으로 바꿈).
+#
+# 실측값(1920x1080 네이티브, overlay_frame_v2.png):
+#   - 메인바: x=0~1919(전체 폭), y=0~49(높이 50) - 완전 불투명(alpha=255). 좌측
+#     (11,30,246)=밝은 블루 -> 우측(236,65,70)=빨강 그라데이션.
+#   - 메인바~서브바 사이(y=50~53): alpha 223->202로 서서히 감소 - 의도된 드롭섀도우
+#     효과(경계가 애매한 게 아니라 디자인 요소), 좌표 계산에는 영향 없음.
+#   - 서브바: x=490~1429(폭 940, 좌우 완전 하드컷 - 여러 y에서 교차 검증), y=54~80
+#     (높이 27, alpha=191 고정) - 팀 색상 구분 없는 무채색 단일 톤.
+#   - 하단 패널: x=550~1369(폭 819~820), y=900~1079(높이 180, 캔버스 끝까지),
+#     alpha=217 고정. 좌측(12,78,249)=밝은 블루 -> 우측(5,12,32)=어두운 네이비.
+#   - team100(항상 좌측에 렌더링)과 이미지의 "밝은 블루" 쪽이 메인바/하단패널 둘 다에서
+#     이미 일치함을 실측 RGB로 확인함(추가 반전 로직 불필요 - 뒤집으면 오히려 어긋남).
+UI_BG_COLOR = "0x0A0B0E"  # 이제 배경 그리기엔 안 쓰이지만, 혹시 남은 보조 요소용으로 유지
+OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
+
+# 상단 2단 바 - 메인바(전체 폭)+서브바(중앙 940px만) 치수, 실측값 그대로.
+TOP_MAIN_BAR_HEIGHT_RATIO = 50 / 1080
+TOP_SUB_BAR_HEIGHT_RATIO = 27 / 1080
+TOP_SUB_BAR_X_RATIO = (490 / 1920, 1429 / 1920)
+
+# 하단 통계 패널 - 실측 좌표 그대로, 중앙 정렬. 헤더 띠는 여전히 범위 밖(5단계와 동일하게
+# 180px 전체를 5행에만 씀).
+BOTTOM_PANEL_WIDTH_RATIO = 819 / 1920
+BOTTOM_PANEL_Y_START_RATIO = 900 / 1080
+BOTTOM_PANEL_HEIGHT_RATIO = 180 / 1080
+BOTTOM_ROWS = 5
+POSITION_ORDER = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+
+# 🛡️ [침범 금지 구역 - 검증용] 실측된 좌/우 침범 금지 구역. 하단 패널은 항상 중앙
+# 정렬이라 구조적으로 이 두 구역과 안 겹치지만(패널 폭 42.7% < 가용 공간), 렌더 후
+# 실제로 안 겹치는지 검증 스크립트에서 이 값으로 재확인한다.
+LEFT_CARD_ZONE_WIDTH_RATIO = 170 / 2560
+RIGHT_MINIMAP_X_START_RATIO = 2100 / 2560
+
+ROSTER_DIVIDER_COLOR = "white@0.2"
+ROSTER_SHADOW_COLOR = "black@0.7"
+# 🛡️ [아이템 슬롯 틀 - 빈 칸도 항상 표시] 기존 ROSTER_DIVIDER_COLOR(white@0.2, t=2)는
+# 배경 그라데이션 위에서 너무 옅어서 빈 슬롯인지 그냥 배경인지 구분이 잘 안 됐다 - 어두운
+# 보라 계열로 바꾸고 두께도 1px로 줄인다(요청 스펙 그대로).
+ITEM_SLOT_BORDER_COLOR = "#2D274D"
+# 🛡️ [챔피언 프레임 색 - 보라 vs 금색 중 금색 선택] 패널 배경 자체가 블루/네이비 계열이라
+# 보라 테두리는 배경과 명도가 비슷해 묻힌다. LoL 클라이언트가 소환사 아이콘/룬 테두리에
+# 표준으로 쓰는 골드(#C89B3C 계열)가 어두운 배경 위에서 확실히 도드라지고, 롤 유저에게
+# 이미 익숙한 "강조 테두리" 색이라 이걸로 선택.
+CHAMPION_FRAME_COLOR = "#C89B3C"
+GRID_TEXT_BORDER_COLOR = "black"
+GRID_TEXT_BORDER_W = 2
+# 🛡️ [CS 텍스트 색상 분리] KDA와 똑같이 "white" 리터럴을 그대로 복붙해뒀던 걸 CS만
+# 별도 상수로 분리 - KDA(fontcolor=white, 그대로 유지)와 서로 독립적으로 바꿀 수 있음을
+# 명시적으로 보여준다. 옅은 크림빛 노랑으로 CS와 KDA를 시각적으로 구분.
+CS_TEXT_COLOR = "#FFE9A8"
+
+# 🛡️ [골드리드 화살표 배지 가시성 - 포트레이트 중앙 갭 확장, 공유 pad는 안 건드림]
+# 이전 라운드는 배지 폭을 정확히 2*pad(당시 4px)로 제한해서 초상화를 절대 못 덮게
+# 했는데, 그 결과 배지가 초고배율로 확대해야만 보일 만큼 작았다. 이번엔 공유
+# pad(다른 모든 내부 여백에 쓰이는 상수)는 그대로 두고, 포트레이트 위치에만 독립
+# 오프셋을 더해서 중앙 갭만 넓힌다 - 조사에서 확인된 대로, 이 오프셋만큼 cs_zone_x1/
+# x0도 같이 밀어줘야 포트레이트-CS 텍스트 사이 여백(pad)이 유지된다(안 밀면 포트레이트가
+# CS 숫자를 침범함).
+# 🛡️ [숫자 배지 추가 - 오프셋 36으로 재확장] 화살표만 있던 배지에 골드 격차 실제 숫자
+# ("+2778"/"+9.9k")를 옆에 추가하면서, FontKR-Black.otf 실측 기준 최악값("+9999",
+# fontsize=12) 폭이 40px이라 기존 6px 오프셋(중앙 갭 16px)로는 절대 안 들어간다 -
+# 36px로 늘려서 중앙 갭을 76px까지 확보한다(조사에서 계산된 필요폭 ~60px + 여유).
+PORTRAIT_GAP_EXTRA_OFFSET = 36
+# 화살표 자체를 담는 작은 배경 박스는 그대로 16px 유지(요청대로 화살표 모양/색 배지는 안
+# 건드림) - 숫자는 이 박스 옆에 배경 없이 팀 색상 텍스트로만 추가한다(박스를 숫자까지
+# 늘리면 같은 색 배경 위에 같은 색 텍스트라 안 보이게 됨 - 그래서 숫자는 박스 밖).
+GOLD_GAP_ARROW_BADGE_W = 16
+GOLD_GAP_ARROW_FONT_SIZE = 10
+# 🛡️ [숫자 텍스트 - 화살표와 별개 크기] 화살표 글리프(10px)와 완전히 같을 필요 없다는
+# 요청대로 12px로 분리.
+GOLD_GAP_NUMBER_FONT_SIZE = 12
+# 🛡️ [클러스터 고정폭 방식 폐기] 화살표를 포트레이트 가장자리에 붙이고 숫자를 mid_x에
+# 항상 중앙 고정하는 방식으로 바뀌면서, 예전에 "화살표+간격+숫자"를 하나의 고정폭
+# 덩어리로 취급해 가운데 정렬하던 GOLD_GAP_CLUSTER_W/GOLD_GAP_INNER_PAD는 더 이상
+# 어디서도 안 쓰인다(각각 mid_x/포트레이트 기준 독립 좌표로 대체됨) - 완전히 제거.
 
 
 def _hud_slide_y_expr(start: float, end: float, slide: float, visible_y: str, hidden_y: str) -> str:
@@ -455,6 +586,25 @@ def _hud_slide_y_expr(start: float, end: float, slide: float, visible_y: str, hi
         f"if(lt(t,{end + slide:.3f}),({visible_y})+(t-{end:.3f})/{slide}*(({hidden_y})-({visible_y})),"
         f"({hidden_y})))))"
     )
+
+
+def _escape_ffmpeg_path(path: str) -> str:
+    """drawtext fontfile= 등 -filter_complex 옵션 값에 넣는 절대경로 이스케이프(순수 함수,
+    테스트 가능). 🛡️ [Windows 드라이브 콜론 - README에 기록된 과거 교훈 재활용] "C:"의
+    콜론이 필터 옵션 구분자(:)와 충돌해서 슬래시로 통일 + 콜론을 이중 백슬래시로
+    이스케이프해야 한다("C\\:/..."). 리눅스 배포 경로엔 콜론이 없어 이 replace가 안전하게
+    아무 효과도 없다(윈도우 로컬 개발 전용 이슈)."""
+    return path.replace("\\", "/").replace(":", "\\:")
+
+
+def _escape_drawtext_text(text: str) -> str:
+    """drawtext text= 값 안에 들어갈 동적 문자열(닉네임 등) 이스케이프(순수 함수). ffmpeg
+    drawtext는 텍스트 안의 ':'(옵션 구분자)/'\\'(이스케이프 시작)/'%'(strftime 등 확장
+    문법 시작)를 그대로 두면 필터 문법이 깨진다 - 백슬래시로 이스케이프. 홑따옴표는
+    필터 전체를 감싸는 '...' 자체를 깨뜨려서 백슬래시 이스케이프가 안 통하므로, 시각적으로
+    거의 동일한 유니코드 오른쪽 홑인용부호(’)로 치환한다."""
+    return (text.replace("\\", "\\\\").replace(":", "\\:")
+                .replace("'", "’").replace("%", "\\%"))
 
 
 def _mmss_to_ms(mmss: str) -> int:
@@ -580,6 +730,10 @@ def _participant_id_to_name(match_detail: dict) -> dict[int, dict]:
         mapping[p["participantId"]] = {
             "champion": p["championName"],
             "name": p.get("riotIdGameName") or p.get("summonerName") or "Unknown",
+            # 🛡️ [스코어바/KDA 패널용] team_id/kda는 참가자 응답에 이미 있던 필드를 그대로
+            # 추가한 것뿐 - 조사에서 확인된 대로 추가 API 호출 없음.
+            "team_id": p.get("teamId"),
+            "kda": (p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)),
         }
     return mapping
 
@@ -633,6 +787,70 @@ def _reconstruct_kill_snapshot(timeline: dict, participant_id: int, at_ms: int) 
             elif ev_type == "LEVEL_UP":
                 level = ev.get("level", level)
     return {"items": items, "level": level}
+
+
+def _pair_roster_by_position(team_a: list[dict], team_b: list[dict]) -> list[tuple[dict | None, dict | None]]:
+    """포지션(teamPosition) 기준으로 두 팀 참가자를 1:1로 매칭한다(순수 함수, 테스트
+    가능). POSITION_ORDER(TOP/JUNGLE/MIDDLE/BOTTOM/UTILITY) 순서로 정렬해서 반환.
+    🛡️ [폴백 - 알려진 한계] 이건 드래프트/랭크 계열 큐에서만 신뢰할 수 있다 - ARAM 등
+    비드래프트 모드는 teamPosition이 비어있거나 다 같은 값(중복)일 수 있어서, 양쪽 다
+    5개 표준 포지션이 정확히 한 번씩 있는 경우에만 포지션 매칭을 쓰고, 그렇지 않으면
+    participantId 순서로 그냥 순서대로 짝짓는다(둘 중 하나라도 인원이 다르면 짧은 쪽은
+    None으로 채움)."""
+    a_by_pos = {p.get("position"): p for p in team_a}
+    b_by_pos = {p.get("position"): p for p in team_b}
+    positions_ok = (
+        len(a_by_pos) == len(team_a) and len(b_by_pos) == len(team_b)
+        and set(a_by_pos) == set(b_by_pos) == set(POSITION_ORDER)
+    )
+    if positions_ok:
+        return [(a_by_pos[pos], b_by_pos[pos]) for pos in POSITION_ORDER]
+
+    a_sorted = sorted(team_a, key=lambda p: p["participant_id"])
+    b_sorted = sorted(team_b, key=lambda p: p["participant_id"])
+    n = max(len(a_sorted), len(b_sorted))
+    return [(a_sorted[i] if i < len(a_sorted) else None,
+             b_sorted[i] if i < len(b_sorted) else None) for i in range(n)]
+
+
+# 🛡️ [라인전 골드 격차 - "라인전 종료 시점" 정의] participantFrames는 60초 간격
+# 스냅샷이라(조사에서 실측 확인: frameInterval=60000) 특정 순간을 정확히 짚을 수 없다 -
+# 10~14분 구간 안에서 가장 가까운 스냅샷을 쓰기로 했으므로(±30초 오차는 감수), 그 구간의
+# 중간값인 12분을 목표 시각으로 잡고 구간 내 프레임 중 거리로 가장 가까운 걸 고른다.
+LANING_PHASE_WINDOW_MS = (10 * 60 * 1000, 14 * 60 * 1000)
+LANING_PHASE_TARGET_MS = 12 * 60 * 1000
+
+
+def _pick_laning_phase_frame(timeline: dict) -> dict | None:
+    """10~14분 구간 안에서 12분에 가장 가까운 timeline 프레임 하나를 고른다. 그 구간에
+    프레임이 하나도 없으면(10분 전에 끝난 리메이크 등 극단적으로 짧은 게임) None을
+    반환한다 - 이 경우 호출부에서 라인전 격차 배지 자체를 표시하지 않는다(부정확한 값을
+    억지로 만들어내지 않음)."""
+    lo, hi = LANING_PHASE_WINDOW_MS
+    candidates = [f for f in timeline["info"]["frames"] if lo <= f["timestamp"] <= hi]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: abs(f["timestamp"] - LANING_PHASE_TARGET_MS))
+
+
+def _compute_laning_gold_gaps(timeline: dict, roster_pairs: list[tuple[dict | None, dict | None]]) -> list[int | None]:
+    """roster_pairs(포지션별 (좌측=team100, 우측=team200) 쌍)와 같은 순서로, 라인전
+    스냅샷 시점의 (좌측 totalGold - 우측 totalGold)를 반환한다(양수=좌측/블루 리드,
+    음수=우측/레드 리드). 스냅샷을 못 찾거나 한쪽 참가자가 없으면 그 자리는 None(순수
+    함수 - 실제 매치 데이터로 독립 재계산해서 검증 가능)."""
+    frame = _pick_laning_phase_frame(timeline)
+    if frame is None:
+        return [None] * len(roster_pairs)
+    pframes = frame["participantFrames"]
+    gaps: list[int | None] = []
+    for left_p, right_p in roster_pairs:
+        if left_p is None or right_p is None:
+            gaps.append(None)
+            continue
+        left_gold = pframes.get(str(left_p["participant_id"]), {}).get("totalGold")
+        right_gold = pframes.get(str(right_p["participant_id"]), {}).get("totalGold")
+        gaps.append(left_gold - right_gold if left_gold is not None and right_gold is not None else None)
+    return gaps
 
 
 def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
@@ -900,6 +1118,13 @@ class KyvoHighlight(KyvoBaseCog):
             voice_indices[key] = next_input_idx
             next_input_idx += 1
 
+        # 🛡️ [6단계 - 배경 프레임 입력 - 항상 추가] overlay_frame_v2.png(상단 메인바+
+        # 서브바+하단 패널이 통합된 미리캔버스 완성 이미지)는 매 렌더마다 항상 붙는다 -
+        # 이걸로 예전 drawbox 배경(팀 틴트/서브바/하단패널 단색 박스)을 전부 대체한다.
+        inputs += ["-i", OVERLAY_FRAME_V2_PATH]
+        frame_v2_idx = next_input_idx
+        next_input_idx += 1
+
         # 🛡️ [오버레이 HUD 입력] FIRST BLOOD/SOLO KILL일 때만(schedule에 "hud" 키가 있을
         # 때만) 완성 배너 PNG를 추가 입력으로 붙인다 - 해당 없는 킬(추격전 등)에서는 아예
         # 입력조차 안 넣어서 필터그래프가 더 무거워지지 않는다.
@@ -910,35 +1135,66 @@ class KyvoHighlight(KyvoBaseCog):
             hud_panel_idx = next_input_idx
             next_input_idx += 1
 
-        # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다. 단, HUD 오버레이는
-        # 예외 - 오디오와 무관하게 화면에 그리는 유일한 요소) ──
+        # 🛡️ [4단계 - 포지션 매칭 5행용 아이콘 입력] roster_pairs = [(left_or_None,
+        # right_or_None), ...] - 한쪽이 없는 행(인원 부족)도 있을 수 있어 None 체크.
+        # 챔피언/아이템 아이콘 전부 fetch 실패 시 None이 이미 들어와 있으므로 입력을 안
+        # 넣으면 필터그래프도 그만큼 가벼워진다. (스펠/룬 아이콘은 패널에서 완전히
+        # 제거되면서 이 입력 등록 자체도 삭제됨.)
+        roster_pairs = schedule.get("roster_pairs") or []
+        roster_icon_idx: dict[int, int] = {}
+        roster_item_idx: dict[int, list[int | None]] = {}
+        for left, right in roster_pairs:
+            for r in (left, right):
+                if r is None:
+                    continue
+                if r.get("icon_path"):
+                    inputs += ["-i", r["icon_path"]]
+                    roster_icon_idx[r["participant_id"]] = next_input_idx
+                    next_input_idx += 1
+                item_indices = []
+                for item_icon_path in r.get("item_icon_paths", []):
+                    if item_icon_path:
+                        inputs += ["-i", item_icon_path]
+                        item_indices.append(next_input_idx)
+                        next_input_idx += 1
+                    else:
+                        item_indices.append(None)
+                roster_item_idx[r["participant_id"]] = item_indices
+
+        # 🛡️ [타워/드래곤 아이콘 입력] Community Dragon 실패 시 None - 동일한 안전 처리.
+        scoreboard_for_input = schedule.get("scoreboard") or {}
+        tower_icon_idx = None
+        if scoreboard_for_input.get("tower_icon_path"):
+            inputs += ["-i", scoreboard_for_input["tower_icon_path"]]
+            tower_icon_idx = next_input_idx
+            next_input_idx += 1
+        dragon_icon_idx = None
+        if scoreboard_for_input.get("dragon_icon_path"):
+            inputs += ["-i", scoreboard_for_input["dragon_icon_path"]]
+            dragon_icon_idx = next_input_idx
+            next_input_idx += 1
+
+        # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다. 스코어바/KDA/HUD
+        # 오버레이는 예외 - 오디오와 무관하게 화면에 그리는 요소들) ──
         video_filters = []
         # 🛡️ 유저가 1440p/4K 등 고해상도 클립을 올리면(크기만 100MB 이내면 통과되므로
         # 충분히 가능) 목표 비트레이트가 픽셀 수 대비 너무 낮아져 화질이 심하게 뭉개진다 -
         # 스케일을 먼저 걸어 픽셀 수 자체를 낮춰둔다. -2로 짝수 높이 보장(libx264 요구사항).
         if video_width > MAX_OUTPUT_WIDTH:
             video_filters.append(f"scale={MAX_OUTPUT_WIDTH}:-2")
-            # HUD 배너 비율 계산은 실제로 화면에 나오는 최종 해상도를 기준으로 해야 한다 -
-            # scale=-2가 짝수로 반올림하는 것까지 그대로 흉내내서 final_width/height를 미리
-            # 구해둔다(ffmpeg가 실제로 무슨 픽셀을 뽑는지와 1px 이내로 맞음, 배너 비율
-            # 계산엔 그 정도 오차는 무관하다).
             final_width = MAX_OUTPUT_WIDTH
             final_height = int(round(video_height * MAX_OUTPUT_WIDTH / video_width / 2) * 2)
         else:
             final_width, final_height = video_width, video_height
 
-        # 🛡️ [방송 뷰포트 축소] 게임 화면을 GAME_VIEWPORT_SCALE 비율로 균일 축소(가로세로
-        # 동시에, 왜곡 없음)한 뒤 캔버스(final_width x final_height, 위에서 계산한 값 그대로
-        # 유지)에 상단 중앙 정렬로 pad한다 - scale+pad 두 필터로 "축소 + 주변 여백 생성"이
-        # 동시에 끝나서 별도 배경색 입력이나 추가 overlay 스텝이 필요 없다. -2 대신 짝수
-        # 반올림을 직접 계산하는 이유는 pad의 x좌표/캔버스 크기 계산에 정확한 정수 값이
-        # 바로 필요해서(MAX_OUTPUT_WIDTH 분기의 final_height 계산과 동일한 패턴).
-        scaled_w = int(round(final_width * GAME_VIEWPORT_SCALE / 2) * 2)
-        scaled_h = int(round(final_height * GAME_VIEWPORT_SCALE / 2) * 2)
-        pad_x = (final_width - scaled_w) // 2
-        video_filters.append(f"scale={scaled_w}:{scaled_h}")
-        video_filters.append(f"pad={final_width}:{final_height}:{pad_x}:0:black")
-        margin_height = final_height - scaled_h  # 하단 여백 띠의 실제 높이(반올림 오차까지 반영)
+        # 🛡️ [5단계 - 게임 화면 축소 완전 폐기, 100% 원본 크기 유지] 실제 LCK 방송 캡처
+        # 실측 결과를 반영한 최종 구조 - 이전 라운드들(1단계 축소+여백, 4단계 상단/하단
+        # 둘 다 축소)과 달리 이번엔 scale/pad를 아예 안 쓴다. 방송 UI는 전부 이 원본
+        # 크기 게임 화면 위에 직접 오버레이된다(상단은 겹쳐도 무방, 하단은 실측된 좁은
+        # 폭만 중앙에 - 아래 텍스트/그리드 섹션에서 처리).
+        top_main_h = int(round(final_height * TOP_MAIN_BAR_HEIGHT_RATIO))
+        top_sub_h = int(round(final_height * TOP_SUB_BAR_HEIGHT_RATIO))
+        top_total_h = top_main_h + top_sub_h  # 오버레이 배치 계산용(더 이상 여백 확보 용도 아님)
 
         # 🛡️ 원본 클립보다 렌더 길이가 길어지면(빌드업+메인+하이프+서브 꼬리가 원본 영상
         # 길이를 넘어서는 게 일반적) 영상 쪽도 늘려야 오디오가 잘려나가지 않는다. 화면을
@@ -947,22 +1203,417 @@ class KyvoHighlight(KyvoBaseCog):
         extra_video_sec = max(0.0, total_duration - video_duration)
         if extra_video_sec > 0.01:
             video_filters.append(f"tpad=stop_mode=clone:stop_duration={extra_video_sec:.3f}")
-        video_base_label = "vbase" if hud is not None else "vout"
-        video_chain = (("[0:v]" + ",".join(video_filters) + f"[{video_base_label}]") if video_filters
-                        else f"[0:v]copy[{video_base_label}]")
+        video_chain = (("[0:v]" + ",".join(video_filters) + "[vgame]") if video_filters
+                        else "[0:v]copy[vgame]")
+        current_label = "vgame"
+
+        # 🛡️ [6단계 - 배경 프레임 오버레이, drawbox 대체] overlay_frame_v2.png를 실제 렌더
+        # 해상도로 비균등 스케일(가로/세로 따로 - 프레임이 색상 그라데이션 블록이라 비균등
+        # 스케일에도 왜곡 없음, 2단계 때와 동일한 판단)해서 게임 위에 그대로 얹는다. 이
+        # 한 번의 오버레이가 예전 drawbox 3~4개(팀 틴트 x2, 서브바 배경, 하단패널 배경)를
+        # 전부 대체한다 - 그라데이션/그림자/테두리가 이미 이미지에 구워져 있어서 코드가
+        # 더 이상 그 디테일을 신경 쓸 필요가 없다.
+        video_chain += (
+            f";[{frame_v2_idx}:v]scale={final_width}:{final_height}[vframe2]"
+            f";[{current_label}][vframe2]overlay=x=0:y=0[vframed2]"
+        )
+        current_label = "vframed2"
+
+        # 🛡️ [스코어바(상단)/KDA(하단) 텍스트 오버레이] scoreboard는 _run_pipeline에서
+        # hud_event 여부와 무관하게 항상 채워서 넘어온다(정상 파이프라인에선 항상 not None -
+        # 아래 None 체크는 _render_video를 단독 테스트할 때의 방어용).
+        scoreboard = schedule.get("scoreboard")
+        text_chain = ""
+        if scoreboard is not None:
+            font_kr = _escape_ffmpeg_path(SCOREBAR_FONT_KR)
+            font_kr_black = _escape_ffmpeg_path(SCOREBAR_FONT_KR_BLACK)
+            mid_x = final_width / 2
+            half_w = mid_x
+
+            # 🛡️ [text= 대신 textfile= - 실측으로 드러난 필수 사항] 처음엔 text='...'로 한글을
+            # 필터 문자열에 직접 박아 넣었는데, 실제 ffmpeg 렌더에서 "Failed to set value ...
+            # for option 'filter_complex': Invalid argument"로 계속 실패했다. -/filter_complex
+            # (파일에서 옵션값을 읽는 문법)로 넘긴 파일 자체는 UTF-8로 정확했지만, ffmpeg가
+            # 그 파일을 다시 읽어 필터그래프 문자열에 "박아 넣는" 내부 처리에서 한글 멀티바이트
+            # 시퀀스가 깨졌다. drawtext의 textfile=(표시할 텍스트를 별도 파일에서 읽는 정식
+            # 옵션)을 쓰면 텍스트가 filter_complex 문자열 안에 전혀 섞이지 않아 문제가
+            # 재현되지 않음을 직접 렌더로 확인했다.
+            def _write_textfile(name: str, text: str) -> str:
+                path = os.path.join(work_dir, f"drawtext_{name}.txt")
+                with open(path, "w", encoding="utf-8") as tf:
+                    tf.write(text.replace("%", "\\%"))
+                return _escape_ffmpeg_path(path)
+
+            # 🛡️ [6단계 - 배경은 overlay_frame_v2.png가 이미 그림] 팀명/팀 로고 텍스트는
+            # 여전히 뺀다(색상만으로 진영 구분) - 다만 그 색상 틴트 자체가 이제 배경 이미지에
+            # 구워져 있어서(메인바 좌=밝은 블루→우=빨강 그라데이션, 실측 확인됨) drawbox로
+            # 따로 그릴 필요가 없어졌다. 타워/골드/킬만 좌우 완전 거울로 그 위에 얹는다.
+            # 순서(바깥→안쪽): 타워, 골드, 킬 - 타워가 예전 팀로고 자리였던 가장 바깥쪽에
+            # 온다. 동적 텍스트 폭에 의존하지 않도록 각 요소를 자기 진영 "가장자리 기준
+            # 고정 비율" 위치에 둔다(요소별 폭이 다른데도 안정적으로 대칭이 되는 이유).
+            label = current_label
+
+            top_font_size = max(10, int(round(top_main_h * 0.42)))
+            top_icon_size = max(8, int(round(top_main_h * 0.6)))
+            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.08, 0.42, 0.75
+            main_text_y_expr = f"({top_main_h}-text_h)/2"
+
+            tower_x_l = half_w * TOWER_FRAC
+            tower_x_r = final_width - half_w * TOWER_FRAC
+            gold_x_l = half_w * GOLD_FRAC
+            gold_x_r = final_width - half_w * GOLD_FRAC
+            kill_x_l = half_w * KILL_FRAC
+            kill_x_r = final_width - half_w * KILL_FRAC
+
+            if tower_icon_idx is not None:
+                icon_y = (top_main_h - top_icon_size) / 2
+                text_chain += (
+                    f";[{tower_icon_idx}:v]scale={top_icon_size}:{top_icon_size}[vtwL]"
+                    f";[{label}][vtwL]overlay=x={int(round(tower_x_l))}:y={icon_y:.2f}[vtw1]"
+                    f";[{tower_icon_idx}:v]scale={top_icon_size}:{top_icon_size}[vtwR]"
+                    f";[vtw1][vtwR]overlay=x={int(round(tower_x_r - top_icon_size))}:y={icon_y:.2f}[vtw2]"
+                )
+                label = "vtw2"
+                tower_num_x_l = str(int(round(tower_x_l + top_icon_size + 4)))
+                tower_num_x_r = f"{int(round(tower_x_r - top_icon_size - 4))}-text_w"
+            else:
+                tower_num_x_l = str(int(round(tower_x_l)))
+                tower_num_x_r = f"{int(round(tower_x_r))}-text_w"
+
+            # 🛡️ [골드 격차 - 괄호 표기 제거] 이제 "(+X.Xk)"를 골드 텍스트에 붙이지 않고
+            # 서브바 구간에 독립된 배지로 따로 그린다(아래 참고) - 여기선 순수 골드 액수만.
+            gold_diff = scoreboard["team100_gold"] - scoreboard["team200_gold"]
+            gap_k = abs(gold_diff) / 1000
+            gold100_text = f"{scoreboard['team100_gold'] / 1000:.1f}k"
+            gold200_text = f"{scoreboard['team200_gold'] / 1000:.1f}k"
+
+            tower100_tf = _write_textfile("tower100", str(scoreboard["team100_towers"]))
+            tower200_tf = _write_textfile("tower200", str(scoreboard["team200_towers"]))
+            gold100_tf = _write_textfile("gold100", gold100_text)
+            gold200_tf = _write_textfile("gold200", gold200_text)
+            kill100_tf = _write_textfile("kill100", str(scoreboard["team100_kills"]))
+            kill200_tf = _write_textfile("kill200", str(scoreboard["team200_kills"]))
+
+            text_chain += (
+                f";[{label}]drawtext=fontfile='{font_kr}':textfile='{tower100_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x={tower_num_x_l}:y='{main_text_y_expr}'[vm1]"
+                f";[vm1]drawtext=fontfile='{font_kr}':textfile='{tower200_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x='{tower_num_x_r}':y='{main_text_y_expr}'[vm2]"
+                f";[vm2]drawtext=fontfile='{font_kr}':textfile='{gold100_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x='{int(round(gold_x_l))}-text_w/2':y='{main_text_y_expr}'[vm3]"
+                f";[vm3]drawtext=fontfile='{font_kr}':textfile='{gold200_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x='{int(round(gold_x_r))}-text_w/2':y='{main_text_y_expr}'[vm4]"
+                f";[vm4]drawtext=fontfile='{font_kr}':textfile='{kill100_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x='{int(round(kill_x_l))}-text_w/2':y='{main_text_y_expr}'[vm5]"
+                f";[vm5]drawtext=fontfile='{font_kr}':textfile='{kill200_tf}':fontsize={top_font_size}:"
+                f"fontcolor=white:x='{int(round(kill_x_r))}-text_w/2':y='{main_text_y_expr}'[vm6]"
+            )
+            label = "vm6"
+
+            # ── 상단 서브바: 게임시간 중앙 + 드래곤 스택 좌우(대칭) ──
+            # 🛡️ [실측 폭 그대로 - 전체 폭이 아니라 중앙 구간만] 참고 사진 실측 결과
+            # 서브바는 메인바와 달리 전체 폭이 아니라 중앙 48.8%(x=650~1900 @2560
+            # 기준)만 차지한다 - 배경 박스도 그 폭만 그려서 참고 사진과 같은 "메인바보다
+            # 좁은 서브바" 형태를 재현한다.
+            sub_x0 = int(round(final_width * TOP_SUB_BAR_X_RATIO[0]))
+            sub_x1 = int(round(final_width * TOP_SUB_BAR_X_RATIO[1]))
+            sub_font_size = max(8, int(round(top_sub_h * 0.55)))
+            sub_icon_size = max(6, int(round(top_sub_h * 0.75)))
+            sub_text_y_expr = f"{top_main_h}+({top_sub_h}-text_h)/2"
+            dragon_offset = (sub_x1 - sub_x0) / 2 * 0.3
+
+            gm = scoreboard["game_time_ms"] // 1000
+            # 🛡️ 콜론(:)은 필터 옵션 구분자와 충돌해서 홑따옴표로 감싸도 그대로 두면
+            # 깨진다(fontfile의 드라이브 콜론과 같은 문제) - _escape_drawtext_text로 이스케이프.
+            time_text = _escape_drawtext_text(f"{gm // 60:02d}:{gm % 60:02d}")
+
+            if dragon_icon_idx is not None:
+                d_icon_y = top_main_h + (top_sub_h - sub_icon_size) / 2
+                dl_x = mid_x - dragon_offset - sub_icon_size
+                dr_x = mid_x + dragon_offset
+                text_chain += (
+                    f";[{dragon_icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgL]"
+                    f";[{label}][vdgL]overlay=x={int(round(dl_x))}:y={d_icon_y:.2f}[vd1]"
+                    f";[{dragon_icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgR]"
+                    f";[vd1][vdgR]overlay=x={int(round(dr_x))}:y={d_icon_y:.2f}[vd2]"
+                )
+                label = "vd2"
+                dragon100_num_x = f"{int(round(dl_x - 4))}-text_w"
+                dragon200_num_x = str(int(round(dr_x + sub_icon_size + 4)))
+            else:
+                dragon100_num_x = f"{int(round(mid_x - dragon_offset))}-text_w"
+                dragon200_num_x = str(int(round(mid_x + dragon_offset)))
+
+            dragon100_tf = _write_textfile("dragon100", str(scoreboard["team100_dragons"]))
+            dragon200_tf = _write_textfile("dragon200", str(scoreboard["team200_dragons"]))
+
+            text_chain += (
+                f";[{label}]drawtext=fontfile='{font_kr}':textfile='{dragon100_tf}':fontsize={sub_font_size}:"
+                f"fontcolor={TEAM_BLUE_COLOR}:x='{dragon100_num_x}':y='{sub_text_y_expr}'[vs1]"
+                f";[vs1]drawtext=fontfile='{font_kr}':textfile='{dragon200_tf}':fontsize={sub_font_size}:"
+                f"fontcolor={TEAM_RED_COLOR}:x='{dragon200_num_x}':y='{sub_text_y_expr}'[vs2]"
+                f";[vs2]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
+                f"fontcolor=white:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
+            )
+            label = "vs3"
+
+            # 🛡️ [상단 골드 격차 - "중앙 스코어 박스" 바로 아래에 독립 배지] 골드 표시(메인바)
+            # 바로 아래 서브바 높이 구간에, 리드 팀 골드 숫자와 같은 x축에 그 팀 색상의
+            # 작은 배지로 분리해서 그린다. 리드가 없으면(동률) 아예 안 그린다 - 기존에도
+            # 리드 팀에만 표시하던 로직 그대로 유지.
+            if gold_diff != 0:
+                gap_leader_x = gold_x_l if gold_diff > 0 else gold_x_r
+                gap_badge_color = TEAM_BLUE_COLOR if gold_diff > 0 else TEAM_RED_COLOR
+                gap_badge_text = f"+{gap_k:.1f}k"
+                gap_badge_font_size = max(8, int(round(top_sub_h * 0.6)))
+                gap_badge_h = max(10, int(round(top_sub_h * 0.85)))
+                gap_badge_w = max(gap_badge_h * 2, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62)))
+                gap_badge_x = gap_leader_x - gap_badge_w / 2
+                gap_badge_y = top_main_h + (top_sub_h - gap_badge_h) / 2
+                gap_badge_tf = _write_textfile("top_gold_gap", gap_badge_text)
+                text_chain += (
+                    f";[{label}]drawbox=x={gap_badge_x:.2f}:y={gap_badge_y:.2f}:w={gap_badge_w}:h={gap_badge_h}:"
+                    f"color={gap_badge_color}@0.9:t=fill[vtgapbg]"
+                    f";[vtgapbg]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
+                    f"fontsize={gap_badge_font_size}:fontcolor=white:bordercolor={GRID_TEXT_BORDER_COLOR}:borderw=1:"
+                    f"x='{gap_badge_x:.2f}+({gap_badge_w}-text_w)/2':"
+                    f"y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2'[vtgaptxt]"
+                )
+                label = "vtgaptxt"
+
+            current_label = label
+
+            # ── 하단 통계 패널 - 실측 좌표(폭 42.7%, 중앙 정렬)로 배경만 먼저 그린다 ──
+            # 🛡️ [헤더 띠 제거] 이번 라운드 요청 목록에 헤더가 없고(이전 라운드의
+            # "KYVOBOT HIGHLIGHT" 띠), 실측 높이(322px @1435 기준)가 5행을 넣기에도 빠듯해서
+            # 뺐다 - 패널 전체 높이를 5행에만 쓴다.
+            panel_w = int(round(final_width * BOTTOM_PANEL_WIDTH_RATIO))
+            panel_h = int(round(final_height * BOTTOM_PANEL_HEIGHT_RATIO))
+            panel_x0 = (final_width - panel_w) // 2
+            panel_y0 = int(round(final_height * BOTTOM_PANEL_Y_START_RATIO))
+            panel_half_w = panel_w / 2
+            row_h_raw = panel_h / BOTTOM_ROWS
+            rows_y0 = panel_y0
+
+            # 🛡️ [하단 - 포지션별 5행, 완전 거울 배치] 순서(바깥→안쪽): 스펠/룬, 아이템 6칸,
+            # KDA, CS, 챔피언 초상화(중앙, 마주보기) - 요청 순서 그대로. roster_pairs는
+            # _pair_roster_by_position()이 이미 포지션 매칭까지 끝내서 넘겨준 리스트라 여기선
+            # 그대로 순서대로 그리기만 한다. 동적 텍스트 폭 체이닝이 불가능한 건 이전 라운드와
+            # 동일 - 고정 비율 구역을 미리 나누고 오른쪽 열은 중앙선 기준 대칭 이동으로 만든다.
+            # 🛡️ [5단계 - 구역 기준을 패널 폭으로 축소] 이전 라운드는 half_w가 캔버스
+            # 절반(~960px)이었는데, 이번엔 패널 자체가 실측상 훨씬 좁아서(panel_half_w
+            # ≈205px @1920 기준) 구역 비율 계산의 기준을 panel_half_w로 바꿨다 - 공식은
+            # 그대로, 기준 폭만 좁아져서 자연스럽게 전부 축소된다.
+            if hud is not None:
+                grid_enable = f"not(between(t,{hud['start']:.3f},{hud['end'] + HUD_SLIDE_SEC:.3f}))"
+            else:
+                grid_enable = "1"
+
+            portrait_size = int(round(row_h_raw * 0.85))
+            # 🛡️ [아이템 아이콘 확대 - 조사에서 확인된 상한까지] 기존 0.32 비율(row_h의
+            # ~26%)은 패널 좌우에 빈 공간을 남겼다(조사로 확인됨) - 포트레이트를 침범하지
+            # 않는 상한인 portrait_size와 완전히 동일한 크기까지 올려서 그 공간을 채운다.
+            item_size = portrait_size
+            pad = max(2, int(round(row_h_raw * 0.06)))
+            # 🛡️ [텍스트 가독성 1순위 - 크기 대폭 확대] 기존 0.26 비율은 실측 row_h_raw
+            # (~27~30px)에서 폰트 크기가 8px까지 내려가 거의 안 보였다(하단 텍스트 가독성
+            # 요청의 직접 원인). "CS " 라벨을 없애 숫자만 남기면서 자리가 남은 만큼도 반영해
+            # 0.55로 올린다 - 실제 크롭 캡처로 재확인.
+            grid_font_size = max(12, int(round(row_h_raw * 0.55)))
+            item_gap = max(1, int(round(item_size * 0.15)))
+
+            portrait_zone_w = portrait_size + 2 * pad
+            # 🛡️ [CS/KDA zone 재분배 - 실제 텍스트 렌더 폭 기준] 조사에서 FontKR-Black.otf로
+            # 실측: CS 최댓값("999" 같은 극단 3자리) 실제 렌더 폭 30px, KDA 최댓값
+            # ("10/10/10") 66px. 기존 비율(panel_half_w*0.11=45px, *0.15=61.4px)은 CS는
+            # 15px 남고 KDA는 4.6px 모자랐다 - CS에서 뺀 15px을 그대로 KDA로 옮긴다(합은
+            # 그대로 0.26 유지). cs_zone_w는 딱 맞는 값(30px)까지 줄어서 여유가 거의 없다 -
+            # 실제 렌더로 "999"가 안 잘리는지 반드시 확인 필요(계산상 폰트 메트릭과 ffmpeg
+            # 실제 렌더 사이 오차가 있을 수 있음).
+            cs_zone_w = panel_half_w * 0.0734
+            kda_zone_w = panel_half_w * 0.1866
+            # 🛡️ [CS-KDA 사이 명시적 간격 신설] 스펠/룬 제거로 확보된 공간 중 일부를 여기로
+            # 돌린다 - 기존엔 두 zone이 완전히 맞붙어 있어서(kda_zone_x1 = cs_zone_x1 -
+            # cs_zone_w, 사이에 더하는 항이 없었음) CS/KDA가 동시에 극단값("999"+
+            # "10/10/10")이면 실측 0.06px까지 거의 붙어 보였다 - row_h 비례(pad와 같은
+            # 방식)로 잡아서 다른 해상도에서도 비율이 유지되게 한다(0.6배 ≈ 16px @ 이번
+            # 세션 테스트 해상도, 요청하신 "16 정도"와 일치).
+            cs_kda_gap = int(round(row_h_raw * 0.6))
+            items_zone_w = 6 * item_size + 5 * item_gap + 2 * pad
+            # 🛡️ [구역 합이 panel_half_w를 넘으면 겹칠 수 있음 - 클램프 없이 그대로 렌더,
+            # 실제 프레임으로 확인해서 보고한다] 억지로 축소하면 아이콘/텍스트가 너무
+            # 작아져서 오히려 안 보이는 쪽보다 나쁠 수 있다고 판단.
+
+            # 🛡️ [라인전 골드 격차 배지용 데이터] schedule에 없거나(구버전 호출부) 길이가
+            # 안 맞으면 그냥 None 취급 - 배지를 안 그리는 쪽으로 안전하게 처리한다.
+            laning_gold_gaps = schedule.get("laning_gold_gaps")
+
+            grid_parts = []
+            label = current_label
+            for j in range(BOTTOM_ROWS):
+                left_p, right_p = roster_pairs[j] if j < len(roster_pairs) else (None, None)
+                row_y0 = rows_y0 + j * row_h_raw
+                text_y_expr = f"{row_y0:.2f}+({row_h_raw:.2f}-text_h)/2"
+                portrait_y = row_y0 + (row_h_raw - portrait_size) / 2
+                item_y = row_y0 + (row_h_raw - item_size) / 2
+
+                for side, r in (("L", left_p), ("R", right_p)):
+                    if r is None:
+                        continue
+                    tag = f"{side}{j}"
+                    pid = r["participant_id"]
+                    if side == "L":
+                        portrait_x = mid_x - portrait_zone_w + pad - PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_zone_x1 = mid_x - portrait_zone_w - PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_x_expr = f"{int(round(cs_zone_x1 - pad))}-text_w"
+                        kda_zone_x1 = cs_zone_x1 - cs_zone_w - cs_kda_gap
+                        kda_x_expr = f"{int(round(kda_zone_x1 - pad))}-text_w"
+                        items_zone_x1 = kda_zone_x1 - kda_zone_w
+                        items_zone_x0 = items_zone_x1 - items_zone_w
+                        item_xs = [items_zone_x0 + pad + k * (item_size + item_gap) for k in range(6)]
+                    else:
+                        portrait_x = mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_zone_x0 = mid_x + portrait_zone_w + PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_x_expr = str(int(round(cs_zone_x0 + pad)))
+                        kda_zone_x0 = cs_zone_x0 + cs_zone_w + cs_kda_gap
+                        kda_x_expr = str(int(round(kda_zone_x0 + pad)))
+                        items_zone_x0 = kda_zone_x0 + kda_zone_w
+                        item_xs = [items_zone_x0 + pad + k * (item_size + item_gap) for k in range(6)]
+
+                    icon_idx = roster_icon_idx.get(pid)
+                    if icon_idx is not None:
+                        grid_parts.append(f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}p]")
+                        grid_parts.append(
+                            f";[{label}][vr{tag}p]overlay=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
+                            f"enable='{grid_enable}'[vr{tag}a]")
+                        label = f"vr{tag}a"
+
+                        # 🛡️ [3순위 - 챔피언 프레임] 아이콘과 정확히 같은 사각형을 아이콘 위에
+                        # "나중에" 그려야 1px 테두리가 아이콘 가장자리에 가려지지 않고 그 위에
+                        # 얹힌 채로 보인다(먼저 그리면 오버레이가 그대로 덮어버림).
+                        grid_parts.append(
+                            f";[{label}]drawbox=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
+                            f"w={portrait_size}:h={portrait_size}:color={CHAMPION_FRAME_COLOR}:t=1:"
+                            f"enable='{grid_enable}'[vr{tag}pf]")
+                        label = f"vr{tag}pf"
+
+                    # 🛡️ [1순위 - 하단 텍스트 가독성] "CS " 라벨을 없애 숫자만 남기고(KDA는
+                    # 이미 "K/D/A" 형태로 숫자뿐이라 그대로), Black 웨이트 폰트 + 검은 외곽선
+                    # (borderw=2)으로 배경 그라데이션과 확실히 분리한다 - 기존 shadow만으로는
+                    # 배경과 명도가 비슷한 구간에서 거의 안 보였다.
+                    cs_tf = _write_textfile(f"roster_cs_{tag}", str(r['cs']))
+                    kda_tf = _write_textfile(f"roster_kda_{tag}", f"{r['kda'][0]}/{r['kda'][1]}/{r['kda'][2]}")
+                    grid_parts.append(
+                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{cs_tf}':fontsize={grid_font_size}:"
+                        f"fontcolor={CS_TEXT_COLOR}:bordercolor={GRID_TEXT_BORDER_COLOR}:borderw={GRID_TEXT_BORDER_W}:"
+                        f"x='{cs_x_expr}':y='{text_y_expr}':enable='{grid_enable}'[vr{tag}b]")
+                    label = f"vr{tag}b"
+                    grid_parts.append(
+                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{kda_tf}':fontsize={grid_font_size}:"
+                        f"fontcolor=white:bordercolor={GRID_TEXT_BORDER_COLOR}:borderw={GRID_TEXT_BORDER_W}:"
+                        f"x='{kda_x_expr}':y='{text_y_expr}':enable='{grid_enable}'[vr{tag}c]")
+                    label = f"vr{tag}c"
+
+                    # 🛡️ [2순위 - 아이템 6칸 슬롯 틀 - 빈 슬롯도 항상 표시] drawbox로 슬롯
+                    # 테두리를 먼저 그리고, 아이콘이 있으면 그 위에 겹쳐 그린다(요청 스펙대로
+                    # 어두운 보라 1px).
+                    item_idx_list = roster_item_idx.get(pid, [])
+                    for k in range(6):
+                        grid_parts.append(
+                            f";[{label}]drawbox=x={int(round(item_xs[k]))}:y={item_y:.2f}:"
+                            f"w={item_size}:h={item_size}:color={ITEM_SLOT_BORDER_COLOR}:t=1:"
+                            f"enable='{grid_enable}'[vr{tag}slot{k}]")
+                        label = f"vr{tag}slot{k}"
+                        item_idx = item_idx_list[k] if k < len(item_idx_list) else None
+                        if item_idx is not None:
+                            grid_parts.append(f";[{item_idx}:v]scale={item_size}:{item_size}[vr{tag}item{k}]")
+                            grid_parts.append(
+                                f";[{label}][vr{tag}item{k}]overlay=x={int(round(item_xs[k]))}:y={item_y:.2f}:"
+                                f"enable='{grid_enable}'[vr{tag}i{k}]")
+                            label = f"vr{tag}i{k}"
+
+                    if j > 0:
+                        divider_x0 = panel_x0 if side == "L" else int(round(mid_x))
+                        grid_parts.append(
+                            f";[{label}]drawbox=x={divider_x0}:y={int(round(row_y0))}:"
+                            f"w={int(round(panel_half_w))}:h=1:color={ROSTER_DIVIDER_COLOR}:t=fill:"
+                            f"enable='{grid_enable}'[vr{tag}d]")
+                        label = f"vr{tag}d"
+
+                # 🛡️ [라인전 골드 격차 배지 - 화살표는 포트레이트에 밀착, 숫자는 갭
+                # 정중앙 고정] 화살표(배경 없는 색상 글리프)와 숫자(팀 색상 텍스트)가 이제
+                # 서로 독립된 기준점을 쓴다 - 화살표는 리드팀 포트레이트 안쪽 가장자리에
+                # min_margin만 남기고 붙고, 숫자는 항상 mid_x 중앙(자기 text_w로 셀프
+                # 정렬)에 고정된다. 둘이 물리적으로 떨어지게 되므로, 숫자 폭이 큰 극단값
+                # 에서 화살표 쪽을 침범하지 않는지는 계산+실측으로 별도 확인함.
+                gap = laning_gold_gaps[j] if laning_gold_gaps and j < len(laning_gold_gaps) else None
+                if gap:
+                    gap_color = TEAM_BLUE_COLOR if gap > 0 else TEAM_RED_COLOR
+                    arrow_char = "◀" if gap > 0 else "▶"
+                    gap_abs = abs(gap)
+                    gap_num_text = f"+{gap_abs}" if gap_abs < 1000 else f"+{gap_abs / 1000:.1f}k"
+
+                    gap_badge_w = GOLD_GAP_ARROW_BADGE_W
+                    gap_badge_h = max(gap_badge_w, int(round(portrait_size * 0.55)))
+                    gap_badge_y = row_y0 + (row_h_raw - gap_badge_h) / 2
+                    # 🛡️ [화살표 - 포트레이트 밀착] 고정 클러스터 경계 대신 실제 포트레이트
+                    # 안쪽 가장자리를 기준으로 잡아서, 화살표가 리드팀 포트레이트에 최소
+                    # 여백(min_margin)만 남기고 거의 붙게 한다.
+                    left_inner_edge = mid_x - pad - PORTRAIT_GAP_EXTRA_OFFSET
+                    right_inner_edge = mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
+                    min_margin = 1
+                    if gap > 0:
+                        arrow_box_x = left_inner_edge + min_margin
+                    else:
+                        arrow_box_x = right_inner_edge - min_margin - gap_badge_w
+
+                    arrow_tf = _write_textfile(f"roster_gap_arrow_{j}", arrow_char)
+                    num_tf = _write_textfile(f"roster_gap_num_{j}", gap_num_text)
+
+                    # 🛡️ [배경 박스 제거 - 화살표 글리프 자체를 색상화] 예전엔 배경
+                    # drawbox(색 배경+흰 글리프)였는데, 이제 배경 없이 화살표 글리프의
+                    # fontcolor 자체를 gap_color로 바꿔서 표현한다(숫자 텍스트와 동일한
+                    # 색상 판별 로직 재사용). gap_badge_w/arrow_box_x 등은 실제로 사각형을
+                    # 안 그려도 좌표 계산(화살표 중심 정렬, 숫자 시작 위치)에는 그대로
+                    # 쓰인다 - 지우면 그 계산들이 다 같이 깨진다.
+                    grid_parts.append(
+                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{arrow_tf}':"
+                        f"fontsize={GOLD_GAP_ARROW_FONT_SIZE}:fontcolor={gap_color}:"
+                        f"x='{arrow_box_x:.2f}+({gap_badge_w}-text_w)/2':"
+                        f"y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2':"
+                        f"enable='{grid_enable}'[vgap{j}arrow]")
+                    label = f"vgap{j}arrow"
+
+                    # 🛡️ [숫자 - 갭 정중앙 고정] 화살표가 이제 포트레이트 쪽에 붙어서
+                    # 화살표 기준 상대 위치로는 더 이상 안 맞다 - mid_x에 항상 고정하고
+                    # 자기 자신의 text_w로 가운데 정렬(방향 분기 필요 없음).
+                    num_x_expr = f"{mid_x:.2f}-text_w/2"
+                    grid_parts.append(
+                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{num_tf}':"
+                        f"fontsize={GOLD_GAP_NUMBER_FONT_SIZE}:fontcolor={gap_color}:"
+                        f"x='{num_x_expr}':y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2':"
+                        f"enable='{grid_enable}'[vgap{j}num]")
+                    label = f"vgap{j}num"
+
+            text_chain += "".join(grid_parts)
+            current_label = label
 
         if hud is not None:
-            # 🛡️ [여백 띠 안에 원본 비율 유지 배치] 배너 높이는 위에서 만든 하단 여백
-            # (margin_height)을 그대로 꽉 채우고, 폭은 panel_*.png 원본 종횡비를 유지하도록
-            # 실제 PNG 크기를 런타임에 읽어서 계산한다(하드코딩된 비율 상수가 원본과 어긋나
-            # 텍스트가 눌리던 이전 버전의 문제를 근본적으로 없앰 - PIL로 1920x120=16:1 확인됨).
-            # 가로는 캔버스 전체 폭 기준 중앙 정렬. min()으로 캔버스 폭을 넘지 않게 방어.
+            # 🛡️ [배너 위치 - 하단 통계 패널 전체를 시간대로 나눠 씀] 모듈 상수 주석 참고 -
+            # 원본 종횡비를 유지하며 패널 폭(캔버스 전체가 아니라 실측 42.7%)에 맞추고,
+            # 그 결과 높이가 패널 높이보다 크면 반대로 높이 기준으로 다시 맞춘다(방어적
+            # 클램프). 세로 가운데 정렬.
             with Image.open(HUD_BANNER_PNGS[hud["event_label"]]) as banner_im:
                 banner_native_w, banner_native_h = banner_im.size
-            banner_height = margin_height
-            banner_width = min(final_width, int(round(banner_height * banner_native_w / banner_native_h)))
-            x_start = (final_width - banner_width) // 2
-            y_start_visible = final_height - banner_height  # 여백 띠의 최상단 = 축소된 게임 화면 바로 아래
+            banner_area_y0 = panel_y0
+            banner_area_h = panel_h
+            banner_width = panel_w
+            banner_height = int(round(banner_width * banner_native_h / banner_native_w))
+            if banner_height > banner_area_h:
+                banner_height = banner_area_h
+                banner_width = int(round(banner_height * banner_native_w / banner_native_h))
+            x_start = panel_x0 + (panel_w - banner_width) // 2
+            y_start_visible = banner_area_y0 + (banner_area_h - banner_height) // 2
 
             hud_start, hud_end, slide = hud["start"], hud["end"], HUD_SLIDE_SEC
             banner_x = str(x_start)
@@ -973,11 +1624,11 @@ class KyvoHighlight(KyvoBaseCog):
 
             hud_chain = (
                 f";[{hud_panel_idx}:v]scale={banner_width}:{banner_height}[vhudscaled]"
-                f";[{video_base_label}][vhudscaled]overlay=x='{banner_x}':y='{panel_y}':"
+                f";[{current_label}][vhudscaled]overlay=x='{banner_x}':y='{panel_y}':"
                 f"enable='{hud_visible_window}'[vout]"
             )
         else:
-            hud_chain = ""
+            hud_chain = "" if current_label == "vout" else f";[{current_label}]copy[vout]"
 
         # ── 오디오 (화면 처리와 무관하게 그대로 유지) ──
         # 🛡️ amix duration=first는 "첫 번째로 나열된 스트림"의 길이만 본다 - 게임 오디오를
@@ -1008,14 +1659,28 @@ class KyvoHighlight(KyvoBaseCog):
         )
         full_audio = "".join(audio_parts)
 
-        filter_complex = f"{video_chain}{hud_chain};{full_audio}"
+        filter_complex = f"{video_chain}{text_chain}{hud_chain};{full_audio}"
+
+        # 🛡️ [파일로 넘기기 - 이번 라운드에서 새로 필요해짐, -filter_complex_script는
+        # deprecated] drawtext에 한글 텍스트(닉네임/"타워"/"킬" 등)가 들어가면서, Windows
+        # 에서 -filter_complex를 커맨드라인 인자로 그대로 넘기면 argv 인코딩 과정에서 한글이
+        # 깨지는 게 실측으로 확인됐다(ffmpeg가 받는 시점에 이미 깨진 바이트라 "Invalid
+        # argument" 에러). 첫 시도로 -filter_complex_script를 썼는데 이건 `ffmpeg -h full`
+        # 확인 결과 deprecated 옵션이라 이 ffmpeg 빌드에서 아예 안 먹혔다("Invalid argument")
+        # - 대체 문법 -/filter_complex(제네릭 "파일에서 옵션값 읽기" 문법, ffmpeg 문서에
+        # deprecated 안내로 명시된 후계)로 실제 렌더까지 성공하는 것까지 직접 확인했다(한글이
+        # 안 깨지고 정상 렌더됨). UTF-8로 직접 쓴 파일을 넘기므로 인코딩 문제 자체가 없고,
+        # 부가 효과로 필터그래프가 길어져도 OS 커맨드라인 길이 제한과 무관해진다.
+        filter_script_path = os.path.join(work_dir, "filter_complex.txt")
+        with open(filter_script_path, "w", encoding="utf-8") as f:
+            f.write(filter_complex)
 
         # 🛡️ crf 고정값 대신 total_duration에서 역산한 목표 비트레이트로 인코딩 -
         # 콘텐츠 복잡도/해상도와 무관하게 파일 크기가 항상 TARGET_OUTPUT_SIZE_MB 근처로
         # 수렴한다(디스코드 업로드 한도 대응). maxrate/bufsize로 순간적인 폭주만 눌러주고
         # 평균은 -b:v 그대로 나가게 하는 표준 단일 패스 VBV 제한 인코딩.
         cmd = [FFMPEG_EXE, "-y", *inputs,
-               "-filter_complex", filter_complex,
+               "-/filter_complex", filter_script_path,
                "-map", "[vout]", "-map", "[aout]",
                "-c:v", "libx264", "-preset", "veryfast",
                "-b:v", f"{int(target_video_kbps)}k",
@@ -1024,7 +1689,13 @@ class KyvoHighlight(KyvoBaseCog):
                "-c:a", "aac", "-b:a", f"{OUTPUT_AUDIO_BITRATE_KBPS}k",
                "-t", str(total_duration),
                out_mp4]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # 🛡️ [인코딩 명시 - 이번 라운드에서 새로 필요해짐] drawtext로 한글 텍스트(닉네임/
+        # "타워"/"킬" 등)가 -filter_complex 커맨드라인에 처음으로 들어가면서, text=True가
+        # 시스템 로케일(한국어 Windows는 cp949)로 stderr를 디코딩하려다 ffmpeg 출력 안의
+        # UTF-8 바이트를 못 읽어 UnicodeDecodeError로 죽는 게 실측으로 확인됐다(이전엔
+        # drawtext를 안 써서 커맨드라인에 한글이 없었어서 안 드러났던 잠재 버그) - 인코딩을
+        # UTF-8로 명시하고, 혹시 모를 비-UTF8 바이트는 에러 대신 대체 문자로 넘어간다.
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg 렌더링 실패:\n{result.stderr[-2000:]}")
 
@@ -1107,6 +1778,95 @@ class KyvoHighlight(KyvoBaseCog):
                 )})
         lines.sort(key=lambda l: l["event_index"])
         return lines
+
+    # ══════════════════════════════════════════════════════════
+    #  Data Dragon (Riot API 키/rate limiter와 무관한 별개의 정적 CDN)
+    # ══════════════════════════════════════════════════════════
+    @staticmethod
+    async def _download_and_cache_icon(session: aiohttp.ClientSession, url: str,
+                                        cache_dir: str, filename: str) -> str:
+        """URL을 받아 cache_dir/filename에 저장하고 경로를 반환하는 공통 로직(챔피언/아이템/
+        고정 오브젝트 아이콘이 전부 이 패턴을 공유) - 실패하면 예외를 그대로 던진다(호출부의
+        각 fetch 메서드가 자기 문맥에 맞는 로그를 남기고 None으로 변환하는 책임을 짐)."""
+        os.makedirs(cache_dir, exist_ok=True)
+        out_path = os.path.join(cache_dir, filename)
+        timeout = aiohttp.ClientTimeout(total=DDRAGON_HTTP_TIMEOUT_SECONDS)
+        async with session.get(url, timeout=timeout) as resp:
+            resp.raise_for_status()
+            data = await resp.read()
+        with open(out_path, "wb") as f:
+            f.write(data)
+        # 🛡️ [손상된 캐시 방지] 디스크에 쓴 뒤 실제로 열리는 이미지인지 한 번 검증한다 - 여기서
+        # 실패한 파일을 그대로 캐싱해두면 이후 모든 렌더가 같은 깨진 파일을 계속 재사용하게
+        # 되므로, 검증 실패 시 파일을 지우고 예외를 던져 다음 렌더에서 다시 시도하게 한다.
+        try:
+            with Image.open(out_path) as im:
+                im.verify()
+        except Exception:
+            os.remove(out_path)
+            raise
+        return out_path
+
+    async def _fetch_ddragon_version(self, session: aiohttp.ClientSession) -> str:
+        timeout = aiohttp.ClientTimeout(total=DDRAGON_HTTP_TIMEOUT_SECONDS)
+        async with session.get(DDRAGON_VERSIONS_URL, timeout=timeout) as resp:
+            resp.raise_for_status()
+            versions = await resp.json(content_type=None)
+        return versions[0]
+
+    async def _fetch_champion_icon(self, champion_id: str) -> str | None:
+        """챔피언 아이콘을 Data Dragon에서 받아 로컬에 캐싱하고 파일 경로를 반환한다.
+        실패하면(네트워크 문제, 알 수 없는 챔피언 id, 손상된 응답 등) 예외를 던지지 않고
+        None을 반환한다 - 호출부는 None이면 그냥 해당 참가자 행에 아이콘 없이 렌더링한다
+        (부가 기능이 핵심 파이프라인을 막으면 안 된다는 원칙 - mapping=None sentinel과
+        같은 철학)."""
+        try:
+            cached = glob.glob(os.path.join(CHAMPION_ICON_CACHE_DIR, f"*_{champion_id}.png"))
+            if cached:
+                return cached[0]
+            async with aiohttp.ClientSession() as session:
+                version = await self._fetch_ddragon_version(session)
+                icon_url = DDRAGON_ICON_URL_TEMPLATE.format(version=version, champion_id=champion_id)
+                return await self._download_and_cache_icon(
+                    session, icon_url, CHAMPION_ICON_CACHE_DIR, f"{version}_{champion_id}.png")
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Champion icon fetch failed (champion={champion_id}): "
+                  f"{type(e).__name__}: {e} - continuing without icon", flush=True)
+            return None
+
+    async def _fetch_item_icon(self, item_id: int) -> str | None:
+        """아이템 아이콘 - item_id=0(빈 슬롯)은 Data Dragon에 파일 자체가 없어서 요청 없이
+        바로 None(실패가 아니라 "표시할 게 없음"으로 취급)."""
+        if not item_id:
+            return None
+        try:
+            cached = glob.glob(os.path.join(ITEM_ICON_CACHE_DIR, f"*_{item_id}.png"))
+            if cached:
+                return cached[0]
+            async with aiohttp.ClientSession() as session:
+                version = await self._fetch_ddragon_version(session)
+                icon_url = DDRAGON_ITEM_ICON_URL_TEMPLATE.format(version=version, item_id=item_id)
+                return await self._download_and_cache_icon(
+                    session, icon_url, ITEM_ICON_CACHE_DIR, f"{version}_{item_id}.png")
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Item icon fetch failed (item_id={item_id}): "
+                  f"{type(e).__name__}: {e} - continuing without icon", flush=True)
+            return None
+
+    async def _fetch_static_icon(self, url: str, cache_name: str, cache_dir: str = STATIC_ICON_CACHE_DIR) -> str | None:
+        """패치 버전 조회가 필요 없는 고정 URL 아이콘(예: Community Dragon 타워/드래곤
+        아이콘)용 - 실패해도 None만 반환(위와 동일한 안전 원칙). cache_dir을 받게 해서
+        룬 아이콘처럼 파일명이 안 겹치게 별도 폴더가 필요한 경우도 재사용 가능."""
+        try:
+            cached_path = os.path.join(cache_dir, cache_name)
+            if os.path.exists(cached_path):
+                return cached_path
+            async with aiohttp.ClientSession() as session:
+                return await self._download_and_cache_icon(session, url, cache_dir, cache_name)
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Static icon fetch failed (url={url}): "
+                  f"{type(e).__name__}: {e} - continuing without icon", flush=True)
+            return None
 
     # ══════════════════════════════════════════════════════════
     #  Riot API (rate limit/재시도는 tier_verify 코그의 공유 리미터+로직을 그대로 재사용)
@@ -1372,6 +2132,72 @@ class KyvoHighlight(KyvoBaseCog):
         is_solo_kill = not selected[0]["assist_ids"]
         hud_event = "FIRST BLOOD" if is_first_blood else ("SOLO KILL" if is_solo_kill else None)
 
+        # 🛡️ [상단 2단 스코어바용 데이터 - 추가 Riot API 호출 없음] teams[].objectives의
+        # tower/champion/dragon과 participants[].goldEarned 합계 - 전부 이미 fetch된
+        # chosen에서만 뽑는다. 이 스코어보드는 FIRST BLOOD/SOLO KILL 여부(hud_event)와
+        # 무관하게 모든 클립에 항상 표시되는 상시 UI라서 hud_event가 None이어도 채운다.
+        team_objectives = {t["teamId"]: t.get("objectives", {}) for t in chosen["info"]["teams"]}
+        team100_gold = sum(p.get("goldEarned", 0) for p in chosen["info"]["participants"] if p.get("teamId") == 100)
+        team200_gold = sum(p.get("goldEarned", 0) for p in chosen["info"]["participants"] if p.get("teamId") == 200)
+        scoreboard = {
+            "team100_towers": team_objectives.get(100, {}).get("tower", {}).get("kills", 0),
+            "team200_towers": team_objectives.get(200, {}).get("tower", {}).get("kills", 0),
+            "team100_kills": team_objectives.get(100, {}).get("champion", {}).get("kills", 0),
+            "team200_kills": team_objectives.get(200, {}).get("champion", {}).get("kills", 0),
+            "team100_dragons": team_objectives.get(100, {}).get("dragon", {}).get("kills", 0),
+            "team200_dragons": team_objectives.get(200, {}).get("dragon", {}).get("kills", 0),
+            "team100_gold": team100_gold,
+            "team200_gold": team200_gold,
+            "game_time_ms": selected[0]["timestamp_ms"],
+        }
+
+        # 🛡️ [하단 포지션별 5행 그리드용 데이터] participants 10명 전원은 chosen에 이미 다
+        # fetch돼 있다(추가 Riot API 호출 없음). position(teamPosition)까지 같이 뽑아서
+        # _pair_roster_by_position()이 팀 간 매칭에 쓴다.
+        roster = []
+        for p in chosen["info"]["participants"]:
+            items = [p.get(f"item{i}", 0) for i in range(6)]
+            roster.append({
+                "participant_id": p["participantId"],
+                "team_id": p.get("teamId"),
+                "position": p.get("teamPosition") or None,
+                "champion": p["championName"],
+                "name": p.get("riotIdGameName") or p.get("summonerName") or "Unknown",
+                "kda": (p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)),
+                "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
+                "items": items,
+            })
+        team100_roster = [r for r in roster if r["team_id"] == 100]
+        team200_roster = [r for r in roster if r["team_id"] == 200]
+        roster_pairs = _pair_roster_by_position(team100_roster, team200_roster)
+
+        # 🛡️ [라인전 골드 격차 - timeline은 이미 fetch됨, 추가 Riot API 호출 없음]
+        # roster_pairs와 정확히 같은 순서로 정렬된 리스트를 만들어서 렌더 단계에서 인덱스만
+        # 맞춰 쓰면 되게 한다.
+        laning_gold_gaps = _compute_laning_gold_gaps(timeline, roster_pairs)
+
+        # 🛡️ [아이콘 전부 병렬 fetch] Data Dragon/Community Dragon 둘 다 Riot API 키/rate
+        # limiter와 무관한 별개 CDN이라 전부 동시에 요청해도 안전하다 - asyncio.gather로
+        # 한 번에 병렬화. item_id=0(빈 슬롯)은 _fetch_item_icon이 요청 자체를 안 보내고
+        # 즉시 None을 반환하므로 안전하게 그대로 넘겨도 된다. (스펠/룬 아이콘은 패널에서
+        # 제거되면서 이 fetch 자체도 삭제됨 - 더 이상 Data Dragon summoner.json/
+        # runesReforged.json 요청이 나가지 않는다.)
+        champion_task = asyncio.gather(*(self._fetch_champion_icon(r["champion"]) for r in roster))
+        item_tasks = [asyncio.gather(*(self._fetch_item_icon(item_id) for item_id in r["items"]))
+                      for r in roster]
+        tower_task = self._fetch_static_icon(CDRAGON_TOWER_ICON_URL, "tower.png")
+        dragon_task = self._fetch_static_icon(CDRAGON_DRAGON_ICON_URL, "dragon.png")
+
+        (champion_icons, tower_icon_path, dragon_icon_path,
+         *rest) = await asyncio.gather(champion_task, tower_task, dragon_task, *item_tasks)
+        n = len(roster)
+        item_icon_lists = rest[:n]
+        for r, icon_path, item_icon_paths in zip(roster, champion_icons, item_icon_lists):
+            r["icon_path"] = icon_path
+            r["item_icon_paths"] = item_icon_paths
+        scoreboard["tower_icon_path"] = tower_icon_path
+        scoreboard["dragon_icon_path"] = dragon_icon_path
+
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_scripting"))
         try:
             lines_raw = await self._generate_commentary(kills_with_names)
@@ -1495,6 +2321,11 @@ class KyvoHighlight(KyvoBaseCog):
         if hud_event is not None:
             schedule["hud"] = {"event_label": hud_event, "start": kill_t,
                                 "end": main_fact_start + main_fact_duration}
+        # 🛡️ 스코어바/로스터 그리드는 FIRST BLOOD/SOLO KILL 여부와 무관하게 항상 표시 - hud
+        # 키와 달리 조건 없이 매번 채운다.
+        schedule["scoreboard"] = scoreboard
+        schedule["roster_pairs"] = roster_pairs
+        schedule["laning_gold_gaps"] = laning_gold_gaps
 
         out_mp4 = os.path.join(work_dir, "highlight_final.mp4")
         try:
