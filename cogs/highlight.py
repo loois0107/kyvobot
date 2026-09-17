@@ -1367,29 +1367,38 @@ class KyvoHighlight(KyvoBaseCog):
             )
             label = "vs3"
 
-            # 🛡️ [상단 골드 격차 - "중앙 스코어 박스" 바로 아래에 독립 배지] 골드 표시(메인바)
-            # 바로 아래 서브바 높이 구간에, 리드 팀 골드 숫자와 같은 x축에 그 팀 색상의
-            # 작은 배지로 분리해서 그린다. 리드가 없으면(동률) 아예 안 그린다 - 기존에도
-            # 리드 팀에만 표시하던 로직 그대로 유지.
+            # 🛡️ [상단 골드 격차 - 하단 패널 골드갭과 스타일 통일] 배경 박스를 없애고
+            # 숫자 자체를 팀 색상으로 칠하는 방식으로 바꿨다(하단 패널 라인전 골드갭과
+            # 동일한 디자인 언어 - 배경 없는 색상 글리프, 테두리 없음, 플랫 컬러 대비).
+            # 숫자는 리드 팀 골드 숫자 바로 아래(gap_leader_x)에 그대로 고정하고, 화살표는
+            # 그 옆(중심에서 더 바깥쪽)에 작게 붙인다 - 숫자 위치 자체는 바꾸지 않는다.
             if gold_diff != 0:
                 gap_leader_x = gold_x_l if gold_diff > 0 else gold_x_r
                 gap_badge_color = TEAM_BLUE_COLOR if gold_diff > 0 else TEAM_RED_COLOR
+                arrow_char = "◀" if gold_diff > 0 else "▶"
                 gap_badge_text = f"+{gap_k:.1f}k"
                 gap_badge_font_size = max(8, int(round(top_sub_h * 0.6)))
-                gap_badge_h = max(10, int(round(top_sub_h * 0.85)))
-                gap_badge_w = max(gap_badge_h * 2, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62)))
-                gap_badge_x = gap_leader_x - gap_badge_w / 2
-                gap_badge_y = top_main_h + (top_sub_h - gap_badge_h) / 2
+                gap_arrow_font_size = max(6, int(round(gap_badge_font_size * 0.75)))
+                gap_num_half_w = max(10, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62))) / 2
+                gap_arrow_gap = 4
+
                 gap_badge_tf = _write_textfile("top_gold_gap", gap_badge_text)
+                gap_arrow_tf = _write_textfile("top_gold_gap_arrow", arrow_char)
+
+                if gold_diff > 0:
+                    gap_arrow_x = f"{gap_leader_x:.2f}-{gap_num_half_w:.2f}-{gap_arrow_gap}-text_w"
+                else:
+                    gap_arrow_x = f"{gap_leader_x:.2f}+{gap_num_half_w:.2f}+{gap_arrow_gap}"
+
                 text_chain += (
-                    f";[{label}]drawbox=x={gap_badge_x:.2f}:y={gap_badge_y:.2f}:w={gap_badge_w}:h={gap_badge_h}:"
-                    f"color={gap_badge_color}@0.9:t=fill[vtgapbg]"
-                    f";[vtgapbg]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
-                    f"fontsize={gap_badge_font_size}:fontcolor=white:bordercolor={GRID_TEXT_BORDER_COLOR}:borderw=1:"
-                    f"x='{gap_badge_x:.2f}+({gap_badge_w}-text_w)/2':"
-                    f"y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2'[vtgaptxt]"
+                    f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
+                    f"fontsize={gap_badge_font_size}:fontcolor={gap_badge_color}:"
+                    f"x='{gap_leader_x:.2f}-text_w/2':y='{sub_text_y_expr}'[vtgaptxt]"
+                    f";[vtgaptxt]drawtext=fontfile='{font_kr_black}':textfile='{gap_arrow_tf}':"
+                    f"fontsize={gap_arrow_font_size}:fontcolor={gap_badge_color}:"
+                    f"x='{gap_arrow_x}':y='{sub_text_y_expr}'[vtgaparrow]"
                 )
-                label = "vtgaptxt"
+                label = "vtgaparrow"
 
             current_label = label
 
