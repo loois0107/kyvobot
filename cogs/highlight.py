@@ -540,7 +540,13 @@ ITEM_SLOT_BORDER_COLOR = "#2D274D"
 # 이미 익숙한 "강조 테두리" 색이라 이걸로 선택.
 CHAMPION_FRAME_COLOR = "#C89B3C"
 GRID_TEXT_BORDER_COLOR = "black"
-GRID_TEXT_BORDER_W = 2
+# 🛡️ [테두리 완전 제거 - 0px] 2px->4px로 키웠다가, 실제 매치 데이터로 0px/1px/4px를
+# 나란히 비교 렌더해서 직접 판단한 결과 0px(테두리 없음)가 실제 LCK 느낌에 가장
+# 가깝다고 확인됨 - 배경(어두운 남색)과 텍스트 색(CS=크림노랑, KDA=흰색) 대비만으로
+# 충분히 구분되니 borderw=0으로 되돌린다. bordercolor=/borderw= 옵션 자체는 그대로 두고
+# (drawtext에서 borderw=0은 시각적으로 "테두리 없음"과 동일 - 굳이 옵션을 다 빼는 것보다
+# 값 하나만 바꾸는 쪽이 더 간단해서 이 방식을 택함) 값만 0으로.
+GRID_TEXT_BORDER_W = 0
 # 🛡️ [CS 텍스트 색상 분리] KDA와 똑같이 "white" 리터럴을 그대로 복붙해뒀던 걸 CS만
 # 별도 상수로 분리 - KDA(fontcolor=white, 그대로 유지)와 서로 독립적으로 바꿀 수 있음을
 # 명시적으로 보여준다. 옅은 크림빛 노랑으로 CS와 KDA를 시각적으로 구분.
@@ -1294,19 +1300,23 @@ class KyvoHighlight(KyvoBaseCog):
             kill100_tf = _write_textfile("kill100", str(scoreboard["team100_kills"]))
             kill200_tf = _write_textfile("kill200", str(scoreboard["team200_kills"]))
 
+            # 🛡️ [메인바 6개 - 테두리로 입체감 추가] 지금까지 순수 흰색 평면 텍스트라
+            # 배경 그라데이션 위에서 다소 밋밋했다 - 하단 패널 CS/KDA에 이미 쓰는
+            # GRID_TEXT_BORDER_COLOR/W와 동일한 테두리를 추가한다(그림자는 제거됨).
+            top_text_style = f"bordercolor={GRID_TEXT_BORDER_COLOR}:borderw={GRID_TEXT_BORDER_W}"
             text_chain += (
                 f";[{label}]drawtext=fontfile='{font_kr}':textfile='{tower100_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x={tower_num_x_l}:y='{main_text_y_expr}'[vm1]"
+                f"fontcolor=white:{top_text_style}:x={tower_num_x_l}:y='{main_text_y_expr}'[vm1]"
                 f";[vm1]drawtext=fontfile='{font_kr}':textfile='{tower200_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x='{tower_num_x_r}':y='{main_text_y_expr}'[vm2]"
+                f"fontcolor=white:{top_text_style}:x='{tower_num_x_r}':y='{main_text_y_expr}'[vm2]"
                 f";[vm2]drawtext=fontfile='{font_kr}':textfile='{gold100_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x='{int(round(gold_x_l))}-text_w/2':y='{main_text_y_expr}'[vm3]"
+                f"fontcolor=white:{top_text_style}:x='{int(round(gold_x_l))}-text_w/2':y='{main_text_y_expr}'[vm3]"
                 f";[vm3]drawtext=fontfile='{font_kr}':textfile='{gold200_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x='{int(round(gold_x_r))}-text_w/2':y='{main_text_y_expr}'[vm4]"
+                f"fontcolor=white:{top_text_style}:x='{int(round(gold_x_r))}-text_w/2':y='{main_text_y_expr}'[vm4]"
                 f";[vm4]drawtext=fontfile='{font_kr}':textfile='{kill100_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x='{int(round(kill_x_l))}-text_w/2':y='{main_text_y_expr}'[vm5]"
+                f"fontcolor=white:{top_text_style}:x='{int(round(kill_x_l))}-text_w/2':y='{main_text_y_expr}'[vm5]"
                 f";[vm5]drawtext=fontfile='{font_kr}':textfile='{kill200_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:x='{int(round(kill_x_r))}-text_w/2':y='{main_text_y_expr}'[vm6]"
+                f"fontcolor=white:{top_text_style}:x='{int(round(kill_x_r))}-text_w/2':y='{main_text_y_expr}'[vm6]"
             )
             label = "vm6"
 
@@ -1349,11 +1359,11 @@ class KyvoHighlight(KyvoBaseCog):
 
             text_chain += (
                 f";[{label}]drawtext=fontfile='{font_kr}':textfile='{dragon100_tf}':fontsize={sub_font_size}:"
-                f"fontcolor={TEAM_BLUE_COLOR}:x='{dragon100_num_x}':y='{sub_text_y_expr}'[vs1]"
+                f"fontcolor={TEAM_BLUE_COLOR}:{top_text_style}:x='{dragon100_num_x}':y='{sub_text_y_expr}'[vs1]"
                 f";[vs1]drawtext=fontfile='{font_kr}':textfile='{dragon200_tf}':fontsize={sub_font_size}:"
-                f"fontcolor={TEAM_RED_COLOR}:x='{dragon200_num_x}':y='{sub_text_y_expr}'[vs2]"
+                f"fontcolor={TEAM_RED_COLOR}:{top_text_style}:x='{dragon200_num_x}':y='{sub_text_y_expr}'[vs2]"
                 f";[vs2]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
-                f"fontcolor=white:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
+                f"fontcolor=white:{top_text_style}:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
             label = "vs3"
 
