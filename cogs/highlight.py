@@ -1441,6 +1441,12 @@ class KyvoHighlight(KyvoBaseCog):
             panel_x0 = (final_width - panel_w) // 2
             panel_y0 = int(round(final_height * BOTTOM_PANEL_Y_START_RATIO))
             panel_half_w = panel_w / 2
+            # 🛡️ [패널 전용 중심점 신설] mid_x(=final_width/2, 캔버스 중심)는 상단
+            # 메인바/서브바가 여전히 캔버스 전체 폭 기준 대칭이라 그대로 둬야 한다 - 대신
+            # 하단 패널 전용 중심점을 따로 둔다. panel_x0가 정수 floor division이라 mid_x와
+            # 완전히 같지 않을 수 있음(이번 해상도 실측: 0.5px 차이) - 패널 내부 요소는
+            # 패널 자신의 중심(panel_mid_x)을 기준으로 삼는 게 개념적으로 맞다.
+            panel_mid_x = panel_x0 + panel_w / 2
             row_h_raw = panel_h / BOTTOM_ROWS
             rows_y0 = panel_y0
 
@@ -1463,6 +1469,12 @@ class KyvoHighlight(KyvoBaseCog):
             # ~26%)은 패널 좌우에 빈 공간을 남겼다(조사로 확인됨) - 포트레이트를 침범하지
             # 않는 상한인 portrait_size와 완전히 동일한 크기까지 올려서 그 공간을 채운다.
             item_size = portrait_size
+            # 🛡️ [테두리 두께 상수화] 기존엔 t=1 리터럴이었다 - portrait_size/item_size에
+            # 비례하는 값으로 바꿔서 해상도가 달라져도 같은 상대적 두께를 유지한다(이번
+            # 테스트 해상도(portrait_size=23)에서는 계산해도 여전히 1px이라 시각적 차이 없음,
+            # 계산으로 확인됨).
+            champion_frame_border_w = max(1, round(portrait_size * 0.04))
+            item_slot_border_w = max(1, round(item_size * 0.04))
             pad = max(2, int(round(row_h_raw * 0.06)))
             # 🛡️ [텍스트 가독성 1순위 - 크기 대폭 확대] 기존 0.26 비율은 실측 row_h_raw
             # (~27~30px)에서 폰트 크기가 8px까지 내려가 거의 안 보였다(하단 텍스트 가독성
@@ -1512,8 +1524,8 @@ class KyvoHighlight(KyvoBaseCog):
                     tag = f"{side}{j}"
                     pid = r["participant_id"]
                     if side == "L":
-                        portrait_x = mid_x - portrait_zone_w + pad - PORTRAIT_GAP_EXTRA_OFFSET
-                        cs_zone_x1 = mid_x - portrait_zone_w - PORTRAIT_GAP_EXTRA_OFFSET
+                        portrait_x = panel_mid_x - portrait_zone_w + pad - PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_zone_x1 = panel_mid_x - portrait_zone_w - PORTRAIT_GAP_EXTRA_OFFSET
                         cs_x_expr = f"{int(round(cs_zone_x1 - pad))}-text_w"
                         kda_zone_x1 = cs_zone_x1 - cs_zone_w - cs_kda_gap
                         kda_x_expr = f"{int(round(kda_zone_x1 - pad))}-text_w"
@@ -1521,8 +1533,8 @@ class KyvoHighlight(KyvoBaseCog):
                         items_zone_x0 = items_zone_x1 - items_zone_w
                         item_xs = [items_zone_x0 + pad + k * (item_size + item_gap) for k in range(6)]
                     else:
-                        portrait_x = mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
-                        cs_zone_x0 = mid_x + portrait_zone_w + PORTRAIT_GAP_EXTRA_OFFSET
+                        portrait_x = panel_mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
+                        cs_zone_x0 = panel_mid_x + portrait_zone_w + PORTRAIT_GAP_EXTRA_OFFSET
                         cs_x_expr = str(int(round(cs_zone_x0 + pad)))
                         kda_zone_x0 = cs_zone_x0 + cs_zone_w + cs_kda_gap
                         kda_x_expr = str(int(round(kda_zone_x0 + pad)))
@@ -1542,7 +1554,7 @@ class KyvoHighlight(KyvoBaseCog):
                         # 얹힌 채로 보인다(먼저 그리면 오버레이가 그대로 덮어버림).
                         grid_parts.append(
                             f";[{label}]drawbox=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
-                            f"w={portrait_size}:h={portrait_size}:color={CHAMPION_FRAME_COLOR}:t=1:"
+                            f"w={portrait_size}:h={portrait_size}:color={CHAMPION_FRAME_COLOR}:t={champion_frame_border_w}:"
                             f"enable='{grid_enable}'[vr{tag}pf]")
                         label = f"vr{tag}pf"
 
@@ -1570,7 +1582,7 @@ class KyvoHighlight(KyvoBaseCog):
                     for k in range(6):
                         grid_parts.append(
                             f";[{label}]drawbox=x={int(round(item_xs[k]))}:y={item_y:.2f}:"
-                            f"w={item_size}:h={item_size}:color={ITEM_SLOT_BORDER_COLOR}:t=1:"
+                            f"w={item_size}:h={item_size}:color={ITEM_SLOT_BORDER_COLOR}:t={item_slot_border_w}:"
                             f"enable='{grid_enable}'[vr{tag}slot{k}]")
                         label = f"vr{tag}slot{k}"
                         item_idx = item_idx_list[k] if k < len(item_idx_list) else None
@@ -1582,7 +1594,7 @@ class KyvoHighlight(KyvoBaseCog):
                             label = f"vr{tag}i{k}"
 
                     if j > 0:
-                        divider_x0 = panel_x0 if side == "L" else int(round(mid_x))
+                        divider_x0 = panel_x0 if side == "L" else int(round(panel_mid_x))
                         grid_parts.append(
                             f";[{label}]drawbox=x={divider_x0}:y={int(round(row_y0))}:"
                             f"w={int(round(panel_half_w))}:h=1:color={ROSTER_DIVIDER_COLOR}:t=fill:"
@@ -1592,7 +1604,7 @@ class KyvoHighlight(KyvoBaseCog):
                 # 🛡️ [라인전 골드 격차 배지 - 화살표는 포트레이트에 밀착, 숫자는 갭
                 # 정중앙 고정] 화살표(배경 없는 색상 글리프)와 숫자(팀 색상 텍스트)가 이제
                 # 서로 독립된 기준점을 쓴다 - 화살표는 리드팀 포트레이트 안쪽 가장자리에
-                # min_margin만 남기고 붙고, 숫자는 항상 mid_x 중앙(자기 text_w로 셀프
+                # min_margin만 남기고 붙고, 숫자는 항상 panel_mid_x 중앙(자기 text_w로 셀프
                 # 정렬)에 고정된다. 둘이 물리적으로 떨어지게 되므로, 숫자 폭이 큰 극단값
                 # 에서 화살표 쪽을 침범하지 않는지는 계산+실측으로 별도 확인함.
                 gap = laning_gold_gaps[j] if laning_gold_gaps and j < len(laning_gold_gaps) else None
@@ -1608,8 +1620,8 @@ class KyvoHighlight(KyvoBaseCog):
                     # 🛡️ [화살표 - 포트레이트 밀착] 고정 클러스터 경계 대신 실제 포트레이트
                     # 안쪽 가장자리를 기준으로 잡아서, 화살표가 리드팀 포트레이트에 최소
                     # 여백(min_margin)만 남기고 거의 붙게 한다.
-                    left_inner_edge = mid_x - pad - PORTRAIT_GAP_EXTRA_OFFSET
-                    right_inner_edge = mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
+                    left_inner_edge = panel_mid_x - pad - PORTRAIT_GAP_EXTRA_OFFSET
+                    right_inner_edge = panel_mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
                     min_margin = 1
                     if gap > 0:
                         arrow_box_x = left_inner_edge + min_margin
@@ -1634,9 +1646,9 @@ class KyvoHighlight(KyvoBaseCog):
                     label = f"vgap{j}arrow"
 
                     # 🛡️ [숫자 - 갭 정중앙 고정] 화살표가 이제 포트레이트 쪽에 붙어서
-                    # 화살표 기준 상대 위치로는 더 이상 안 맞다 - mid_x에 항상 고정하고
+                    # 화살표 기준 상대 위치로는 더 이상 안 맞다 - panel_mid_x에 항상 고정하고
                     # 자기 자신의 text_w로 가운데 정렬(방향 분기 필요 없음).
-                    num_x_expr = f"{mid_x:.2f}-text_w/2"
+                    num_x_expr = f"{panel_mid_x:.2f}-text_w/2"
                     grid_parts.append(
                         f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{num_tf}':"
                         f"fontsize={GOLD_GAP_NUMBER_FONT_SIZE}:fontcolor={gap_color}:"
