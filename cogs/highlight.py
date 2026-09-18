@@ -268,12 +268,17 @@ PRE_BUILDUP_TEXT = {
 # buildup1_*.wav("어어?!" 계열, Main 목소리) 정적 풀이 이 구조 재설계 전에 만들어져 있던 걸
 # 그대로 재사용한다(새 TTS 없음). 파일이 이미 짧아서(0.8~1.5초) "짧게"라는 요구사항도 그대로
 # 충족.
-# 🛡️ [buildup1_b.wav 제외] "어?! 뭔가...?!" 계열보다 "어어?!" 계열을 우선 쓰라는 요청으로,
-# 풀을 buildup1_a.wav 하나로만 좁혔다(풀에 하나뿐이라 "우선"이 곧 "유일"). buildup1_b.wav
-# 파일 자체는 디스크에 남아있지만 더는 참조되지 않는다.
-EOEO_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_a.wav")))
+# 🛡️ [풀 재확장 - "어어?!" 계열 안에서만] 예전엔 "어?! 뭔가...?!" 계열(구 buildup1_b.wav)
+# 대신 "어어?!" 계열만 쓰라는 요청으로 buildup1_a.wav 하나로 좁혔었다 - 그 구 buildup1_b.wav
+# 파일은 이름 충돌을 피해 legacy_unused_buildup1_b.wav로 옮겨두고(내용은 그대로 보관,
+# "buildup1_"로 시작하지 않아서 아래 와일드카드에 다시 안 잡힘) buildup1_b.wav/
+# buildup1_c.wav 자리에 "어어?!" 계열(모음 개수만 변주) 신규 녹음을 채웠다. 이제 다시
+# buildup1_*.wav로 넓혀서 3개(a/b/c) 전부 잡는다.
+EOEO_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_*.wav")))
 EOEO_TEXT = {
     "buildup1_a.wav": "어어?!",
+    "buildup1_b.wav": "어" * 3 + "?!",  # 0.88s, 1회 시도로 무음/깊은 딥 없음 통과
+    "buildup1_c.wav": "어" * 4 + "?!",  # 0.96s, 1회 시도로 무음/깊은 딥 없음 통과
 }
 # 🛡️ [앵커링 기준 = 클립 시작(t=0), kill_t 역산 아님] 처음엔 "0단계(킬) 직전에 끝나도록"
 # kill_t에서 거꾸로 역산했는데, 실제로 들어보니 "영상 시작하자마자" 나와야 한다는 요구와
