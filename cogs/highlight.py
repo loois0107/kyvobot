@@ -517,6 +517,12 @@ OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
 TOP_MAIN_BAR_HEIGHT_RATIO = 100 / 1080
 TOP_SUB_BAR_HEIGHT_RATIO = 27 / 1080
 TOP_SUB_BAR_X_RATIO = (490 / 1920, 1429 / 1920)
+# 🛡️ [메인바 폭 65%로 축소 - 서브바와 완전히 독립된 별개 변수] 메인바를 화면 전체 폭이
+# 아니라 중앙 65%짜리 좁은 바로 좁힌다. 서브바는 이미 자기만의 폭(TOP_SUB_BAR_X_RATIO,
+# 48.8%)을 쓰고 있고 이번 변경과 전혀 무관 - bar_x0/x1/bar_mid_x/bar_half_w는 렌더
+# 함수 안에서 이 비율로 새로 계산하는 독립 변수이고, 서브바가 쓰는 mid_x/half_w는
+# 그대로 final_width 기준을 유지한다(지난 panel_mid_x 분리와 동일한 패턴).
+MAIN_BAR_WIDTH_RATIO = 0.65
 
 # 하단 통계 패널 - 실측 좌표 그대로, 중앙 정렬. 헤더 띠는 여전히 범위 밖(5단계와 동일하게
 # 180px 전체를 5행에만 씀).
@@ -1251,6 +1257,14 @@ class KyvoHighlight(KyvoBaseCog):
             font_kr_black = _escape_ffmpeg_path(SCOREBAR_FONT_KR_BLACK)
             mid_x = final_width / 2
             half_w = mid_x
+            # 🛡️ [메인바 전용 좁은 바 좌표 - mid_x/half_w와 완전히 분리] 서브바(dl_x/dr_x,
+            # dragon100_num_x 등)는 여전히 mid_x/half_w(화면 전체 중심)를 그대로 참조한다 -
+            # 이 블록은 절대 건드리지 않는다. 메인바 요소(타워/골드/킬)만 이 새 변수로
+            # 옮긴다.
+            bar_x0 = final_width * (1 - MAIN_BAR_WIDTH_RATIO) / 2
+            bar_x1 = final_width - bar_x0
+            bar_mid_x = (bar_x0 + bar_x1) / 2
+            bar_half_w = (bar_x1 - bar_x0) / 2
 
             # 🛡️ [text= 대신 textfile= - 실측으로 드러난 필수 사항] 처음엔 text='...'로 한글을
             # 필터 문자열에 직접 박아 넣었는데, 실제 ffmpeg 렌더에서 "Failed to set value ...
@@ -1280,12 +1294,12 @@ class KyvoHighlight(KyvoBaseCog):
             TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.08, 0.42, 0.75
             main_text_y_expr = f"({top_main_h}-text_h)/2"
 
-            tower_x_l = half_w * TOWER_FRAC
-            tower_x_r = final_width - half_w * TOWER_FRAC
-            gold_x_l = half_w * GOLD_FRAC
-            gold_x_r = final_width - half_w * GOLD_FRAC
-            kill_x_l = half_w * KILL_FRAC
-            kill_x_r = final_width - half_w * KILL_FRAC
+            tower_x_l = bar_x0 + bar_half_w * TOWER_FRAC
+            tower_x_r = bar_x1 - bar_half_w * TOWER_FRAC
+            gold_x_l = bar_x0 + bar_half_w * GOLD_FRAC
+            gold_x_r = bar_x1 - bar_half_w * GOLD_FRAC
+            kill_x_l = bar_x0 + bar_half_w * KILL_FRAC
+            kill_x_r = bar_x1 - bar_half_w * KILL_FRAC
 
             if tower_icon_idx is not None:
                 icon_y = (top_main_h - top_icon_size) / 2
