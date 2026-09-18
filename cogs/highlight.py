@@ -316,6 +316,8 @@ HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_*.wav")))
 SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
 MAIN_EXPLODE_TEXT = {
     "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.52s, 무음/깊은 딥 없음(정밀 기준 통과)
+    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.44s, 1회 시도로 무음/깊은 딥 없음 통과
+    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.52s, 1회 시도로 무음/깊은 딥 없음 통과
 }
 HYPE_EXPLODE_TEXT = {
     "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, 무음/깊은 딥 없음(정밀 기준 통과)
