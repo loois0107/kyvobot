@@ -485,6 +485,28 @@ DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
 # 리스크.
 CDRAGON_TOWER_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/tower.png"
 CDRAGON_DRAGON_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/scoreboard/_dragon.png"
+# 🛡️ [전령/바론/공허유충 아이콘 - 직접 HTTP HEAD로 200/image-png 확인한 경로만 사용]
+# 전령은 scoreboard/(드래곤과 같은 디렉토리), 바론/공허유충(그럽)은 minimap/icons/(타워와
+# 같은 디렉토리)에 있다 - 실제로 존재하는 파일명 조합만 골랐다(예: _horde.png는 404).
+CDRAGON_RIFTHERALD_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/scoreboard/_riftherald.png"
+CDRAGON_BARON_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/baron.png"
+CDRAGON_HORDE_ICON_URL = "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/grub.png"
+# 🛡️ [드래곤 속성별 아이콘 - Riot monsterSubType -> CDragon 파일명 매핑] 서로 다른 명명
+# 체계를 쓴다(Riot=원소 이름 그대로, CDragon=신화적 이름) - HTTP HEAD로 7종 전부 200/
+# image-png 확인함(minimap/icons/dragon_<name>.png 패턴, tower/baron과 같은 디렉토리).
+DRAGON_SUBTYPE_TO_CDRAGON_NAME = {
+    "FIRE_DRAGON": "infernal",
+    "WATER_DRAGON": "ocean",
+    "EARTH_DRAGON": "mountain",
+    "AIR_DRAGON": "cloud",
+    "CHEMTECH_DRAGON": "chemtech",
+    "HEXTECH_DRAGON": "hextech",
+    "ELDER_DRAGON": "elder",
+}
+CDRAGON_DRAGON_VARIANT_ICON_URL_TEMPLATE = (
+    "https://raw.communitydragon.org/latest/game/assets/ux/minimap/icons/dragon_{name}.png"
+)
+DRAGON_SEQUENCE_MAX = 4  # 최근 4마리만 표시(그 이상이면 오래된 것부터 잘림)
 STATIC_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "static_icons_cache")
 
 # 🛡️ [6단계 - 미리캔버스 완성 배경(overlay_frame_v2.png)으로 drawbox 전면 교체] 5단계는
@@ -881,6 +903,21 @@ def _compute_laning_gold_gaps(timeline: dict, roster_pairs: list[tuple[dict | No
     return gaps
 
 
+def _extract_dragon_sequence(timeline: dict, team_id: int, limit: int = DRAGON_SEQUENCE_MAX) -> list[str]:
+    """timeline의 frames[].events[]에서 monsterType=="DRAGON"이고 killerTeamId==team_id인
+    이벤트를 시간순(frames 자체가 이미 시간순이라 재정렬 불필요)으로 뽑아 monsterSubType
+    리스트로 반환한다(순수 함수). 같은 속성이 중복 등장할 수 있다(예: WATER_DRAGON이 두
+    번). limit개를 넘으면 가장 오래된 것부터 잘라내고 최근 것만 남긴다."""
+    subtypes = [
+        e.get("monsterSubType")
+        for fr in timeline["info"]["frames"]
+        for e in fr.get("events", [])
+        if e.get("type") == "ELITE_MONSTER_KILL" and e.get("monsterType") == "DRAGON"
+        and e.get("killerTeamId") == team_id
+    ]
+    return subtypes[-limit:] if limit else subtypes
+
+
 def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
     for md in matches_detail:
         info = md["info"]
@@ -1201,6 +1238,35 @@ class KyvoHighlight(KyvoBaseCog):
             inputs += ["-i", scoreboard_for_input["dragon_icon_path"]]
             dragon_icon_idx = next_input_idx
             next_input_idx += 1
+        riftherald_icon_idx = None
+        if scoreboard_for_input.get("riftherald_icon_path"):
+            inputs += ["-i", scoreboard_for_input["riftherald_icon_path"]]
+            riftherald_icon_idx = next_input_idx
+            next_input_idx += 1
+        baron_icon_idx = None
+        if scoreboard_for_input.get("baron_icon_path"):
+            inputs += ["-i", scoreboard_for_input["baron_icon_path"]]
+            baron_icon_idx = next_input_idx
+            next_input_idx += 1
+        horde_icon_idx = None
+        if scoreboard_for_input.get("horde_icon_path"):
+            inputs += ["-i", scoreboard_for_input["horde_icon_path"]]
+            horde_icon_idx = next_input_idx
+            next_input_idx += 1
+
+        # 🛡️ [드래곤 시퀀스 - 팀별 가변 개수 입력] 같은 파일 경로(중복 속성)가 여러 번
+        # 나와도 그냥 각각 별도 -i로 추가한다 - 최대 4개×2팀=8개뿐이라 비용 무시 가능한
+        # 수준이고, ffmpeg가 같은 파일을 여러 스트림으로 여는 것도 문제없다.
+        team100_dragon_icon_idxs = []
+        for path in scoreboard_for_input.get("team100_dragon_icon_paths") or []:
+            inputs += ["-i", path]
+            team100_dragon_icon_idxs.append(next_input_idx)
+            next_input_idx += 1
+        team200_dragon_icon_idxs = []
+        for path in scoreboard_for_input.get("team200_dragon_icon_paths") or []:
+            inputs += ["-i", path]
+            team200_dragon_icon_idxs.append(next_input_idx)
+            next_input_idx += 1
 
         # ── 화면 처리 (해설은 음성 전용 - 화면에 텍스트를 그리지 않는다. 스코어바/KDA/HUD
         # 오버레이는 예외 - 오디오와 무관하게 화면에 그리는 요소들) ──
@@ -1405,7 +1471,13 @@ class KyvoHighlight(KyvoBaseCog):
             sub_x0 = int(round(final_width * TOP_SUB_BAR_X_RATIO[0]))
             sub_x1 = int(round(final_width * TOP_SUB_BAR_X_RATIO[1]))
             sub_font_size = max(8, int(round(top_sub_h * 0.55)))
-            sub_icon_size = max(6, int(round(top_sub_h * 0.75)))
+            # 🛡️ [오브젝트 스택 확대 - 시간 텍스트와 폰트 변수 분리] sub_font_size는
+            # time_text가 그대로 쓰고 있어서(아래 vs3), 이 값 자체를 바꾸면 시간 텍스트도
+            # 같이 커진다("건드리지 마" 지시 위반) - 그래서 오브젝트 숫자 전용
+            # obj_font_size를 새로 둔다. sub_icon_size는 오브젝트 스택에서만 쓰여서
+            # (time_text엔 아이콘이 없음) 직접 바꿔도 안전하다.
+            sub_icon_size = top_sub_h
+            obj_font_size = max(8, int(round(top_sub_h * 0.75)))
             sub_text_y_expr = f"{top_main_h}+({top_sub_h}-text_h)/2"
             dragon_offset = (sub_x1 - sub_x0) / 2 * 0.3
 
@@ -1414,32 +1486,81 @@ class KyvoHighlight(KyvoBaseCog):
             # 깨진다(fontfile의 드라이브 콜론과 같은 문제) - _escape_drawtext_text로 이스케이프.
             time_text = _escape_drawtext_text(f"{gm // 60:02d}:{gm % 60:02d}")
 
-            if dragon_icon_idx is not None:
-                d_icon_y = top_main_h + (top_sub_h - sub_icon_size) / 2
-                dl_x = mid_x - dragon_offset - sub_icon_size
-                dr_x = mid_x + dragon_offset
+            # 🛡️ [드래곤 - 누적 숫자 대신 시간순 속성 아이콘 나열] 드래곤이 이제 "메인"
+            # 요소라 아이콘 크기(sub_icon_size)는 그대로 유지한다. 팀별 리스트(이미 최근
+            # DRAGON_SEQUENCE_MAX개로 잘려서 시간순 - _extract_dragon_sequence 참고)를
+            # 그대로 순서대로 그린다: 리스트의 앞(오래된 것)을 안쪽(mid_x에 가까움)에,
+            # 뒤(최근 것)일수록 바깥쪽에 배치한다 - "쌓여가는" 느낌. 숫자는 안 그린다(0마리인
+            # 팀은 그냥 빈 자리로 넘어간다 - 아이콘이 없으니 자동으로 그렇게 됨).
+            DRAGON_ICON_GAP = 3
+            d_icon_y = top_main_h + (top_sub_h - sub_icon_size) / 2
+            cursor_l = dragon_offset
+            for i, icon_idx in enumerate(team100_dragon_icon_idxs):
+                icon_x = mid_x - cursor_l - sub_icon_size
                 text_chain += (
-                    f";[{dragon_icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgL]"
-                    f";[{label}][vdgL]overlay=x={int(round(dl_x))}:y={d_icon_y:.2f}[vd1]"
-                    f";[{dragon_icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgR]"
-                    f";[vd1][vdgR]overlay=x={int(round(dr_x))}:y={d_icon_y:.2f}[vd2]"
+                    f";[{icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgL{i}]"
+                    f";[{label}][vdgL{i}]overlay=x={int(round(icon_x))}:y={d_icon_y:.2f}[vdgL{i}o]"
                 )
-                label = "vd2"
-                dragon100_num_x = f"{int(round(dl_x - 4))}-text_w"
-                dragon200_num_x = str(int(round(dr_x + sub_icon_size + 4)))
-            else:
-                dragon100_num_x = f"{int(round(mid_x - dragon_offset))}-text_w"
-                dragon200_num_x = str(int(round(mid_x + dragon_offset)))
+                label = f"vdgL{i}o"
+                cursor_l += sub_icon_size + DRAGON_ICON_GAP
+            cursor_r = dragon_offset
+            for i, icon_idx in enumerate(team200_dragon_icon_idxs):
+                icon_x = mid_x + cursor_r
+                text_chain += (
+                    f";[{icon_idx}:v]scale={sub_icon_size}:{sub_icon_size}[vdgR{i}]"
+                    f";[{label}][vdgR{i}]overlay=x={int(round(icon_x))}:y={d_icon_y:.2f}[vdgR{i}o]"
+                )
+                label = f"vdgR{i}o"
+                cursor_r += sub_icon_size + DRAGON_ICON_GAP
 
-            dragon100_tf = _write_textfile("dragon100", str(scoreboard["team100_dragons"]))
-            dragon200_tf = _write_textfile("dragon200", str(scoreboard["team200_dragons"]))
+            # 🛡️ [전령/바론/공허유충 - 기존 방식 유지, 크기만 25% 축소] 드래곤이 메인이
+            # 되면서 보조 오브젝트는 시각적 위계를 두려고 아이콘/폰트를 25% 줄인다(요청한
+            # 20~30% 범위 안). 드래곤 존이 팀별로 길이가 달라져서(예: team100 4마리,
+            # team200 0마리) cursor_l/cursor_r을 팀별로 독립적으로 계속 이어간다 - 두 팀이
+            # 더 이상 완전히 대칭이 아닐 수 있지만, 각 팀 자기 자신의 오브젝트 개수 기준으로는
+            # 항상 안쪽→바깥쪽 순서가 일관된다.
+            minor_icon_size = max(6, int(round(sub_icon_size * 0.75)))
+            minor_font_size = max(6, int(round(obj_font_size * 0.75)))
+            minor_icon_y = top_main_h + (top_sub_h - minor_icon_size) / 2
+            minor_num_zone_w = max(8, int(round(minor_font_size * 2 * 0.62)))
+            minor_group_gap = max(3, int(round(minor_icon_size * 0.3)))
+            objective_items = [
+                ("riftherald", riftherald_icon_idx, "team100_riftheralds", "team200_riftheralds"),
+                ("baron", baron_icon_idx, "team100_barons", "team200_barons"),
+                ("horde", horde_icon_idx, "team100_hordes", "team200_hordes"),
+            ]
+
+            for name, icon_idx, key100, key200 in objective_items:
+                icon_x_l = mid_x - cursor_l - minor_icon_size
+                icon_x_r = mid_x + cursor_r
+                if icon_idx is not None:
+                    text_chain += (
+                        f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}L]"
+                        f";[{label}][v{name}L]overlay=x={int(round(icon_x_l))}:y={minor_icon_y:.2f}[v{name}1]"
+                        f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}R]"
+                        f";[v{name}1][v{name}R]overlay=x={int(round(icon_x_r))}:y={minor_icon_y:.2f}[v{name}2]"
+                    )
+                    label = f"v{name}2"
+                    num100_x = f"{int(round(icon_x_l - 4))}-text_w"
+                    num200_x = str(int(round(icon_x_r + minor_icon_size + 4)))
+                else:
+                    num100_x = f"{int(round(mid_x - cursor_l))}-text_w"
+                    num200_x = str(int(round(mid_x + cursor_r)))
+
+                num100_tf = _write_textfile(f"{name}100", str(scoreboard[key100]))
+                num200_tf = _write_textfile(f"{name}200", str(scoreboard[key200]))
+                text_chain += (
+                    f";[{label}]drawtext=fontfile='{font_kr}':textfile='{num100_tf}':fontsize={minor_font_size}:"
+                    f"fontcolor={TEAM_BLUE_COLOR}:{top_text_style}:x='{num100_x}':y='{sub_text_y_expr}'[v{name}n1]"
+                    f";[v{name}n1]drawtext=fontfile='{font_kr}':textfile='{num200_tf}':fontsize={minor_font_size}:"
+                    f"fontcolor={TEAM_RED_COLOR}:{top_text_style}:x='{num200_x}':y='{sub_text_y_expr}'[v{name}n2]"
+                )
+                label = f"v{name}n2"
+                cursor_l += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
+                cursor_r += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
 
             text_chain += (
-                f";[{label}]drawtext=fontfile='{font_kr}':textfile='{dragon100_tf}':fontsize={sub_font_size}:"
-                f"fontcolor={TEAM_BLUE_COLOR}:{top_text_style}:x='{dragon100_num_x}':y='{sub_text_y_expr}'[vs1]"
-                f";[vs1]drawtext=fontfile='{font_kr}':textfile='{dragon200_tf}':fontsize={sub_font_size}:"
-                f"fontcolor={TEAM_RED_COLOR}:{top_text_style}:x='{dragon200_num_x}':y='{sub_text_y_expr}'[vs2]"
-                f";[vs2]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
+                f";[{label}]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
                 f"fontcolor=white:{top_text_style}:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
             label = "vs3"
@@ -2237,10 +2358,22 @@ class KyvoHighlight(KyvoBaseCog):
             "team200_kills": team_objectives.get(200, {}).get("champion", {}).get("kills", 0),
             "team100_dragons": team_objectives.get(100, {}).get("dragon", {}).get("kills", 0),
             "team200_dragons": team_objectives.get(200, {}).get("dragon", {}).get("kills", 0),
+            "team100_riftheralds": team_objectives.get(100, {}).get("riftHerald", {}).get("kills", 0),
+            "team200_riftheralds": team_objectives.get(200, {}).get("riftHerald", {}).get("kills", 0),
+            "team100_barons": team_objectives.get(100, {}).get("baron", {}).get("kills", 0),
+            "team200_barons": team_objectives.get(200, {}).get("baron", {}).get("kills", 0),
+            "team100_hordes": team_objectives.get(100, {}).get("horde", {}).get("kills", 0),
+            "team200_hordes": team_objectives.get(200, {}).get("horde", {}).get("kills", 0),
             "team100_gold": team100_gold,
             "team200_gold": team200_gold,
             "game_time_ms": selected[0]["timestamp_ms"],
         }
+
+        # 🛡️ [드래곤 시간순 속성 시퀀스 - 팀별] timeline은 이미 fetch됨(추가 Riot API 호출
+        # 없음). 순수 함수 _extract_dragon_sequence로 팀별 최근 DRAGON_SEQUENCE_MAX개의
+        # monsterSubType 리스트를 뽑는다.
+        team100_dragon_subtypes = _extract_dragon_sequence(timeline, 100)
+        team200_dragon_subtypes = _extract_dragon_sequence(timeline, 200)
 
         # 🛡️ [하단 포지션별 5행 그리드용 데이터] participants 10명 전원은 chosen에 이미 다
         # fetch돼 있다(추가 Riot API 호출 없음). position(teamPosition)까지 같이 뽑아서
@@ -2278,16 +2411,54 @@ class KyvoHighlight(KyvoBaseCog):
                       for r in roster]
         tower_task = self._fetch_static_icon(CDRAGON_TOWER_ICON_URL, "tower.png")
         dragon_task = self._fetch_static_icon(CDRAGON_DRAGON_ICON_URL, "dragon.png")
+        riftherald_task = self._fetch_static_icon(CDRAGON_RIFTHERALD_ICON_URL, "riftherald.png")
+        baron_task = self._fetch_static_icon(CDRAGON_BARON_ICON_URL, "baron.png")
+        horde_task = self._fetch_static_icon(CDRAGON_HORDE_ICON_URL, "grub.png")
+        # 🛡️ [드래곤 속성별 아이콘 - 중복 제거 후 한 번씩만 fetch] 두 팀 시퀀스에 같은
+        # 속성이 여러 번 나와도(예: WATER_DRAGON 두 번) 캐시 파일은 하나면 되니 set으로
+        # 중복 제거한다.
+        dragon_variant_names = sorted({
+            DRAGON_SUBTYPE_TO_CDRAGON_NAME[st]
+            for st in (*team100_dragon_subtypes, *team200_dragon_subtypes)
+            if st in DRAGON_SUBTYPE_TO_CDRAGON_NAME
+        })
+        dragon_variant_tasks = [
+            self._fetch_static_icon(CDRAGON_DRAGON_VARIANT_ICON_URL_TEMPLATE.format(name=name), f"dragon_{name}.png")
+            for name in dragon_variant_names
+        ]
 
-        (champion_icons, tower_icon_path, dragon_icon_path,
-         *rest) = await asyncio.gather(champion_task, tower_task, dragon_task, *item_tasks)
+        (champion_icons, tower_icon_path, dragon_icon_path, riftherald_icon_path, baron_icon_path,
+         horde_icon_path, *rest) = await asyncio.gather(
+            champion_task, tower_task, dragon_task, riftherald_task, baron_task, horde_task,
+            *item_tasks, *dragon_variant_tasks)
         n = len(roster)
         item_icon_lists = rest[:n]
+        dragon_variant_icon_paths = rest[n:n + len(dragon_variant_tasks)]
         for r, icon_path, item_icon_paths in zip(roster, champion_icons, item_icon_lists):
             r["icon_path"] = icon_path
             r["item_icon_paths"] = item_icon_paths
         scoreboard["tower_icon_path"] = tower_icon_path
         scoreboard["dragon_icon_path"] = dragon_icon_path
+        scoreboard["riftherald_icon_path"] = riftherald_icon_path
+        scoreboard["baron_icon_path"] = baron_icon_path
+        scoreboard["horde_icon_path"] = horde_icon_path
+
+        # 🛡️ [팀별 드래곤 시퀀스 아이콘 경로 리스트 - 시간순 그대로] subtype이 매핑/fetch에
+        # 실패하면(알려지지 않은 subtype 등) 그 자리는 조용히 건너뛴다(리스트에서 빠짐) -
+        # 나머지 표시를 막을 이유가 없다.
+        dragon_variant_path_by_name = dict(zip(dragon_variant_names, dragon_variant_icon_paths))
+
+        def _dragon_icon_paths(subtypes: list[str]) -> list[str]:
+            paths = []
+            for st in subtypes:
+                name = DRAGON_SUBTYPE_TO_CDRAGON_NAME.get(st)
+                path = dragon_variant_path_by_name.get(name) if name else None
+                if path:
+                    paths.append(path)
+            return paths
+
+        scoreboard["team100_dragon_icon_paths"] = _dragon_icon_paths(team100_dragon_subtypes)
+        scoreboard["team200_dragon_icon_paths"] = _dragon_icon_paths(team200_dragon_subtypes)
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_scripting"))
         try:
