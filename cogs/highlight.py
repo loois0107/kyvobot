@@ -510,7 +510,11 @@ UI_BG_COLOR = "0x0A0B0E"  # 이제 배경 그리기엔 안 쓰이지만, 혹시 
 OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
 
 # 상단 2단 바 - 메인바(전체 폭)+서브바(중앙 940px만) 치수, 실측값 그대로.
-TOP_MAIN_BAR_HEIGHT_RATIO = 50 / 1080
+# 🛡️ [메인바 높이 2배 확장 - 실 렌더 판단용] 50/1080 -> 100/1080. overlay_frame_v2.png도
+# 같이 수정해서 메인바 그라데이션을 y=0~99로 복제 확장하고, 서브바(원래 y=50~80, 상단
+# 경계 블렌드 포함 31행)를 y=100~130으로 그대로 옮겨 다시 구웠다 - 서브바 코드는
+# top_main_h를 참조해서 위치를 계산하므로 이 상수만 바꾸면 자동으로 따라온다.
+TOP_MAIN_BAR_HEIGHT_RATIO = 100 / 1080
 TOP_SUB_BAR_HEIGHT_RATIO = 27 / 1080
 TOP_SUB_BAR_X_RATIO = (490 / 1920, 1429 / 1920)
 
@@ -527,6 +531,18 @@ POSITION_ORDER = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 # 실제로 안 겹치는지 검증 스크립트에서 이 값으로 재확인한다.
 LEFT_CARD_ZONE_WIDTH_RATIO = 170 / 2560
 RIGHT_MINIMAP_X_START_RATIO = 2100 / 2560
+
+# 🛡️ [킬 배너 폭 - 하단 패널 박스 폭과 일치] 안전지대 전체(1447px)까지 키웠더니, 그
+# 뒤에 항상 그려지는 하단 통계 패널의 검은 배경 박스(BOTTOM_PANEL_WIDTH_RATIO, 819px -
+# 화면 중앙 정렬)가 배너보다 좁아서 배너 위쪽에 어울리지 않게 좁은 검은 박스가 삐져나와
+# 보였다(실측/스크린샷으로 확인). 패널 배경 자체를 시간대별로 안 그리게 하는 방법도
+# 있었지만, 그건 단일 overlay_frame_v2.png 오버레이를 지역별로 쪼개서 조건부 enable=을
+# 새로 넣어야 하는 구조 변경이라 더 복잡하다 - 반면 배너 폭을 패널 박스 폭과 똑같이
+# 맞추면 배너가 패널을 완전히 덮어서 검은 박스가 원천적으로 안 보인다. 훨씬 간단해서
+# 이 방식을 택했다. x_start는 더 이상 고정 상수가 아니라 render 시점에 안전지대
+# (카드존 끝~미니맵존 시작) 안에서 실제 banner_width 기준으로 중앙 정렬 계산한다(아래
+# _render_video 참고) - 폭이 좁아진 지금은 안전지대 안에 넉넉한 여유를 두고 중앙에 온다.
+HUD_BANNER_MAX_WIDTH_RATIO = BOTTOM_PANEL_WIDTH_RATIO
 
 ROSTER_DIVIDER_COLOR = "white@0.2"
 ROSTER_SHADOW_COLOR = "black@0.7"
@@ -1320,6 +1336,53 @@ class KyvoHighlight(KyvoBaseCog):
             )
             label = "vm6"
 
+            # 🛡️ [골드 격차 - 서브바에서 메인바 안으로 재배치] 예전엔 서브바 구간에 독립
+            # 배지로 그렸는데, gap_leader_x(=gold_x_l/gold_x_r) 자체가 애초에 메인바
+            # 좌표계라 서브바 폭 밖으로 넘치는 문제가 반복됐다(지난 두 라운드). 아예 메인바
+            # 안, 리드팀 골드 숫자 바로 밑으로 옮기면 좌표계가 일치해서 그 문제 자체가
+            # 사라진다 - x좌표는 gold_x_l/r 그대로 재사용, y좌표만 새로 계산한다. 골드
+            # 텍스트는 top_main_h 밴드 안에서 세로 중앙 정렬(main_text_y_expr)이라, 실측
+            # 잉크 비율(폰트 크기 대비 약 0.645, "60.6k" 실제 렌더로 확인됨)로 잉크 하단
+            # 위치를 계산하고 그 바로 밑에 작은 줄간격을 두고 diff 텍스트를 놓는다. 서브바
+            # 폭 제약이 없어져서(메인바는 전체 폭) 이전의 clamp 로직은 통째로 불필요해졌다.
+            if gold_diff != 0:
+                gap_leader_x = gold_x_l if gold_diff > 0 else gold_x_r
+                gap_badge_color = TEAM_BLUE_COLOR if gold_diff > 0 else TEAM_RED_COLOR
+                arrow_char = "◀" if gold_diff > 0 else "▶"
+                gap_badge_text = f"+{gap_k:.1f}k"
+                # 골드 폰트(top_font_size)의 40~50% 크기 - 45%를 기준값으로 사용.
+                gap_badge_font_size = max(8, int(round(top_font_size * 0.45)))
+                gap_arrow_font_size = max(6, int(round(gap_badge_font_size * 0.75)))
+                gap_num_half_w = max(10, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62))) / 2
+                gap_arrow_gap = 4
+
+                main_ink_h = top_font_size * 0.645
+                main_ink_bottom = top_main_h / 2 + main_ink_h / 2
+                # 🛡️ [간격 3배 확대 - 실측으로 확인된 겹침 해소] 0.03 배수는 실제 렌더에서
+                # 최소 지점(숫자 하단 둥근 곡선 아래) 기준 약 2px까지 좁혀져 겹쳐 보였다
+                # (줌 크롭+픽셀 스캔으로 확인) - 0.09로 올려서 최소 지점 기준 6~8px 여유를
+                # 확보한다.
+                gap_line_spacing = max(2, int(round(top_main_h * 0.09)))
+                gap_diff_y = main_ink_bottom + gap_line_spacing
+
+                gap_badge_tf = _write_textfile("top_gold_gap", gap_badge_text)
+                gap_arrow_tf = _write_textfile("top_gold_gap_arrow", arrow_char)
+
+                if gold_diff > 0:
+                    gap_arrow_x = f"{gap_leader_x:.2f}-{gap_num_half_w:.2f}-{gap_arrow_gap}-text_w"
+                else:
+                    gap_arrow_x = f"{gap_leader_x:.2f}+{gap_num_half_w:.2f}+{gap_arrow_gap}"
+
+                text_chain += (
+                    f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
+                    f"fontsize={gap_badge_font_size}:fontcolor={gap_badge_color}:"
+                    f"x='{gap_leader_x:.2f}-text_w/2':y='{gap_diff_y:.2f}'[vtgaptxt]"
+                    f";[vtgaptxt]drawtext=fontfile='{font_kr_black}':textfile='{gap_arrow_tf}':"
+                    f"fontsize={gap_arrow_font_size}:fontcolor={gap_badge_color}:"
+                    f"x='{gap_arrow_x}':y='{gap_diff_y:.2f}'[vtgaparrow]"
+                )
+                label = "vtgaparrow"
+
             # ── 상단 서브바: 게임시간 중앙 + 드래곤 스택 좌우(대칭) ──
             # 🛡️ [실측 폭 그대로 - 전체 폭이 아니라 중앙 구간만] 참고 사진 실측 결과
             # 서브바는 메인바와 달리 전체 폭이 아니라 중앙 48.8%(x=650~1900 @2560
@@ -1366,39 +1429,6 @@ class KyvoHighlight(KyvoBaseCog):
                 f"fontcolor=white:{top_text_style}:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
             label = "vs3"
-
-            # 🛡️ [상단 골드 격차 - 하단 패널 골드갭과 스타일 통일] 배경 박스를 없애고
-            # 숫자 자체를 팀 색상으로 칠하는 방식으로 바꿨다(하단 패널 라인전 골드갭과
-            # 동일한 디자인 언어 - 배경 없는 색상 글리프, 테두리 없음, 플랫 컬러 대비).
-            # 숫자는 리드 팀 골드 숫자 바로 아래(gap_leader_x)에 그대로 고정하고, 화살표는
-            # 그 옆(중심에서 더 바깥쪽)에 작게 붙인다 - 숫자 위치 자체는 바꾸지 않는다.
-            if gold_diff != 0:
-                gap_leader_x = gold_x_l if gold_diff > 0 else gold_x_r
-                gap_badge_color = TEAM_BLUE_COLOR if gold_diff > 0 else TEAM_RED_COLOR
-                arrow_char = "◀" if gold_diff > 0 else "▶"
-                gap_badge_text = f"+{gap_k:.1f}k"
-                gap_badge_font_size = max(8, int(round(top_sub_h * 0.6)))
-                gap_arrow_font_size = max(6, int(round(gap_badge_font_size * 0.75)))
-                gap_num_half_w = max(10, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62))) / 2
-                gap_arrow_gap = 4
-
-                gap_badge_tf = _write_textfile("top_gold_gap", gap_badge_text)
-                gap_arrow_tf = _write_textfile("top_gold_gap_arrow", arrow_char)
-
-                if gold_diff > 0:
-                    gap_arrow_x = f"{gap_leader_x:.2f}-{gap_num_half_w:.2f}-{gap_arrow_gap}-text_w"
-                else:
-                    gap_arrow_x = f"{gap_leader_x:.2f}+{gap_num_half_w:.2f}+{gap_arrow_gap}"
-
-                text_chain += (
-                    f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
-                    f"fontsize={gap_badge_font_size}:fontcolor={gap_badge_color}:"
-                    f"x='{gap_leader_x:.2f}-text_w/2':y='{sub_text_y_expr}'[vtgaptxt]"
-                    f";[vtgaptxt]drawtext=fontfile='{font_kr_black}':textfile='{gap_arrow_tf}':"
-                    f"fontsize={gap_arrow_font_size}:fontcolor={gap_badge_color}:"
-                    f"x='{gap_arrow_x}':y='{sub_text_y_expr}'[vtgaparrow]"
-                )
-                label = "vtgaparrow"
 
             current_label = label
 
@@ -1618,20 +1648,36 @@ class KyvoHighlight(KyvoBaseCog):
             current_label = label
 
         if hud is not None:
-            # 🛡️ [배너 위치 - 하단 통계 패널 전체를 시간대로 나눠 씀] 모듈 상수 주석 참고 -
-            # 원본 종횡비를 유지하며 패널 폭(캔버스 전체가 아니라 실측 42.7%)에 맞추고,
-            # 그 결과 높이가 패널 높이보다 크면 반대로 높이 기준으로 다시 맞춘다(방어적
-            # 클램프). 세로 가운데 정렬.
+            # 🛡️ [배너 폭/위치 - 패널 박스와 완전히 일치] 배너 폭이 하단 패널 박스와 같은
+            # 비율(HUD_BANNER_MAX_WIDTH_RATIO=BOTTOM_PANEL_WIDTH_RATIO)이므로, x_start도
+            # 안전지대 중앙이 아니라 패널의 실제 위치(panel_x0, 화면 중앙 정렬)를 그대로
+            # 써야 패널을 좌우 빈틈없이 완전히 덮는다 - 안전지대 중앙 정렬로 계산했더니
+            # 안전지대 중심(x=851.5)과 패널/화면 중심(x=960)이 달라서 패널 우측 108px
+            # 정도가 배너 밖으로 노출되는 문제가 실측으로 확인됐다(이전 라운드). 패널은
+            # 원래부터 카드존/미니맵존을 항상 안전하게 피하도록 설계돼 있으므로, 배너가
+            # 패널과 정확히 같은 폭/위치를 쓰면 그 두 구역도 자동으로 안 침범한다. 세로
+            # 방향은 기존처럼 하단 패널 bbox(panel_y0/panel_h) 안에서 가운데 정렬 +
+            # 종횡비 유지, 높이가 패널을 넘으면 높이 기준으로 다시 맞추는 방어적 클램프.
+            # 🛡️ [contain/cover 로직 단순화 검토 - 유지하기로 결론] 배너 PNG를 패널 박스
+            # 비율(819:134 @ 이번 테스트 해상도)에 맞춰 새로 만들어서 지금은 이 클램프가
+            # 거의 안 걸린다(banner_height가 계산상 정확히 panel_h와 같아짐, 실측 확인).
+            # 그렇다고 클램프 자체를 지워서 "폭 기준 고정값"으로 단순화하면 안 된다 -
+            # panel_w는 final_width에만, panel_h는 final_height에만 비례해서, 패널의
+            # 실제 비율(panel_w/panel_h)이 영상 종횡비(final_width/final_height)에 따라
+            # 달라진다(이번 804 높이 캔버스는 6.11:1, 순정 1080 높이였다면 4.55:1 - 서로
+            # 다름, 계산으로 확인됨). 즉 배너 PNG의 고정 비율(6.11:1)이 "항상" 패널과
+            # 정확히 맞는다는 보장이 없어서, 이 방어적 높이 클램프는 다른 종횡비 영상에서
+            # 여전히 필요하다 - 그래서 지우지 않고 그대로 둔다.
             with Image.open(HUD_BANNER_PNGS[hud["event_label"]]) as banner_im:
                 banner_native_w, banner_native_h = banner_im.size
             banner_area_y0 = panel_y0
             banner_area_h = panel_h
-            banner_width = panel_w
+            banner_width = int(round(final_width * HUD_BANNER_MAX_WIDTH_RATIO))
             banner_height = int(round(banner_width * banner_native_h / banner_native_w))
             if banner_height > banner_area_h:
                 banner_height = banner_area_h
                 banner_width = int(round(banner_height * banner_native_w / banner_native_h))
-            x_start = panel_x0 + (panel_w - banner_width) // 2
+            x_start = panel_x0
             y_start_visible = banner_area_y0 + (banner_area_h - banner_height) // 2
 
             hud_start, hud_end, slide = hud["start"], hud["end"], HUD_SLIDE_SEC
