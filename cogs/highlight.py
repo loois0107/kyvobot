@@ -358,6 +358,66 @@ SUB_QUESTION_TEXT = {
     "sub_question_a.wav": "진짜 돌았는데요??!!", "sub_question_b.wav": "이게 실화예요??!!",
     "sub_question_c.wav": "미쳤는데요 진짜??!!",
 }
+# 🛡️ [영어 sub_question은 이번 라운드 범위 밖] 영어 0단계 재설계(Sterling/Carter/Atlee)와
+# 리드인 필러만 이번에 추가한다 - 2단계(Sub 의문형)의 영어 정적 풀은 후속 작업으로 남겨두고,
+# 렌더 코드에서는 lang=="en"일 때 이 단계를 통째로 스킵한다(빈 풀을 억지로 채우지 않음).
+
+# ══════════════════════════════════════════════════════════
+#  영어 0단계 재설계(Sterling/Carter/Atlee 캐스케이드) + 리드인 필러
+# ══════════════════════════════════════════════════════════
+# 🛡️ [설계] 한국어 0단계는 Main/Hype/Sub 세 목소리가 kill_t에 완전 동시 시작(닉네임 없는
+# 순수 감탄사 셋이 겹쳐 울리는 효과)이다. 영어판은 이 세 역할을 재사용하되 "완전 동시"
+# 대신 기존 1~3단계에 쓰던 STAGE_OVERLAP_RATIO 캐스케이드 모델을 0단계 자체에 적용한다 -
+# Sterling(MAIN_EXPLODE 역할 계승, 짧은 진행 멘트, kill_t에 끝나도록 역산 배치)
+# -> Carter(HYPE_EXPLODE 역할 계승, kill_t에 시작하는 폭발 리액션)
+# -> Atlee(SUB_EXPLODE 역할 계승, Carter 재생 65%(STAGE_OVERLAP_RATIO) 지점과 겹치며
+# 시작하는 짧은 리액션). 아직 실제 녹음 전이라 아래 세 풀과 EN_LEADIN_POOL은 텍스트만
+# 채워져 있고 glob 결과는 빈 리스트다 - _run_pipeline의 lang=="en" 분기는 파일이 없는
+# 자리를 그냥 스킵하도록 짜여 있어서(한국어의 CRITICAL 하드-fail과 다름), 실제 파일이
+# 채워지기 전까지는 영어 렌더가 0단계/리드인 없이 hype_nickname/main_fact(실시간 TTS라
+# 언어와 무관하게 이미 동작)만으로 돌아가는 게 정상이다.
+STERLING_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sterling_*.wav")))
+STERLING_TEXT = {
+    "sterling_a.wav": "Here it comes—",
+    "sterling_b.wav": "Watch this—",
+    "sterling_c.wav": "This is it—",
+    "sterling_d.wav": "Right here—",
+}
+CARTER_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "carter_*.wav")))
+CARTER_TEXT = {
+    "carter_a.wav": "OHHHHHH!!",
+    "carter_b.wav": "WHOOOOAAA!!",
+    "carter_c.wav": "YEEEAAAHHH!!",
+    "carter_d.wav": "OHHHHH MY!!",
+}
+ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "atlee_*.wav")))
+ATLEE_TEXT = {
+    "atlee_a.wav": "Oh my!!",
+    "atlee_b.wav": "No way!!",
+    "atlee_c.wav": "Unreal!!",
+    "atlee_d.wav": "Wow!!",
+}
+
+# ── 영어 리드인 필러(한국어 pre_buildup+EOEO 2단계 고정 구조에 대응, 1~4개 유동 배치) ──
+# 🛡️ [환각 위험 차단 원칙 동일 적용] PRE_BUILDUP_TEXT와 동일한 원칙 - 위치/챔피언/구체적
+# 액션을 특정하지 않는 순수 분위기 문구만 채택, 어떤 클립에 붙어도 항상 사실일 수 있는
+# 문장만 사용(게임 시각/스코어처럼 렌더 시점에 실제로 확정된 정보라도, 이 필러는 실시간
+# TTS가 아닌 정적 풀이라 값을 문구에 끼워 넣지 못한다 - 동적으로 하려면 실시간 TTS 전환이
+# 필요하며 이번 라운드 범위 밖).
+EN_LEADIN_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "en_leadin_*.wav")))
+EN_LEADIN_TEXT = {
+    "en_leadin_a.wav": "Nice setup here.",
+    "en_leadin_b.wav": "Feels tense right now.",
+    "en_leadin_c.wav": "Something's brewing.",
+    "en_leadin_d.wav": "Keep an eye on this.",
+    "en_leadin_e.wav": "This could go either way.",
+    "en_leadin_f.wav": "Here we go.",
+}
+EN_LEADIN_MIN_COUNT = 1  # 목표치(코드로 강제하진 않음 - 자리가 없으면 0개까지 줄어들 수 있음)
+EN_LEADIN_MAX_COUNT = 4
+EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 시작 후 이만큼 뒤에 첫 필러 시작
+EN_LEADIN_GAP_SEC = PRE_BUILDUP_GAP_SEC                    # 재사용: 필러 사이 간격
+EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
 
 # ── 3단계(Main 사실 전달, 실시간 TTS) ── - _generate_commentary/SYSTEM_PROMPT/
 # _commentary_names_killer/_i_or_ga/_eul_or_reul 전부 그대로 재사용, 담당 목소리만
@@ -418,6 +478,26 @@ def plan_lead_in_forward(kill_t: float, pre_buildup_dur: float, eoeo_dur: float,
     if eoeo_start + eoeo_dur + end_gap > kill_t:
         return pre_start, None
     return pre_start, eoeo_start
+
+
+def plan_leadin_fillers_en(kill_t: float, durations: list[float],
+                            start_offset: float = EN_LEADIN_START_OFFSET_SEC,
+                            gap: float = EN_LEADIN_GAP_SEC,
+                            end_gap: float = EN_LEADIN_END_GAP_SEC) -> list[float]:
+    """영어 리드인 필러 N개(순서대로 durations)의 시작 시각 리스트(순수 함수, 테스트
+    가능) - plan_lead_in_forward의 "클립 시작(t=0) 기준 앞에서부터 순차 배치, kill_t와
+    안 겹치면 계속 채움" 원칙을 고정 2자리에서 임의 개수로 일반화한 버전. 채워 넣다가
+    다음 필러가 kill_t와 겹치는 순간 멈추고 그때까지 들어간 만큼만 반환한다(durations
+    보다 짧을 수 있고, 첫 필러조차 자리가 없으면 빈 리스트) - 억지로 겹치게 밀어넣지
+    않는다는 기존 원칙 그대로."""
+    starts: list[float] = []
+    cursor = start_offset
+    for dur in durations:
+        if cursor + dur + end_gap > kill_t:
+            break
+        starts.append(cursor)
+        cursor += dur + gap
+    return starts
 
 
 # ══════════════════════════════════════════════════════════
@@ -691,6 +771,13 @@ def _mmss_to_ms(mmss: str) -> int:
     return (m * 60 + s) * 1000
 
 
+def _ms_to_mmss(ms: int) -> str:
+    """_mmss_to_ms의 역변환(순수 함수) - 코멘터리 컨텍스트 블록에 게임 시각을 사람이 읽는
+    MM:SS 형식으로 넣기 위한 용도."""
+    total_sec = ms // 1000
+    return f"{total_sec // 60}:{total_sec % 60:02d}"
+
+
 def _eul_or_reul(word: str) -> str:
     """한글 마지막 글자에 받침이 있으면 '을', 없으면 '를' - 한글 완성형 유니코드 범위(가~힣)에서
     (codepoint - '가') % 28 == 0이면 종성 없음(를), 아니면 종성 있음(을). 한글이 아닌 이름(라틴
@@ -918,6 +1005,62 @@ def _compute_laning_gold_gaps(timeline: dict, roster_pairs: list[tuple[dict | No
     return gaps
 
 
+def _format_match_context_block(roster_pairs: list[tuple[dict | None, dict | None]],
+                                 laning_gold_gaps: list[int | None], scoreboard: dict, lang: str) -> str:
+    """🛡️ [코멘터리 데이터 확장 - 킬 사실 외 참고 컨텍스트] _generate_commentary가 GPT에
+    넘기는 facts_block에 이미 계산된 roster(KDA/CS/아이템)/scoreboard(팀 골드/오브젝트)/
+    laning_gold_gaps를 그대로 문자열로 직렬화한다(순수 함수, 새 API 호출 없음 - 전부
+    _run_pipeline에서 HUD 오버레이용으로 이미 만들어둔 값 재사용). 아이템은 Data Dragon
+    이름 매핑이 없어 원본 참가자 응답의 숫자 ID뿐이라, ID를 그대로 넘기면 GPT가 아이템
+    이름을 추측해서 지어낼 위험이 있다(이번 세션 내내 확인한 "닫힌 목록 밖 이름 지어내기"
+    실패 패턴과 동일한 종류) - 그래서 ID 대신 "완성 아이템 개수"(0이 아닌 슬롯 수)만
+    넘긴다. 킬러/피해자 조사 처리(_i_or_ga/_eul_or_reul)와 달리 이 블록은 표/목록 형태라
+    한국어여도 조사가 거의 안 붙으므로, 언어별로 라벨 문자열만 바꾼다."""
+    is_en = lang == "en"
+
+    def team_line(prefix: str) -> str:
+        obj = (
+            f"{scoreboard[f'{prefix}_kills']}K/{scoreboard[f'{prefix}_towers']}T/"
+            f"{scoreboard[f'{prefix}_dragons']}D/{scoreboard[f'{prefix}_barons']}B/"
+            f"{scoreboard[f'{prefix}_riftheralds']}RH/{scoreboard[f'{prefix}_hordes']}VG"
+        )
+        return f"{obj}, {'gold' if is_en else '골드'} {scoreboard[f'{prefix}_gold']}"
+
+    gold_diff = scoreboard["team100_gold"] - scoreboard["team200_gold"]
+    if is_en:
+        lines = [
+            f"Game time: {_ms_to_mmss(scoreboard['game_time_ms'])}",
+            f"Blue team: {team_line('team100')}",
+            f"Red team: {team_line('team200')}",
+            f"Gold gap: Blue {'leads' if gold_diff >= 0 else 'trails'} by {abs(gold_diff)}",
+            "Roster by position (Blue vs Red - champion/summoner, K/D/A, CS, completed items, lane gold gap):",
+        ]
+    else:
+        lines = [
+            f"게임 시각: {_ms_to_mmss(scoreboard['game_time_ms'])}",
+            f"블루팀: {team_line('team100')}",
+            f"레드팀: {team_line('team200')}",
+            f"골드 격차: 블루가 {abs(gold_diff)} {'앞섬' if gold_diff >= 0 else '뒤짐'}",
+            "포지션별 로스터(블루 vs 레드 - 챔피언/소환사명, K/D/A, CS, 완성 아이템, 라인 골드 격차):",
+        ]
+
+    for i, (left, right) in enumerate(roster_pairs):
+        gap = laning_gold_gaps[i] if i < len(laning_gold_gaps) else None
+        pos = POSITION_ORDER[i] if i < len(POSITION_ORDER) else str(i)
+
+        def side(p: dict | None) -> str:
+            if p is None:
+                return "N/A"
+            k, d, a = p["kda"]
+            item_count = sum(1 for it in p["items"] if it)
+            return f"{p['champion']}({p['name']}) {k}/{d}/{a}, CS {p['cs']}, {'items' if is_en else '아이템'} {item_count}/6"
+
+        gap_str = "N/A" if gap is None else f"{'+' if gap >= 0 else ''}{gap}"
+        lines.append(f"  [{pos}] {side(left)}  vs  {side(right)}  ({'lane gold gap' if is_en else '라인 골드 격차'} {gap_str})")
+
+    return "\n".join(lines)
+
+
 def _extract_dragon_sequence(timeline: dict, team_id: int, limit: int = DRAGON_SEQUENCE_MAX) -> list[str]:
     """timeline의 frames[].events[]에서 monsterType=="DRAGON"이고 killerTeamId==team_id인
     이벤트를 시간순(frames 자체가 이미 시간순이라 재정렬 불필요)으로 뽑아 monsterSubType
@@ -1010,12 +1153,50 @@ SYSTEM_PROMPT = (
     "- 느낌표를 적극 사용하고 텐션을 끝까지 올려라. 감탄사 없는 밋밋한 사실 전달문('OO가 XX를 처치했습니다' "
     "같은 문장)은 금지.\n\n"
     "사실관계 규칙 (절대 위반 금지):\n"
-    "- 목록에 없는 내용(킬 원인, 사용 스킬, 위치, 상황 추측 등)은 절대 지어내지 마라. "
+    "- 아래 '확정된 사실 목록'에는 킬 이벤트 외에도 게임 시각/팀별 스코어(킬/타워/드래곤/바론/전령/"
+    "공허유충)/골드 격차/포지션별 KDA·CS·완성 아이템 개수/라인 골드 격차 같은 참고 정보가 같이 "
+    "주어질 수 있다. 이 참고 정보는 '이미 확정된 사실'이라 코멘터리에 자연스럽게 녹여도 되지만, "
+    "그 정보를 근거로 킬 원인/사용 스킬/구체적 위치/상황을 추측해서 지어내는 건 여전히 절대 "
+    "금지다 - 목록에 없는 내용(킬 원인, 사용 스킬, 위치, 상황 추측 등)은 절대 지어내지 마라. "
     "텐션은 말투에만 얹고, 누가 누구를 처치했는지의 사실관계는 목록 그대로 유지해라.\n"
     "- 목록에 있는 킬 이벤트는 하나도 빠짐없이 전부 다뤄야 한다. 목록에 event_index가 N개면 "
     "반드시 N개의 줄을 만들어라. 하나라도 건너뛰지 마라.\n\n"
     "반드시 아래 JSON 스키마로만 답해, 다른 텍스트는 절대 포함하지 마: "
     '{"lines": [{"event_index": int, "text": "자막 한 줄"}]}'
+)
+
+# 🛡️ [영어 버전 - 구조/규칙은 한국어와 동일, 문장만 영어] 존댓말/조사 같은 한국어 전용 규칙은
+# 빼고, 그 자리에 영어 캐스터 톤(짧고 임팩트 있는 현재형/느낌표 위주) 규칙을 넣었다. "목록에
+# 없는 내용은 절대 지어내지 마라" 원칙과 JSON 스키마는 한국어판과 완전히 동일하게 유지.
+EN_SYSTEM_PROMPT = (
+    "You are a high-energy English esports caster covering an LCK-style highlight reel. "
+    "For each kill event in the 'confirmed facts list' below, write one caster line of "
+    "play-by-play commentary that comes right after the crowd/hype reaction has already hit "
+    "(another voice already shouted the killer's name, so your job here is to clearly state "
+    "who killed whom).\n\n"
+    "Tone rules (never violate):\n"
+    "- Present tense, high energy, like a live broadcast (e.g. 'takes it down!', 'shuts them "
+    "out!!').\n"
+    "- Use exclamatory phrasing freely (e.g. 'Unbelievable!?', 'How did they land that?!').\n"
+    "- Keep sentences short and punchy - one clause, two at most.\n"
+    "- Use exclamation points and keep the tension high throughout. Flat, exclamation-free "
+    "statements of fact (e.g. 'X killed Y.') are forbidden.\n\n"
+    "Structure rules:\n"
+    "- Make one sentence that clearly states who killed whom (e.g. '{killer} absolutely ends "
+    "{victim}!!').\n\n"
+    "Factual rules (never violate):\n"
+    "- The 'confirmed facts list' below may include, besides kill events, reference info like "
+    "game time / team score (kills/towers/dragons/barons/rift heralds/voidgrubs) / gold gap / "
+    "per-position KDA, CS, completed-item count / lane gold gap. This reference info is already "
+    "confirmed fact and may be woven into the commentary naturally, but you must still never "
+    "invent a kill cause, ability used, specific location, or situational guess from it - never "
+    "invent anything not in the list (kill cause, ability used, location, situational guesses, "
+    "etc). Keep the tension in the delivery only; the facts of who killed whom must match the "
+    "list exactly.\n"
+    "- You must cover every kill event in the list, with nothing skipped. If the list has N "
+    "event_index entries, you must produce exactly N lines.\n\n"
+    "Respond ONLY in the following JSON schema, no other text: "
+    '{"lines": [{"event_index": int, "text": "one caption line"}]}'
 )
 
 
@@ -1974,24 +2155,52 @@ class KyvoHighlight(KyvoBaseCog):
         await self._to_executor(self._convert_to_wav, mp3_path, wav_path)
         return wav_path
 
-    async def _generate_commentary(self, kills_with_names: list[dict]) -> list[dict]:
+    async def _generate_commentary(self, kills_with_names: list[dict], lang: str,
+                                    roster_pairs: list[tuple[dict | None, dict | None]] | None = None,
+                                    laning_gold_gaps: list[int | None] | None = None,
+                                    scoreboard: dict | None = None) -> list[dict]:
+        """🛡️ [언어 분기 + 데이터 확장] lang=="en"이면 EN_SYSTEM_PROMPT + 영어 사실 문장을
+        쓰고, 그 외(기본 한국어)는 기존 SYSTEM_PROMPT + _i_or_ga/_eul_or_reul 조사 처리를
+        그대로 유지한다(회귀 없음). roster_pairs/laning_gold_gaps/scoreboard는 호출부
+        (_run_pipeline)에서 HUD 오버레이용으로 이미 계산해둔 값을 그대로 재사용 - 새 API
+        호출 없음(_format_match_context_block 참고). 셋 중 하나라도 None이면(예: 과거
+        방식으로 호출하는 코드가 남아있는 경우) 컨텍스트 블록 없이 킬 사실만으로 동작한다."""
         import json
-        facts_lines = []
+        is_en = lang == "en"
+        kill_facts_lines = []
         for k in kills_with_names:
-            assist_str = f", 어시스트: {', '.join(k['assists'])}" if k["assists"] else ""
-            facts_lines.append(
-                f"[{k['index']}] {k['timestamp_ms']}ms 시점 - "
-                f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치{assist_str}"
+            if is_en:
+                assist_str = f", assists: {', '.join(k['assists'])}" if k["assists"] else ""
+                kill_facts_lines.append(
+                    f"[{k['index']}] at {k['timestamp_ms']}ms - {k['killer']} kills {k['victim']}{assist_str}"
+                )
+            else:
+                assist_str = f", 어시스트: {', '.join(k['assists'])}" if k["assists"] else ""
+                kill_facts_lines.append(
+                    f"[{k['index']}] {k['timestamp_ms']}ms 시점 - "
+                    f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치{assist_str}"
+                )
+        kill_facts_block = "\n".join(kill_facts_lines)
+
+        context_block = ""
+        if roster_pairs is not None and laning_gold_gaps is not None and scoreboard is not None:
+            context_block = _format_match_context_block(roster_pairs, laning_gold_gaps, scoreboard, lang) + "\n\n"
+
+        if is_en:
+            user_content = (
+                f"{context_block}Confirmed kill events "
+                f"(total {len(kills_with_names)}, all must be covered):\n{kill_facts_block}"
             )
-        facts_block = "\n".join(facts_lines)
+        else:
+            user_content = f"{context_block}확정된 사실 목록 (총 {len(kills_with_names)}건, 전부 다뤄야 함):\n{kill_facts_block}"
 
         resp = await self.ai_client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             temperature=0.8,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"확정된 사실 목록 (총 {len(kills_with_names)}건, 전부 다뤄야 함):\n{facts_block}"},
+                {"role": "system", "content": EN_SYSTEM_PROMPT if is_en else SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
             ],
         )
         data = json.loads(resp.choices[0].message.content)
@@ -2000,9 +2209,11 @@ class KyvoHighlight(KyvoBaseCog):
         covered = {l["event_index"] for l in lines}
         for k in kills_with_names:
             if k["index"] not in covered:
-                lines.append({"event_index": k["index"], "text": (
+                fallback = (
+                    f"{k['killer']} takes down {k['victim']}!!" if is_en else
                     f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치했습니다!"
-                )})
+                )
+                lines.append({"event_index": k["index"], "text": fallback})
         lines.sort(key=lambda l: l["event_index"])
         return lines
 
@@ -2152,6 +2363,14 @@ class KyvoHighlight(KyvoBaseCog):
             shutil.rmtree(work_dir, ignore_errors=True)
 
     async def _run_pipeline(self, interaction, guild_id, video, work_dir, progress_msg, tv_cog, regional_route, puuid):
+        # 🛡️ [언어 분기 진입점] get_msg()(cogs/base.py)와 완전히 동일한 패턴으로 guild 설정
+        # 언어를 한 번만 읽어서 lang 변수로 만들고, 이후 단계(코멘터리 생성/0단계 캐스케이드/
+        # 리드인 필러)에 그대로 넘긴다. 디스코드 상태 메시지(get_msg)는 이미 별도로 이 값을
+        # 읽고 있어 서로 안 겹치는 두 번째 조회지만, DB가 아니라 캐시된 설정에서 읽으므로
+        # 부하 문제는 없다.
+        guild_settings = await self.get_guild_settings(guild_id)
+        lang = guild_settings.get("language", "en")
+
         video_path = os.path.join(work_dir, "input.mp4")
         await video.save(video_path)
 
@@ -2477,7 +2696,10 @@ class KyvoHighlight(KyvoBaseCog):
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_scripting"))
         try:
-            lines_raw = await self._generate_commentary(kills_with_names)
+            lines_raw = await self._generate_commentary(
+                kills_with_names, lang, roster_pairs=roster_pairs,
+                laning_gold_gaps=laning_gold_gaps, scoreboard=scoreboard,
+            )
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Commentary generation failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_ai_failed"))
@@ -2497,7 +2719,10 @@ class KyvoHighlight(KyvoBaseCog):
         if not _commentary_names_killer(main_fact_text, killer_name):
             print(f"[HIGHLIGHT][WARN] Commentary text missing killer name (guild={guild_id}) - "
                   f"falling back to template. killer={killer_name!r} text={main_fact_text!r}", flush=True)
-            main_fact_text = f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
+            main_fact_text = (
+                f"{killer_name} takes down {victim_name}!!" if lang == "en" else
+                f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
+            )
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
 
@@ -2512,84 +2737,167 @@ class KyvoHighlight(KyvoBaseCog):
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
             return
 
-        if not (PRE_BUILDUP_POOL and EOEO_POOL and MAIN_EXPLODE_POOL and HYPE_EXPLODE_POOL
-                and SUB_EXPLODE_POOL and SUB_QUESTION_POOL):
-            print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
-                  f"pre_buildup={len(PRE_BUILDUP_POOL)} eoeo={len(EOEO_POOL)} "
-                  f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
-                  f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
-            return
+        if lang == "en":
+            # 🛡️ [영어 스케줄 - 관대한 스킵] 한국어의 CRITICAL 하드-fail 게이트(풀이 하나라도
+            # 비면 렌더 자체를 거부)를 그대로 쓰지 않는다 - 영어 정적 풀은 아직 실제 녹음 전이라
+            # 비어있는 게 정상이고, 그때마다 렌더를 거부하면 hype_nickname/main_fact(실시간
+            # TTS, 언어 무관하게 이미 동작)까지 전부 막혀버린다. 파일이 없는 자리는 그냥
+            # schedule에서 빠진다(아래 각 if 블록).
+            sterling_file = random.choice(STERLING_POOL) if STERLING_POOL else None
+            carter_file = random.choice(CARTER_POOL) if CARTER_POOL else None
+            atlee_file = random.choice(ATLEE_POOL) if ATLEE_POOL else None
 
-        pre_buildup_file = random.choice(PRE_BUILDUP_POOL)
-        eoeo_file = random.choice(EOEO_POOL)
-        main_explode_file = random.choice(MAIN_EXPLODE_POOL)
-        hype_explode_file = random.choice(HYPE_EXPLODE_POOL)
-        sub_explode_file = random.choice(SUB_EXPLODE_POOL)
-        sub_question_file = random.choice(SUB_QUESTION_POOL)
+            try:
+                sterling_duration = (
+                    await self._to_executor(self._probe_audio_duration, sterling_file) if sterling_file else 0.0
+                )
+                carter_duration = (
+                    await self._to_executor(self._probe_audio_duration, carter_file) if carter_file else 0.0
+                )
+                atlee_duration = (
+                    await self._to_executor(self._probe_audio_duration, atlee_file) if atlee_file else 0.0
+                )
+                hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
+                main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
+                hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
+                await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
+            except Exception as e:
+                print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+                return
 
-        try:
-            pre_buildup_duration = await self._to_executor(self._probe_audio_duration, pre_buildup_file)
-            eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
-            main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
-            hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
-            sub_explode_duration = await self._to_executor(self._probe_audio_duration, sub_explode_file)
-            hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
-            main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
-            sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-            # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
-            hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
-            await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
-        except Exception as e:
-            print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
-                  f"{type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
-            return
+            # 0단계 재설계: Carter가 kill_t에 시작(옛 hype_explode 자리 계승), Atlee는 Carter
+            # 재생 STAGE_OVERLAP_RATIO 지점과 겹치며 시작(옛 sub_explode 자리 계승), Sterling은
+            # kill_t에 끝나도록 역산 배치(옛 main_explode 자리 계승, "진행 멘트"로 역할 변경).
+            schedule = {"kill_t": kill_t}
+            stage0_end_times = []
+            if carter_file is not None:
+                carter_start = kill_t
+                schedule["carter"] = {"wav": carter_file, "text": CARTER_TEXT[os.path.basename(carter_file)],
+                                       "start": carter_start, "duration": carter_duration}
+                stage0_end_times.append(carter_start + carter_duration)
+                if atlee_file is not None:
+                    atlee_start = carter_start + carter_duration * STAGE_OVERLAP_RATIO
+                    schedule["atlee"] = {"wav": atlee_file, "text": ATLEE_TEXT[os.path.basename(atlee_file)],
+                                          "start": atlee_start, "duration": atlee_duration}
+                    stage0_end_times.append(atlee_start + atlee_duration)
+            if sterling_file is not None:
+                sterling_start = kill_t - sterling_duration
+                if sterling_start >= 0:
+                    schedule["sterling"] = {"wav": sterling_file, "text": STERLING_TEXT[os.path.basename(sterling_file)],
+                                             "start": sterling_start, "duration": sterling_duration}
+            stage0_dur = max(stage0_end_times) - kill_t if stage0_end_times else 0.0
 
-        # 0단계: Main+Hype+Sub 셋 다 kill_t에 정확히 동시 시작(닉네임 없는 순수 폭발).
-        # plan_kill_sequence()는 순수 함수 - 1/2/3단계 시작을 "직전 단계 최장 목소리 길이 ×
-        # STAGE_OVERLAP_RATIO" 지점으로 잡는다(고정 초 아님, 0단계 길이와 무관하게 1/2/3단계
-        # 상호 간격은 각자 자기 길이 × 비율로만 정해진다 - 0단계가 길어져도 t2-t1/t3-t2 간격
-        # 자체는 안 변하고, 셋 다 kill_t 기준으로 똑같이 더 뒤로 밀릴 뿐이다).
-        stage0_dur = max(main_explode_duration, hype_explode_duration, sub_explode_duration)
-        seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, sub_question_duration)
-        hype_nickname_start = kill_t + seq["t1"]
-        sub_question_start = kill_t + seq["t2"]
-        main_fact_start = kill_t + seq["t3"]
+            # 1/3단계(sub_question은 영어 풀이 아직 없어 이번 라운드는 스킵) - stage2_dur=0.0을
+            # 넘기면 plan_kill_sequence가 "sub_question이 즉시 끝난 것"으로 계산해, main_fact가
+            # hype_nickname 캐스케이드 바로 다음 지점에서 자연스럽게 시작한다.
+            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, 0.0)
+            hype_nickname_start = kill_t + seq["t1"]
+            main_fact_start = kill_t + seq["t3"]
+            schedule["hype_nickname"] = {"wav": hype_nickname_wav, "text": hype_nickname_text,
+                                          "start": hype_nickname_start, "duration": hype_nickname_duration}
+            schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
+                                      "start": main_fact_start, "duration": main_fact_duration}
 
-        # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트 -> "어어??" 순서로 배치하고,
-        # kill_t와 안 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
-        pre_buildup_start, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_duration, eoeo_duration)
+            # 리드인 필러: 한국어 pre_buildup+EOEO(고정 2자리)와 달리 1~4개를 유동적으로
+            # 채운다(plan_leadin_fillers_en, 순수 함수) - 자리가 없으면 0개까지 줄어들 수 있다.
+            leadin_end_times = []
+            if EN_LEADIN_POOL:
+                leadin_candidates = random.sample(EN_LEADIN_POOL, min(len(EN_LEADIN_POOL), EN_LEADIN_MAX_COUNT))
+                leadin_durations = [await self._to_executor(self._probe_audio_duration, f) for f in leadin_candidates]
+                leadin_starts = plan_leadin_fillers_en(kill_t, leadin_durations)
+                for i, start in enumerate(leadin_starts):
+                    f = leadin_candidates[i]
+                    schedule[f"en_leadin_{i + 1}"] = {"wav": f, "text": EN_LEADIN_TEXT[os.path.basename(f)],
+                                                       "start": start, "duration": leadin_durations[i]}
+                    leadin_end_times.append(start + leadin_durations[i])
 
-        end_times = [
-            kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
-            hype_nickname_start + hype_nickname_duration, sub_question_start + sub_question_duration,
-            main_fact_start + main_fact_duration,
-        ]
-        total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
+            end_times = stage0_end_times + leadin_end_times + [
+                hype_nickname_start + hype_nickname_duration, main_fact_start + main_fact_duration,
+            ]
+            total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
+            schedule["total_duration"] = total_duration
+        else:
+            if not (PRE_BUILDUP_POOL and EOEO_POOL and MAIN_EXPLODE_POOL and HYPE_EXPLODE_POOL
+                    and SUB_EXPLODE_POOL and SUB_QUESTION_POOL):
+                print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
+                      f"pre_buildup={len(PRE_BUILDUP_POOL)} eoeo={len(EOEO_POOL)} "
+                      f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
+                      f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
+                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
+                return
 
-        schedule = {
-            "kill_t": kill_t,
-            "total_duration": total_duration,
-            "main_explode": {"wav": main_explode_file, "text": MAIN_EXPLODE_TEXT[os.path.basename(main_explode_file)],
-                              "start": kill_t, "duration": main_explode_duration},
-            "hype_explode": {"wav": hype_explode_file, "text": HYPE_EXPLODE_TEXT[os.path.basename(hype_explode_file)],
-                              "start": kill_t, "duration": hype_explode_duration},
-            "sub_explode": {"wav": sub_explode_file, "text": SUB_EXPLODE_TEXT[os.path.basename(sub_explode_file)],
-                             "start": kill_t, "duration": sub_explode_duration},
-            "hype_nickname": {"wav": hype_nickname_wav, "text": hype_nickname_text,
-                               "start": hype_nickname_start, "duration": hype_nickname_duration},
-            "sub_question": {"wav": sub_question_file, "text": SUB_QUESTION_TEXT[os.path.basename(sub_question_file)],
-                              "start": sub_question_start, "duration": sub_question_duration},
-            "main_fact": {"wav": main_fact_wav, "text": main_fact_text,
-                          "start": main_fact_start, "duration": main_fact_duration},
-        }
-        if eoeo_start is not None:
-            schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
-                                 "start": eoeo_start, "duration": eoeo_duration}
-        if pre_buildup_start is not None:
-            schedule["pre_buildup"] = {"wav": pre_buildup_file, "text": PRE_BUILDUP_TEXT[os.path.basename(pre_buildup_file)],
-                                        "start": pre_buildup_start, "duration": pre_buildup_duration}
+            pre_buildup_file = random.choice(PRE_BUILDUP_POOL)
+            eoeo_file = random.choice(EOEO_POOL)
+            main_explode_file = random.choice(MAIN_EXPLODE_POOL)
+            hype_explode_file = random.choice(HYPE_EXPLODE_POOL)
+            sub_explode_file = random.choice(SUB_EXPLODE_POOL)
+            sub_question_file = random.choice(SUB_QUESTION_POOL)
+
+            try:
+                pre_buildup_duration = await self._to_executor(self._probe_audio_duration, pre_buildup_file)
+                eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
+                main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
+                hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
+                sub_explode_duration = await self._to_executor(self._probe_audio_duration, sub_explode_file)
+                hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
+                main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
+                sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
+                hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
+                await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
+            except Exception as e:
+                print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+                return
+
+            # 0단계: Main+Hype+Sub 셋 다 kill_t에 정확히 동시 시작(닉네임 없는 순수 폭발).
+            # plan_kill_sequence()는 순수 함수 - 1/2/3단계 시작을 "직전 단계 최장 목소리 길이 ×
+            # STAGE_OVERLAP_RATIO" 지점으로 잡는다(고정 초 아님, 0단계 길이와 무관하게 1/2/3단계
+            # 상호 간격은 각자 자기 길이 × 비율로만 정해진다 - 0단계가 길어져도 t2-t1/t3-t2 간격
+            # 자체는 안 변하고, 셋 다 kill_t 기준으로 똑같이 더 뒤로 밀릴 뿐이다).
+            stage0_dur = max(main_explode_duration, hype_explode_duration, sub_explode_duration)
+            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, sub_question_duration)
+            hype_nickname_start = kill_t + seq["t1"]
+            sub_question_start = kill_t + seq["t2"]
+            main_fact_start = kill_t + seq["t3"]
+
+            # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트 -> "어어??" 순서로 배치하고,
+            # kill_t와 안 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
+            pre_buildup_start, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_duration, eoeo_duration)
+
+            end_times = [
+                kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
+                hype_nickname_start + hype_nickname_duration, sub_question_start + sub_question_duration,
+                main_fact_start + main_fact_duration,
+            ]
+            total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
+
+            schedule = {
+                "kill_t": kill_t,
+                "total_duration": total_duration,
+                "main_explode": {"wav": main_explode_file, "text": MAIN_EXPLODE_TEXT[os.path.basename(main_explode_file)],
+                                  "start": kill_t, "duration": main_explode_duration},
+                "hype_explode": {"wav": hype_explode_file, "text": HYPE_EXPLODE_TEXT[os.path.basename(hype_explode_file)],
+                                  "start": kill_t, "duration": hype_explode_duration},
+                "sub_explode": {"wav": sub_explode_file, "text": SUB_EXPLODE_TEXT[os.path.basename(sub_explode_file)],
+                                 "start": kill_t, "duration": sub_explode_duration},
+                "hype_nickname": {"wav": hype_nickname_wav, "text": hype_nickname_text,
+                                   "start": hype_nickname_start, "duration": hype_nickname_duration},
+                "sub_question": {"wav": sub_question_file, "text": SUB_QUESTION_TEXT[os.path.basename(sub_question_file)],
+                                  "start": sub_question_start, "duration": sub_question_duration},
+                "main_fact": {"wav": main_fact_wav, "text": main_fact_text,
+                              "start": main_fact_start, "duration": main_fact_duration},
+            }
+            if eoeo_start is not None:
+                schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
+                                     "start": eoeo_start, "duration": eoeo_duration}
+            if pre_buildup_start is not None:
+                schedule["pre_buildup"] = {"wav": pre_buildup_file, "text": PRE_BUILDUP_TEXT[os.path.basename(pre_buildup_file)],
+                                            "start": pre_buildup_start, "duration": pre_buildup_duration}
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
         # 같이 퇴장하는 것으로 잡았다(플레이어에게 "이 킬에 대한 설명이 끝났다"는 인상과
