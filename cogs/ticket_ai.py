@@ -296,10 +296,17 @@ class KyvoTicketAI(KyvoBaseCog):
 
             target_category = interaction.channel.category if hasattr(interaction.channel, 'category') else None
 
+            # 🛡️ [봇 생성 티켓 마커] on_message가 채널명(ticket-*)만 보고 반응해서, 서버에 우연히
+            # ticket-으로 시작하는 이름의 일반 채널이 있으면 AI가 오작동하는 문제가 있었다. 생성
+            # 시점에만 알 수 있는 값(topic)에 마커를 남겨서, 이후 on_message가 "진짜 이 함수를 거쳐
+            # 만들어졌는지"를 검증할 수 있게 한다. DB 기록 대신 topic을 쓴 이유: 새 테이블/마이그레이션
+            # 없이 채널 객체 자체에 영구 저장되고(봇 재시작에도 살아남음), 매 메시지마다 추가 DB
+            # 조회 없이 이미 갖고 있는 channel 객체에서 바로 읽을 수 있다.
             ticket_channel = await guild.create_text_channel(
                 name=target_channel_name,
                 category=target_category,
                 overwrites=overwrites,
+                topic=f"kyvo_ticket:{user.id}:{int(time.time())}",
                 reason=f"Kyvo Ticket session init for {user.name}"
             )
 
@@ -605,6 +612,14 @@ class KyvoTicketAI(KyvoBaseCog):
             return
 
         if not message.channel.name.startswith("ticket-") or message.channel.name.startswith("🚨-"):
+            return
+
+        # 🛡️ [봇 생성 티켓 검증] 채널명 접두사만으로는 서버에 우연히 ticket-으로 시작하는 일반
+        # 채널이 있어도 반응해버린다 - create_ticket_channel이 생성 시점에 남긴 topic 마커가
+        # 있는지까지 같이 확인해서, 이 함수를 실제로 거쳐 만들어진 채널에서만 응답한다. 이름
+        # 검사(위)는 그대로 남겨둔다 - 🚨- 접두사(스태프 에스컬레이션 후) 제외는 topic엔 안
+        # 반영되므로(edit(name=...)만 하고 topic은 안 건드림) 이름 검사가 계속 그 역할을 한다.
+        if not (message.channel.topic or "").startswith("kyvo_ticket:"):
             return
 
         guild_id = str(message.guild.id)
