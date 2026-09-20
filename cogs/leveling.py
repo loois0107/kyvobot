@@ -17,6 +17,11 @@ DASHBOARD_BASE_URL = (os.getenv("DASHBOARD_BASE_URL") or "").rstrip("/")
 # 설정됐을 때도 최소한 이미지는 정상 전송되게(버튼만 빠짐) 한다.
 DASHBOARD_BASE_URL_VALID = DASHBOARD_BASE_URL.startswith(("http://", "https://"))
 
+# 🛡️ [긴급 추가] cogs/automod.py의 AUTOMOD_ENABLED_DEFAULT와 동일한 이유/원칙 - leveling_settings를
+# 한 번도 저장한 적 없는 길드(신규/기존 미설정 전부 포함) 전부가 이 기본값을 타므로, 반드시 True여야
+# 기존에 이미 XP를 지급받고 있던 서버들이 배포 순간 조용히 멈추는 회귀를 피할 수 있다.
+LEVELING_ENABLED_DEFAULT = True
+
 
 def clean_hex_color(hex_str, fallback):
     if not hex_str:
@@ -131,6 +136,13 @@ class KyvoLeveling(KyvoBaseCog):
         row = await self.get_guild_settings(guild_id)
         nested_settings = row.get("settings") or {}
         leveling_set = nested_settings.get("leveling_settings") or {}
+
+        # 🛡️ [긴급 추가, automod와 동일한 패턴] leveling_settings에도 "enabled" 개념이 없어서
+        # 관리자가 XP 지급 자체를 끌 방법이 전혀 없었다. 기본값은 True - 이 필드를 한 번도
+        # 저장한 적 없는(신규/기존 미설정 전부 포함) 길드가 지금과 동일하게 계속 동작해야 한다.
+        if not bool(leveling_set.get("enabled", LEVELING_ENABLED_DEFAULT)):
+            print(f"[XP DEBUG] SKIP(leveling_disabled): guild={guild_id}")
+            return
 
         blacklisted_channels = leveling_set.get("blacklisted_channels", [])
         if message.channel.id in blacklisted_channels or str(message.channel.id) in blacklisted_channels:
