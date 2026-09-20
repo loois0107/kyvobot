@@ -408,7 +408,10 @@ EN_LEADIN_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "en_leadin_*.wav")))
 EN_LEADIN_TEXT = {
     "en_leadin_a.wav": "Nice setup here.",
     "en_leadin_b.wav": "Feels tense right now.",
-    "en_leadin_c.wav": "Something's brewing.",
+    # 🛡️ [텍스트 교체] 원래 "Something's brewing."였는데 Sterling 보이스에서 축약형->
+    # "brewing" 전환부에 매번 같은 미세 무음 갭이 남아(16회 전부 실패) 같은 의미 계열 안에서
+    # 문구를 바꿨다(1회 시도로 통과) - 이전 라운드의 "허"/"어" 음소 문제와 동일한 유형.
+    "en_leadin_c.wav": "Tension is rising.",
     "en_leadin_d.wav": "Keep an eye on this.",
     "en_leadin_e.wav": "This could go either way.",
     "en_leadin_f.wav": "Here we go.",
