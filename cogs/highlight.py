@@ -358,9 +358,20 @@ SUB_QUESTION_TEXT = {
     "sub_question_a.wav": "진짜 돌았는데요??!!", "sub_question_b.wav": "이게 실화예요??!!",
     "sub_question_c.wav": "미쳤는데요 진짜??!!",
 }
-# 🛡️ [영어 sub_question은 이번 라운드 범위 밖] 영어 0단계 재설계(Sterling/Carter/Atlee)와
-# 리드인 필러만 이번에 추가한다 - 2단계(Sub 의문형)의 영어 정적 풀은 후속 작업으로 남겨두고,
-# 렌더 코드에서는 lang=="en"일 때 이 단계를 통째로 스킵한다(빈 풀을 억지로 채우지 않음).
+# 🛡️ [영어 2단계 - Atlee, 한국어 SUB_QUESTION_POOL과 같은 역할] 사실 정보 없이 순수하게
+# 놀라는 의문문만 담는다(한국어 3개와 동일한 원칙) - 어떤 킬에 붙어도 항상 성립하는 문장이라
+# 정적 풀로 미리 구워도 안전함. lang=="en"일 때 SUB_QUESTION_POOL/TEXT 대신 이 풀을 쓴다
+# (스케줄 딕셔너리 키 이름은 "sub_question"으로 공유 - _render_video 쪽은 언어와 무관하게
+# 이미 그 키 하나만 보므로 새 키가 필요 없다).
+ATLEE_SUB_QUESTION_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "atlee_sub_question_*.wav")))
+# 🛡️ [텍스트 확정 경위] b/c는 원래 더 긴 문장(예: "Wait, did that seriously just happen?!")을
+# 시도했는데, 이 보이스에서 문장 중후반부에 매번 미세 무음 갭이 남아 16회씩 세 차례(각기 다른
+# 문구로) 전부 실패했다 - 성공한 a처럼 쉼표 없는 아주 짧은 단일 절로 줄이자 1회 만에 통과했다.
+ATLEE_SUB_QUESTION_TEXT = {
+    "atlee_sub_question_a.wav": "Is this actually real?!",
+    "atlee_sub_question_b.wav": "Seriously?!",
+    "atlee_sub_question_c.wav": "How?!",
+}
 
 # ══════════════════════════════════════════════════════════
 #  영어 0단계 재설계(Sterling/Carter/Atlee 캐스케이드) + 리드인 필러
@@ -390,7 +401,12 @@ CARTER_TEXT = {
     "carter_c.wav": "YEEEAAAHHH!!",
     "carter_d.wav": "OHHHHH MY!!",
 }
-ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "atlee_*.wav")))
+# 🛡️ [glob 충돌 버그 수정 - 실제 렌더 테스트로 발견] "atlee_*.wav"는 나중에 추가된
+# "atlee_sub_question_*.wav"(2단계용, ATLEE_SUB_QUESTION_POOL)까지 그대로 삼켜서, 0단계
+# 캐스케이드에 sub_question 파일이 섞여 뽑히면 ATLEE_TEXT에 없는 키라 KeyError가 났다(이번
+# 세션 내내 경계했던 바로 그 glob 충돌 패턴). "atlee_" 뒤에 글자 하나만 오는 파일(a/b/c/d)만
+# 정확히 잡도록 패턴을 좁혀서 sub_question 파일과 겹치지 않게 한다.
+ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "atlee_[a-z].wav")))
 ATLEE_TEXT = {
     "atlee_a.wav": "Oh my!!",
     "atlee_b.wav": "No way!!",
@@ -440,6 +456,10 @@ ELEVENLABS_VOICE_IDS = {
     "main": "tlUdVt24VftfDokp32eu",  # LCK_Main_caster
     "hype": "IyAj6lA2EjUlXLg33b1o",  # LCK_Hype_Reaction
     "sub": "K4OVml3awIZZxKC33zQV",   # Lck_Sub_Analyst
+    # 🛡️ [영어 실시간 합성용] hype_nickname/main_fact 호출부에서 lang=="en"일 때만 골라 쓴다 -
+    # _synthesize_voice_line 자체는 voice_key 문자열 하나만 보고 조회할 뿐 언어를 모르므로 건드리지 않음.
+    "sterling": "3hQzcLsCrO9a7MOEtScA",
+    "carter": "LymGX871eqlpoxSlhtzG",
 }
 ELEVENLABS_MODEL_ID = "eleven_v3"
 # 🛡️ [output_format 명시] 예전엔 지정을 아예 안 해서 API 기본값(mp3_44100_128)을 그대로 썼다.
@@ -1374,7 +1394,11 @@ class KyvoHighlight(KyvoBaseCog):
         # 정확한 인덱스를 매긴다.
         next_input_idx = 2  # 0=video, 1=cheer
         voice_indices = {}
-        for key in ("pre_buildup", "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact"):
+        # 🛡️ [영어 스케줄 키 추가] sterling/carter/atlee(0단계 캐스케이드)와 en_leadin_1~4(리드인
+        # 필러)는 KO 스케줄에는 애초에 안 생기는 키라 schedule.get()이 None을 반환해 조용히
+        # 스킵된다(아래 for 루프 동일) - KO 렌더 경로에는 아무 영향 없음.
+        for key in ("pre_buildup", "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact",
+                    "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
             if entry is None:
                 continue
@@ -2733,8 +2757,10 @@ class KyvoHighlight(KyvoBaseCog):
         # (렌더당 ElevenLabs 호출 정확히 2회) - 나머지 네 자리는 정적 풀에서 고른다.
         hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=killer_name)
         try:
-            hype_nickname_wav_raw = await self._synthesize_voice_line(hype_nickname_text, "hype", work_dir, "hype_nickname_raw")
-            main_fact_wav = await self._synthesize_voice_line(main_fact_text, "main", work_dir, "main_fact")
+            hype_nickname_wav_raw = await self._synthesize_voice_line(
+                hype_nickname_text, "carter" if lang == "en" else "hype", work_dir, "hype_nickname_raw")
+            main_fact_wav = await self._synthesize_voice_line(
+                main_fact_text, "sterling" if lang == "en" else "main", work_dir, "main_fact")
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] ElevenLabs TTS failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
@@ -2749,6 +2775,7 @@ class KyvoHighlight(KyvoBaseCog):
             sterling_file = random.choice(STERLING_POOL) if STERLING_POOL else None
             carter_file = random.choice(CARTER_POOL) if CARTER_POOL else None
             atlee_file = random.choice(ATLEE_POOL) if ATLEE_POOL else None
+            atlee_sub_question_file = random.choice(ATLEE_SUB_QUESTION_POOL) if ATLEE_SUB_QUESTION_POOL else None
 
             try:
                 sterling_duration = (
@@ -2759,6 +2786,10 @@ class KyvoHighlight(KyvoBaseCog):
                 )
                 atlee_duration = (
                     await self._to_executor(self._probe_audio_duration, atlee_file) if atlee_file else 0.0
+                )
+                atlee_sub_question_duration = (
+                    await self._to_executor(self._probe_audio_duration, atlee_sub_question_file)
+                    if atlee_sub_question_file else 0.0
                 )
                 hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
@@ -2793,14 +2824,22 @@ class KyvoHighlight(KyvoBaseCog):
                                              "start": sterling_start, "duration": sterling_duration}
             stage0_dur = max(stage0_end_times) - kill_t if stage0_end_times else 0.0
 
-            # 1/3단계(sub_question은 영어 풀이 아직 없어 이번 라운드는 스킵) - stage2_dur=0.0을
-            # 넘기면 plan_kill_sequence가 "sub_question이 즉시 끝난 것"으로 계산해, main_fact가
-            # hype_nickname 캐스케이드 바로 다음 지점에서 자연스럽게 시작한다.
-            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, 0.0)
+            # 1/2/3단계: sub_question은 이제 ATLEE_SUB_QUESTION_POOL이 생겨서 채운다(풀이 비어
+            #있으면 atlee_sub_question_duration=0.0이라 plan_kill_sequence가 "즉시 끝난 것"으로
+            # 계산해 예전과 동일하게 우아히 스킵된다 - 하드 실패 없음). 스케줄 키는 한국어와
+            # 동일하게 "sub_question" 그대로 재사용(별도 키 불필요, _render_video는 언어를 모름).
+            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, atlee_sub_question_duration)
             hype_nickname_start = kill_t + seq["t1"]
+            sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
             schedule["hype_nickname"] = {"wav": hype_nickname_wav, "text": hype_nickname_text,
                                           "start": hype_nickname_start, "duration": hype_nickname_duration}
+            if atlee_sub_question_file is not None:
+                schedule["sub_question"] = {
+                    "wav": atlee_sub_question_file,
+                    "text": ATLEE_SUB_QUESTION_TEXT[os.path.basename(atlee_sub_question_file)],
+                    "start": sub_question_start, "duration": atlee_sub_question_duration,
+                }
             schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
                                       "start": main_fact_start, "duration": main_fact_duration}
 
@@ -2820,6 +2859,8 @@ class KyvoHighlight(KyvoBaseCog):
             end_times = stage0_end_times + leadin_end_times + [
                 hype_nickname_start + hype_nickname_duration, main_fact_start + main_fact_duration,
             ]
+            if atlee_sub_question_file is not None:
+                end_times.append(sub_question_start + atlee_sub_question_duration)
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
             schedule["total_duration"] = total_duration
         else:
