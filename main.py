@@ -1,8 +1,9 @@
 import discord
-from discord import app_commands  
+from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, Client
 from aiohttp import web
@@ -92,6 +93,12 @@ class KyvoBot(commands.Bot):
             print(f"[SYSTEM ERROR] Failed global sync during startup: {e}", flush=True)
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # 🛡️ [순수 진단 로깅 - 기능 변경 없음] 에러 발생 순간의 게이트웨이 웹소켓 핑(latency)을
+        # 같이 남겨서, 다음에 이 에러가 재현될 때 그 시점에 게이트웨이 자체가 느렸는지(재연결
+        # 직후 등) 바로 확인할 수 있게 한다.
+        print(f"[GATEWAY] latency={self.latency:.3f}s at on_app_command_error dispatch "
+              f"(error_type={type(error).__name__})", flush=True)
+
         send_message = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
 
         if isinstance(error, app_commands.CommandOnCooldown):
@@ -224,6 +231,23 @@ async def on_ready():
     print(f"[GATEWAY IDENTIFIER] Network ID: {bot.user.id}", flush=True)
     print("[SECURITY MATRIX] System modules running on optimized multi-thread clusters.", flush=True)
     print("==========================================================================", flush=True)
+
+# 🛡️ [순수 진단 로깅 - 기능 변경 없음] 게이트웨이 재연결/resume/disconnect는 지금까지 전혀
+# 로그가 안 남아서, 실제로 일어나고 있어도 우리가 못 보고 있었다 - on_ready만으론 재연결인지
+# 최초 연결인지 구분이 안 되고(party.py/voice.py의 on_ready 주석 참고), on_resumed/on_disconnect/
+# on_connect는 기존에 아무도 등록한 적이 없어(전체 코드베이스 검색 확인) @bot.event로 새로
+# 등록해도 기존 리스너와 충돌하지 않는다.
+@bot.event
+async def on_connect():
+    print(f"[GATEWAY] Connected at {datetime.datetime.now(datetime.timezone.utc).isoformat()}", flush=True)
+
+@bot.event
+async def on_resumed():
+    print(f"[GATEWAY] Resumed at {datetime.datetime.now(datetime.timezone.utc).isoformat()}", flush=True)
+
+@bot.event
+async def on_disconnect():
+    print(f"[GATEWAY] Disconnected at {datetime.datetime.now(datetime.timezone.utc).isoformat()}", flush=True)
 
 @bot.command(name="sync")
 @commands.is_owner()  # 🔒 서버별 권한이 아니라 봇 인프라(전역 커맨드 트리) 관리 명령이라 오너 전용으로 제한
