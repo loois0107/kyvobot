@@ -4,6 +4,7 @@ from discord.ext import commands
 import os
 import asyncio
 import datetime
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, Client
 from aiohttp import web
@@ -127,6 +128,15 @@ class KyvoBot(commands.Bot):
 
         else:
             print(f"[CRITICAL SLASH EXCEPTION] Intercepted runtime crash node: {error}", flush=True)
+            # 🛡️ [순수 진단 로깅 - 기능 변경 없음] CommandInvokeError는 str(error)로는 "Command
+            # '...' raised an exception: NotFound..."처럼 바깥쪽 요약 한 줄만 보이고, 실제로 명령어
+            # 콜백 안에서 무슨 예외가 어디서 났는지(내부 스택 트레이스)는 안 보였다. error.original
+            # (콜백 안에서 실제로 발생한 원본 예외)의 타입/메시지/전체 트레이스백을 그대로 찍는다.
+            original = getattr(error, "original", None)
+            if original is not None:
+                print(f"[CRITICAL SLASH EXCEPTION][ORIGINAL] type={type(original).__name__}: {original}", flush=True)
+                tb_lines = traceback.format_exception(type(original), original, original.__traceback__)
+                print("[CRITICAL SLASH EXCEPTION][TRACEBACK]\n" + "".join(tb_lines), flush=True)
             try:
                 await send_message(
                     "⚠️ **Internal Server Error!**\n"
