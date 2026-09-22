@@ -2115,7 +2115,7 @@ class KyvoHighlight(KyvoBaseCog):
         # 수렴한다(디스코드 업로드 한도 대응). maxrate/bufsize로 순간적인 폭주만 눌러주고
         # 평균은 -b:v 그대로 나가게 하는 표준 단일 패스 VBV 제한 인코딩.
         cmd = [FFMPEG_EXE, "-y", *inputs,
-               "-/filter_complex", filter_script_path,
+               "-filter_complex_script", filter_script_path,
                "-map", "[vout]", "-map", "[aout]",
                "-c:v", "libx264", "-preset", "veryfast",
                "-b:v", f"{int(target_video_kbps)}k",
