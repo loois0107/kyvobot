@@ -171,15 +171,30 @@ class KyvoBot(commands.Bot):
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Failed committing settings for {guild_id}: {e}", flush=True)
 
+    async def _db_call(self, fn):
+        """supabase-py는 동기 클라이언트라 이벤트 루프를 막지 않도록 executor로 감싼다 -
+        cogs/*.py의 12개 cog가 이미 쓰는 것과 동일한 패턴(self.bot.db_executor 대신
+        여기선 self가 이미 bot 인스턴스라 self.db_executor)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.db_executor, fn)
+
     async def get_user_data(self, user_id: str, guild_id: str) -> dict:
+        # 🛡️ [이벤트 루프 블로킹 수정] select/insert 둘 다 await 없이 동기 .execute()를 직접
+        # 호출해서, 신규 유저(select 0건 -> insert까지)는 두 번 연속으로 이벤트 루프를 멈췄다.
+        # economy 전체(20여 곳)와 leveling의 on_message(모든 메시지마다)가 이 함수를 거치므로
+        # _db_call로 감싸 파급 범위 전체를 한 번에 해결한다.
         try:
-            response = self.supabase.table("users").select("*") \
-                .eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            response = await self._db_call(
+                lambda: self.supabase.table("users").select("*")
+                        .eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            )
             if response.data:
                 return response.data[0]
             else:
                 default_profile = {"user_id": user_id, "guild_id": guild_id, "points": 0, "xp": 0, "level": 1}
-                self.supabase.table("users").insert(default_profile).execute()
+                await self._db_call(
+                    lambda: self.supabase.table("users").insert(default_profile).execute()
+                )
                 return default_profile
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Flat profile matrix data acquisition fault on record ID {user_id}: {e}", flush=True)
@@ -191,8 +206,10 @@ class KyvoBot(commands.Bot):
             update_payload.pop("user_id", None)
             update_payload.pop("guild_id", None)
 
-            self.supabase.table("users").update(update_payload) \
-                .eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            await self._db_call(
+                lambda: self.supabase.table("users").update(update_payload)
+                        .eq("user_id", user_id).eq("guild_id", guild_id).execute()
+            )
             return True
         except Exception as e:
             print(f"[DATABASE EXCEPTION] Critical write blockage handling flat record adjustments for user reference {user_id}: {e}", flush=True)
