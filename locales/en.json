@@ -408,7 +408,7 @@
   "highlight_err_ai_failed": "❌ Something went wrong generating the commentary. Please try again in a moment.",
   "highlight_err_render_failed": "❌ Something went wrong rendering the video. Please try again in a moment.",
   "highlight_err_unexpected": "❌ An unexpected error occurred. If this keeps happening, please contact an administrator.",
-  "highlight_progress_queued": "⏳ Queued... (Tip: start recording at least 7 seconds before the kill, or the caster lines will be cut short. Clips can't exceed 45 seconds and must be from a match that ended within the last 6 hours.)",
+  "highlight_progress_queued": "⏳ Queued...",
   "highlight_progress_analyzing": "🔍 Reading the clip's clock and matching it to your game data...",
   "highlight_progress_scripting": "🎙️ Generating caster commentary...",
   "highlight_progress_rendering": "🎬 Rendering the video with subtitles and sound effects...",

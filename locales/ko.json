@@ -408,7 +408,7 @@
   "highlight_err_ai_failed": "❌ 해설 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_render_failed": "❌ 영상 렌더링 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_unexpected": "❌ 예상치 못한 오류가 발생했습니다. 문제가 계속되면 관리자에게 문의해주세요.",
-  "highlight_progress_queued": "⏳ 대기열에 등록되었습니다... (참고: 킬 최소 7초 전부터 녹화해야 캐스터 멘트가 온전히 나옵니다. 클립은 45초를 넘을 수 없고, 매치가 끝난 지 6시간 이내여야 합니다.)",
+  "highlight_progress_queued": "⏳ 대기열에 등록되었습니다...",
   "highlight_progress_analyzing": "🔍 영상 시계를 읽고 매치 데이터를 확인하는 중...",
   "highlight_progress_scripting": "🎙️ 캐스터 해설 대본을 생성하는 중...",
   "highlight_progress_rendering": "🎬 자막과 효과음을 입혀 영상을 렌더링하는 중...",

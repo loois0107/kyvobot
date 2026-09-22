@@ -168,6 +168,9 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
 
     # ── onboarding.py ──
     ("language", "language"): {"name": "언어", "description": "이제부터 Kyvo가 응답할 언어"},
+
+    # ── highlight.py ──
+    ("highlight", "video"): {"name": "클립", "description": "플레이 화면 클립(mp4), 시계가 우측 상단에 보여야 합니다. 킬 최소 7초 전부터 녹화하세요."},
 }
 
 
