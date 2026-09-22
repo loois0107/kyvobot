@@ -95,19 +95,27 @@ class KyvoBot(commands.Bot):
         send_message = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
 
         if isinstance(error, app_commands.CommandOnCooldown):
-            await send_message(
-                f"⏳ **Command on Cooldown!**\n"
-                f"Please wait `{error.retry_after:.1f}` seconds before trying again.", 
-                ephemeral=True
-            )
+            try:
+                await send_message(
+                    f"⏳ **Command on Cooldown!**\n"
+                    f"Please wait `{error.retry_after:.1f}` seconds before trying again.",
+                    ephemeral=True
+                )
+            except (discord.NotFound, discord.HTTPException) as e:
+                print(f"[SLASH EXCEPTION][WARN] Failed to send cooldown response (interaction likely expired): "
+                      f"{type(e).__name__}: {e}", flush=True)
             return
 
         elif isinstance(error, app_commands.MissingPermissions):
-            await send_message(
-                "❌ **Permission Denied!**\n"
-                "This command requires Administrator or Server Manager privileges.", 
-                ephemeral=True
-            )
+            try:
+                await send_message(
+                    "❌ **Permission Denied!**\n"
+                    "This command requires Administrator or Server Manager privileges.",
+                    ephemeral=True
+                )
+            except (discord.NotFound, discord.HTTPException) as e:
+                print(f"[SLASH EXCEPTION][WARN] Failed to send permission-denied response (interaction likely expired): "
+                      f"{type(e).__name__}: {e}", flush=True)
             return
 
         else:
