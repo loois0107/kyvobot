@@ -268,6 +268,13 @@ PRE_BUILDUP_TEXT = {
     "pre_buildup_a.wav": "어우, 살벌하네요",  # 1.28s, 2회 시도로 무음 0곳 통과
     "pre_buildup_b.wav": "심상치 않은데요",  # 1.20s, 1~2어절로 재축소 후 1회 시도로 무음 0곳 통과
     "pre_buildup_c.wav": "여기 심상치 않은데요",  # 1.52s, 1회 시도로 무음 0곳 통과
+    # 🛡️ [N슬롯화 - 풀 확장] 상황멘트가 렌더당 최대 4개까지 들어갈 수 있게 되면서 풀도
+    # 3개->6개로 늘렸다. "어," 같은 감탄사 접두사가 붙은 문장은 내부 무음 게이트를 계속
+    # 실패시켰다("어, 그림 좋은데요?" 16회 전부 실패 -> 접두사만 뺀 "그림 좋은데요?"는
+    # 1회 만에 통과) - 짧을수록, 그리고 문두 감탄사가 없을수록 안정적이라는 패턴 재확인.
+    "pre_buildup_d.wav": "그림 좋은데요?",  # 1.04s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_e.wav": "뭔가 오는데요?",  # 1.04s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_f.wav": "여기 봐야겠는데요?",  # 1.20s, 2회 시도로 무음 0곳 통과
 }
 # 🛡️ ["어어??" 신규] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣는 "이상 감지" 반응 - 옛날
 # buildup1_*.wav("어어?!" 계열, Main 목소리) 정적 풀이 이 구조 재설계 전에 만들어져 있던 걸
@@ -421,7 +428,7 @@ ATLEE_TEXT = {
     "atlee_d.wav": "Wow!!",
 }
 
-# ── 영어 리드인 필러(한국어 pre_buildup+EOEO 2단계 고정 구조에 대응, 1~4개 유동 배치) ──
+# ── 영어 리드인 필러(한국어 pre_buildup(N개, 유동)+EOEO(마지막 1개) 구조에 대응, 1~4개 유동 배치) ──
 # 🛡️ [환각 위험 차단 원칙 동일 적용] PRE_BUILDUP_TEXT와 동일한 원칙 - 위치/챔피언/구체적
 # 액션을 특정하지 않는 순수 분위기 문구만 채택, 어떤 클립에 붙어도 항상 사실일 수 있는
 # 문장만 사용(게임 시각/스코어처럼 렌더 시점에 실제로 확정된 정보라도, 이 필러는 실시간
@@ -444,6 +451,10 @@ EN_LEADIN_MAX_COUNT = 4
 EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 시작 후 이만큼 뒤에 첫 필러 시작
 EN_LEADIN_GAP_SEC = PRE_BUILDUP_GAP_SEC                    # 재사용: 필러 사이 간격
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
+# 🛡️ [한국어 리드인도 N슬롯으로 확장] 상황멘트(PRE_BUILDUP) 자리 수를 EN_LEADIN과 같은 상한으로
+# 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치되고(자리가 없으면 더 적게), 그 뒤에
+# "어어??"(EOEO) 하나가 마지막에 온다는 관례는 그대로 유지한다(plan_lead_in_forward 참고).
+PRE_BUILDUP_MAX_COUNT = 4
 
 # ── 3단계(Main 사실 전달, 실시간 TTS) ── - _generate_commentary/SYSTEM_PROMPT/
 # _commentary_names_killer/_i_or_ga/_eul_or_reul 전부 그대로 재사용, 담당 목소리만
@@ -488,26 +499,43 @@ def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
     return {"t1": t1, "t2": t2, "t3": t3}
 
 
-def plan_lead_in_forward(kill_t: float, pre_buildup_dur: float, eoeo_dur: float,
+def plan_lead_in_forward(kill_t: float, pre_buildup_durs: list[float], eoeo_dur: float,
                           start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
-                          mid_gap: float = PRE_BUILDUP_GAP_SEC,
-                          end_gap: float = EOEO_GAP_SEC) -> tuple[float | None, float | None]:
-    """상황 멘트 -> "어어??" 시작 시각(순수 함수, 테스트 가능) - kill_t 역산이 아니라 클립
-    시작(t=0) 기준으로 앞에서부터 배치한다(상황 멘트는 start_offset부터, "어어??"는 상황
-    멘트 종료+mid_gap부터). kill_t와 겹치지 않는지만 안전장치로 검사한다:
-    - 상황 멘트조차 end_gap 여유를 두고 kill_t 전에 안 끝나면(비정상적으로 짧은 클립/이른
-      킬) 둘 다 스킵(None, None).
-    - 상황 멘트는 들어가는데 "어어??"가 kill_t와 겹치면 "어어??"만 스킵(pre_start, None) -
-      상황 멘트 혼자라도 자연스럽게 재생된다.
-    예전 빌드업1/2단계의 '자리 없으면 스킵' 패턴과 동일한 원칙(억지로 겹치게 밀어넣지
-    않음)."""
-    pre_start = start_offset
-    if pre_start + pre_buildup_dur + end_gap > kill_t:
-        return None, None
-    eoeo_start = pre_start + pre_buildup_dur + mid_gap
-    if eoeo_start + eoeo_dur + end_gap > kill_t:
-        return pre_start, None
-    return pre_start, eoeo_start
+                          gap: float = PRE_BUILDUP_GAP_SEC,
+                          end_gap: float = EOEO_GAP_SEC) -> tuple[list[float], float | None]:
+    """상황 멘트(N개, 유동) -> "어어??"(마지막 1개) 시작 시각들(순수 함수, 테스트 가능) -
+    plan_leadin_fillers_en(영어)과 같은 "클립 시작(t=0) 기준 앞에서부터 순차 배치, 자리가
+    없으면 그만큼만" 원칙을 한국어의 "상황멘트 먼저 - 어어?? 마지막" 관례에 맞게 일반화한
+    버전. 예전엔 상황멘트 정확히 1개 + 어어?? 1개 고정이었는데, 이제 상황멘트가 pre_buildup_durs
+    리스트 순서대로 몇 개든(자리가 허락하는 만큼) 들어갈 수 있다:
+    - 1번째 상황멘트는 예전과 동일하게 "그 자체만" kill_t 전에 안 끝나면(end_gap 여유 포함)
+      전부 스킵([], None) - 비정상적으로 짧은 클립/이른 킬 방어.
+    - 2번째부터는 "이 상황멘트를 넣고도 그 뒤에 어어??가 들어갈 자리(gap+eoeo_dur+end_gap)가
+      남아있을 때만" 추가한다 - 상황멘트를 욕심껏 채우다 정작 마지막 "어어??"가 밀려나는
+      일이 없도록, 항상 어어?? 몫을 먼저 남겨두고 남는 공간에만 상황멘트를 더 채우는
+      방식이다("상황멘트 먼저, 마지막 슬롯 근처에 어어??" 관례를 새 구조에서도 지킴).
+    - 상황멘트가 1개라도 들어갔다면, 그 다음 남은 자리에 어어??가 들어가는지 마지막에
+      한 번 더 확인한다(안 들어가면 상황멘트만, 예전과 동일).
+    pre_buildup_durs가 원소 1개짜리 리스트면 예전 plan_lead_in_forward와 완전히 동일한
+    결과를 낸다(회귀 없음 - 순수 함수 단위 테스트로 확인됨)."""
+    pre_starts: list[float] = []
+    cursor = start_offset
+    for i, dur in enumerate(pre_buildup_durs):
+        end = cursor + dur
+        if i == 0:
+            if end + end_gap > kill_t:
+                break
+        else:
+            if end + gap + eoeo_dur + end_gap > kill_t:
+                break
+        pre_starts.append(cursor)
+        cursor = end + gap
+
+    if not pre_starts:
+        return [], None
+
+    eoeo_start = cursor if cursor + eoeo_dur + end_gap <= kill_t else None
+    return pre_starts, eoeo_start
 
 
 def plan_leadin_fillers_en(kill_t: float, durations: list[float],
@@ -1405,7 +1433,12 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [영어 스케줄 키 추가] sterling/carter/atlee(0단계 캐스케이드)와 en_leadin_1~4(리드인
         # 필러)는 KO 스케줄에는 애초에 안 생기는 키라 schedule.get()이 None을 반환해 조용히
         # 스킵된다(아래 for 루프 동일) - KO 렌더 경로에는 아무 영향 없음.
-        for key in ("pre_buildup", "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact",
+        # 🛡️ [한국어 리드인 N슬롯화] "pre_buildup" 단일 키가 en_leadin_1~4와 같은 방식으로
+        # pre_buildup_1~4(PRE_BUILDUP_MAX_COUNT개)로 늘어났다 - 자리가 없는 슬롯은 schedule에
+        # 아예 안 생겨서(아래 for 루프에서 None으로 조용히 스킵) 렌더당 실제로 쓰이는 개수가
+        # 1~4개로 유동적이다.
+        for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
+                    "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
             if entry is None:
@@ -2854,7 +2887,7 @@ class KyvoHighlight(KyvoBaseCog):
             schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
                                       "start": main_fact_start, "duration": main_fact_duration}
 
-            # 리드인 필러: 한국어 pre_buildup+EOEO(고정 2자리)와 달리 1~4개를 유동적으로
+            # 리드인 필러: 한국어와 마찬가지로(plan_lead_in_forward) 1~4개를 유동적으로
             # 채운다(plan_leadin_fillers_en, 순수 함수) - 자리가 없으면 0개까지 줄어들 수 있다.
             leadin_end_times = []
             if EN_LEADIN_POOL:
@@ -2884,7 +2917,10 @@ class KyvoHighlight(KyvoBaseCog):
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
                 return
 
-            pre_buildup_file = random.choice(PRE_BUILDUP_POOL)
+            # 🛡️ [N슬롯화] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴(random.sample,
+            # 최대 PRE_BUILDUP_MAX_COUNT개)으로 뽑는다 - 실제로 몇 개가 쓰일지는
+            # plan_lead_in_forward가 kill_t와의 여유를 보고 나중에 정한다.
+            pre_buildup_candidates = random.sample(PRE_BUILDUP_POOL, min(len(PRE_BUILDUP_POOL), PRE_BUILDUP_MAX_COUNT))
             eoeo_file = random.choice(EOEO_POOL)
             main_explode_file = random.choice(MAIN_EXPLODE_POOL)
             hype_explode_file = random.choice(HYPE_EXPLODE_POOL)
@@ -2892,7 +2928,7 @@ class KyvoHighlight(KyvoBaseCog):
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
-                pre_buildup_duration = await self._to_executor(self._probe_audio_duration, pre_buildup_file)
+                pre_buildup_durations = [await self._to_executor(self._probe_audio_duration, f) for f in pre_buildup_candidates]
                 eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
                 main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
                 hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
@@ -2920,9 +2956,10 @@ class KyvoHighlight(KyvoBaseCog):
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
 
-            # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트 -> "어어??" 순서로 배치하고,
-            # kill_t와 안 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
-            pre_buildup_start, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_duration, eoeo_duration)
+            # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
+            # 자리가 허락하는 만큼) -> "어어??"(마지막 1개) 순서로 배치하고, kill_t와 안
+            # 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
+            pre_buildup_starts, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_durations, eoeo_duration)
 
             end_times = [
                 kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
@@ -2950,9 +2987,10 @@ class KyvoHighlight(KyvoBaseCog):
             if eoeo_start is not None:
                 schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
                                      "start": eoeo_start, "duration": eoeo_duration}
-            if pre_buildup_start is not None:
-                schedule["pre_buildup"] = {"wav": pre_buildup_file, "text": PRE_BUILDUP_TEXT[os.path.basename(pre_buildup_file)],
-                                            "start": pre_buildup_start, "duration": pre_buildup_duration}
+            for i, start in enumerate(pre_buildup_starts):
+                f = pre_buildup_candidates[i]
+                schedule[f"pre_buildup_{i + 1}"] = {"wav": f, "text": PRE_BUILDUP_TEXT[os.path.basename(f)],
+                                                     "start": start, "duration": pre_buildup_durations[i]}
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
         # 같이 퇴장하는 것으로 잡았다(플레이어에게 "이 킬에 대한 설명이 끝났다"는 인상과
