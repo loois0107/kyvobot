@@ -98,7 +98,11 @@ class KyvoBaseCog(commands.Cog):
     async def get_msg(self, guild_id: int, key: str, **kwargs) -> str:
         """서버 설정 언어에 맞는 메시지를 반환한다. 언어는 캐시된 설정에서 읽어 DB 부하를 차단."""
         settings = await self.get_guild_settings(guild_id)
-        lang = settings.get("language", "en")
+        # 🛡️ [버그 수정] .get("language", "en")은 키가 아예 없을 때만 기본값을 쓴다 - DB 컬럼이
+        # NULL이라 {"language": None}처럼 키는 있고 값만 None인 경우엔 기본값이 안 먹혀서
+        # lang이 None이 되고, 이후 모든 lang == "en"/"ko" 비교가 실패해 의도와 무관한 분기로
+        # 샐 수 있었다. or로 None/빈 문자열까지 전부 안전하게 "en"으로 폴백시킨다.
+        lang = settings.get("language") or "en"
 
         template = get_locale_message(lang, key)
         if kwargs:

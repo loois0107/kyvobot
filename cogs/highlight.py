@@ -2396,7 +2396,10 @@ class KyvoHighlight(KyvoBaseCog):
         # 읽고 있어 서로 안 겹치는 두 번째 조회지만, DB가 아니라 캐시된 설정에서 읽으므로
         # 부하 문제는 없다.
         guild_settings = await self.get_guild_settings(guild_id)
-        lang = guild_settings.get("language", "en")
+        # 🛡️ [버그 수정 - get_msg()와 동일한 문제] .get("language", "en")은 DB 컬럼이 NULL이라
+        # 키는 있고 값만 None인 경우 기본값이 안 먹혀서 lang이 None이 되고, 이후 lang == "en"
+        # 비교가 전부 실패해 의도와 무관하게 한국어(else) 분기로 샐 수 있었다.
+        lang = guild_settings.get("language") or "en"
 
         video_path = os.path.join(work_dir, "input.mp4")
         await video.save(video_path)
