@@ -292,6 +292,26 @@ PRE_BUILDUP_TEXT = {
     "pre_buildup_e.wav": "허",  # 0.56s, 3회 시도로 무음 0곳 통과
     "pre_buildup_f.wav": "오",  # 0.72s, 1회 시도로 무음 0곳 통과
 }
+# 🛡️ [리드인 2보이스 겹침 - 신규] 지금까지 리드인 구간(상황 멘트+"어어??")은 100% Main
+# 혼자였다 - 가끔(LEADIN_OVERLAY_CHANCE 확률로) Hype 또는 Sub가 짧게 끼어들어 반응하면
+# 리드인이 매번 똑같이 "혼잣말"처럼 들리지 않고 다른 목소리가 있다는 인상을 준다. 파일명
+# 접두사(hype_leadin_/sub_leadin_)로 두 목소리가 한 풀에 섞여 있어 random.choice 한 번이
+# 곧 "Hype 또는 Sub 중 하나"를 고르는 것과 같다(대략 50/50). PRE_BUILDUP_TEXT와 동일한
+# "1어절 이내 순수 추임새" 원칙 - 상황 판단 없음.
+# 🛡️ [Sub 보이스 - 비음 회피] "음?"/"흠?"는 Sub 보이스에서 20회 전부 무음 게이트 실패
+# (비음 끝소리 감쇠 구간이 -35dB 밑으로 떨어져 게이트에 걸리는 것으로 추정) - 받침 없는
+# 텍스트로 교체하니 각각 3회 만에 통과. Hype는 셋 다 문제 없었다(2~6회).
+LEADIN_OVERLAY_POOL = (sorted(glob.glob(os.path.join(VOICE_DIR, "hype_leadin_*.wav")))
+                       + sorted(glob.glob(os.path.join(VOICE_DIR, "sub_leadin_*.wav"))))
+LEADIN_OVERLAY_TEXT = {
+    "hype_leadin_a.wav": "오!",  # 0.48s, 2회 시도로 무음 0곳 통과
+    "hype_leadin_b.wav": "와",  # 0.56s, 6회 시도로 무음 0곳 통과
+    "hype_leadin_c.wav": "어?",  # 0.48s, 3회 시도로 무음 0곳 통과
+    "sub_leadin_a.wav": "오?",  # 0.48s, 3회 시도로 무음 0곳 통과
+    "sub_leadin_b.wav": "어",  # 0.64s, 3회 시도로 무음 0곳 통과
+    "sub_leadin_c.wav": "허어",  # 0.64s, 16회 시도로 무음 0곳 통과
+}
+LEADIN_OVERLAY_CHANCE = 0.4
 # 🛡️ ["어어??" 신규] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣는 "이상 감지" 반응 - 옛날
 # buildup1_*.wav("어어?!" 계열, Main 목소리) 정적 풀이 이 구조 재설계 전에 만들어져 있던 걸
 # 그대로 재사용한다(새 TTS 없음). 파일이 이미 짧아서(0.8~1.5초) "짧게"라는 요구사항도 그대로
@@ -348,7 +368,12 @@ EOEO_GAP_SEC = 0.2         # "어어??" 종료 ~ 0단계(킬 시점) 시작 사�
 # 시도해도 매번 1곳이 남아서, 모음 자체를 "히"+"이" 계열로 바꾸니 7회 만에 해결됐다 - 특정
 # 음소(어) 자체가 이 목소리에서 유독 끊기기 쉬웠던 것으로 보인다.
 MAIN_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "main_explode_*.wav")))
-HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_*.wav")))
+# 🛡️ [glob 충돌 버그 수정 - 리드인 2보이스 겹침 추가로 발견] "hype_*.wav"는 새로 추가된
+# "hype_leadin_*.wav"(리드인 겹침용, LEADIN_OVERLAY_POOL)까지 그대로 삼켜서, 0단계
+# 캐스케이드에 리드인 파일이 섞여 뽑히면 HYPE_EXPLODE_TEXT에 없는 키라 KeyError가 났다
+# (ATLEE_POOL에서 이미 한 번 겪었던 것과 동일한 glob 충돌 패턴). "hype_" 뒤에 글자 하나만
+# 오는 파일(a~f)만 정확히 잡도록 좁힌다.
+HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_[a-z].wav")))
 SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
 MAIN_EXPLODE_TEXT = {
     "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.52s, 무음/깊은 딥 없음(정밀 기준 통과)
@@ -581,6 +606,37 @@ def plan_leadin_fillers_en(kill_t: float, durations: list[float],
     available = kill_t - end_gap - start_offset
     offsets = _spread_fillers_evenly(available, durations, gap, EN_LEADIN_MAX_COUNT)
     return [start_offset + off for off in offsets]
+
+
+def pick_leadin_overlay_start(pre_buildup_starts: list[float], pre_buildup_durs: list[float],
+                               eoeo_start: float | None, eoeo_dur: float,
+                               overlay_dur: float, kill_t: float,
+                               overlap_ratio: float = 0.5,
+                               end_gap: float = EOEO_GAP_SEC) -> float | None:
+    """리드인 2보이스 겹침(LEADIN_OVERLAY_POOL)이 낄 자리를 고르는 순수 함수(테스트
+    가능) - "어어??"(EOEO)가 있으면 그 슬롯의 중간 지점(overlap_ratio=0.5)에 겹치게
+    시작한다(Main이 "어어?!" 하는 도중에 Hype/Sub가 짧게 반응하는 그림). EOEO가
+    스킵된 경우(클립이 짧아 자리가 없던 경우)엔 마지막 상황 멘트 슬롯의 중간 지점으로
+    폴백한다. 상황 멘트도 EOEO도 둘 다 없으면(리드인 자체가 통째로 스킵) None -
+    억지로 자리를 만들지 않는다는 기존 리드인 설계 원칙 그대로.
+
+    🛡️ [kill_t 침범 방지 - 실측으로 발견] overlay 후보 파일 길이가 제각각이라(0.48~0.64s),
+    "중간 지점에서 시작"만으로는 더 긴 파일(예: 0.64s)이 kill_t를 최대 0.04s 넘겨버리는
+    게 시뮬레이션으로 실측 확인됨(0단계 폭발과 살짝 겹침) - overlay_dur/kill_t를 받아서
+    "그 지점에서 시작 시 kill_t - end_gap을 넘기면 안 넘기는 가장 늦은 시각"으로 clamp한다.
+    EOEO 길이가 짧아 실제로는 이 clamp가 거의 항상 걸리는데, 그 결과 overlay가 "어어??"가
+    끝나는 시점(kill_t - end_gap) 근처에서 끝나도록 자연스럽게 수렴한다 - 오히려 "어어?!"가
+    마무리되는 순간에 맞춰 반응하는 그림이 되어 의도와도 잘 맞는다."""
+    if eoeo_start is not None:
+        target = eoeo_start + eoeo_dur * overlap_ratio
+    elif pre_buildup_starts:
+        target = pre_buildup_starts[-1] + pre_buildup_durs[-1] * overlap_ratio
+    else:
+        return None
+    latest_start = kill_t - end_gap - overlay_dur
+    if latest_start < 0:
+        return None  # overlay 자체가 물리적으로 들어갈 자리가 없음(극단적으로 이른 킬)
+    return min(target, latest_start)
 
 
 # ══════════════════════════════════════════════════════════
@@ -1430,9 +1486,10 @@ class KyvoHighlight(KyvoBaseCog):
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
-        pre_buildup(상황 멘트)/eoeo("어어??") (둘 다 킬 이전 리드인, 자리 없으면 없을 수도
-        있음)/main_explode/hype_explode/sub_explode(0단계)/hype_nickname_1~3(1단계, 3보이스
-        동시 콜)/sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
+        pre_buildup(상황 멘트)/eoeo("어어??")/leadin_overlay(리드인 2보이스 겹침, 확률적,
+        Hype 또는 Sub) (셋 다 킬 이전 리드인, 자리 없으면 없을 수도 있음)/main_explode/
+        hype_explode/sub_explode(0단계)/hype_nickname_1~3(1단계, 3보이스 동시 콜)/
+        sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
         {"wav","text","start","duration"}. 타이밍 자체는
         호출부에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로 ffmpeg 인풋/필터그래프를
         조립하기만 한다."""
@@ -1485,7 +1542,7 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [3보이스 동시 콜] "hype_nickname" 단일 키가 3보이스 동시 콜에 맞춰
         # hype_nickname_1/2/3(KO: main+hype+sub, EN: sterling+carter+atlee)로 늘어났다.
         for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
-                    "eoeo", "main_explode", "hype_explode", "sub_explode",
+                    "eoeo", "leadin_overlay", "main_explode", "hype_explode", "sub_explode",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
@@ -3105,12 +3162,29 @@ class KyvoHighlight(KyvoBaseCog):
             # 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
             pre_buildup_starts, eoeo_start = plan_lead_in_forward(kill_t, pre_buildup_durations, eoeo_duration)
 
+            # 🛡️ [리드인 2보이스 겹침] LEADIN_OVERLAY_CHANCE 확률로만 시도한다 - 매번 나오면
+            # 오히려 예측 가능한 패턴이 되어버리니 "가끔" 정도로만. 자리가 없으면(리드인 자체가
+            # 스킵된 클립) pick_leadin_overlay_start가 None을 반환해 조용히 스킵된다.
+            leadin_overlay_file = None
+            leadin_overlay_start = None
+            leadin_overlay_duration = 0.0
+            if LEADIN_OVERLAY_POOL and random.random() < LEADIN_OVERLAY_CHANCE:
+                leadin_overlay_file = random.choice(LEADIN_OVERLAY_POOL)
+                leadin_overlay_duration = await self._to_executor(self._probe_audio_duration, leadin_overlay_file)
+                leadin_overlay_start = pick_leadin_overlay_start(
+                    pre_buildup_starts, pre_buildup_durations, eoeo_start, eoeo_duration,
+                    leadin_overlay_duration, kill_t)
+                if leadin_overlay_start is None:
+                    leadin_overlay_file = None
+
             end_times = [
                 kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
                 *(hype_nickname_start + dur for dur in hype_nickname_durations),
                 sub_question_start + sub_question_duration,
                 main_fact_start + main_fact_duration,
             ]
+            if leadin_overlay_start is not None:
+                end_times.append(leadin_overlay_start + leadin_overlay_duration)
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
 
             schedule = {
@@ -3137,6 +3211,11 @@ class KyvoHighlight(KyvoBaseCog):
                 f = pre_buildup_candidates[i]
                 schedule[f"pre_buildup_{i + 1}"] = {"wav": f, "text": PRE_BUILDUP_TEXT[os.path.basename(f)],
                                                      "start": start, "duration": pre_buildup_durations[i]}
+            if leadin_overlay_start is not None:
+                schedule["leadin_overlay"] = {
+                    "wav": leadin_overlay_file, "text": LEADIN_OVERLAY_TEXT[os.path.basename(leadin_overlay_file)],
+                    "start": leadin_overlay_start, "duration": leadin_overlay_duration,
+                }
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
         # 같이 퇴장하는 것으로 잡았다(플레이어에게 "이 킬에 대한 설명이 끝났다"는 인상과
