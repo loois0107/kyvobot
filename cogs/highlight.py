@@ -236,6 +236,17 @@ SFX_LIMITER_CEILING = 0.65
 # 아니다. 이 alimiter 필터 자체는 이 세션 훨씬 이전(로컬 프로토타입 단계)에 한 번 배운 교훈
 # 이었는데 실제 프로덕션 코드로 옮겨질 때 빠졌던 것으로 보인다.
 VOICE_MIX_GAIN_DB = 6.0
+# 🛡️ [0단계 체감 강화] 킬 순간 "동시 폭발" 임팩트를 더 세게 느끼도록, 0단계 목소리
+# (main_explode/hype_explode/sub_explode(KO), 그리고 0단계로 쓰이는 sterling/carter/
+# atlee(EN))에만 나머지 단계(1~3단계: 닉네임/의문형/사실전달)보다 +3dB를 얹는다.
+VOICE_MIX_GAIN_DB_OVERRIDE = {
+    "main_explode": VOICE_MIX_GAIN_DB + 3.0,
+    "hype_explode": VOICE_MIX_GAIN_DB + 3.0,
+    "sub_explode": VOICE_MIX_GAIN_DB + 3.0,
+    "sterling": VOICE_MIX_GAIN_DB + 3.0,
+    "carter": VOICE_MIX_GAIN_DB + 3.0,
+    "atlee": VOICE_MIX_GAIN_DB + 3.0,
+}
 
 # ══════════════════════════════════════════════════════════
 #  0~3단계 킬 리액션 시퀀스 (전면 재설계 - 오늘 저녁 로컬 프로토타입 v1~v9에서 검증) -
@@ -245,9 +256,10 @@ VOICE_MIX_GAIN_DB = 6.0
 #  한정, 킬 이전 두 리드인 단계는 아래 별도 gap 규칙).
 # ══════════════════════════════════════════════════════════
 # 🛡️ [비용 설계] 실제 킬러 닉네임이 필요한 곳은 정확히 두 군데 - (1) 1단계 Hype의 닉네임
-# 샤우팅, (2) 3단계 Main의 사실 전달. 나머지 자리(상황 멘트+어어??+0단계 세 목소리+2단계
-# Sub)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀로 미리 구워둔다 - 렌더당 ElevenLabs
-# 실시간 호출은 정확히 2회로 고정(문자 수 자체는 짧은 외침/한 문장이라 부담이 크지 않음).
+# 샤우팅(3보이스 동시 콜로 확장), (2) 3단계 Main의 사실 전달. 나머지 자리(상황 멘트+어어??+
+# 0단계 세 목소리+2단계 Sub)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀로 미리 구워둔다
+# - 렌더당 ElevenLabs 실시간 호출은 정확히 4회(닉네임 3보이스+사실전달 1)로 고정(문자 수
+# 자체는 짧은 외침/한 문장이라 부담이 크지 않고, asyncio.gather로 전부 병렬 처리한다).
 VOICE_DIR = os.path.join(REPO_ROOT, "assets", "highlight_voice")
 
 # ── 킬 이전 리드인 1/2: 상황 멘트 -> "어어??" -> (0단계로 이어짐) ──
@@ -300,7 +312,10 @@ EOEO_TEXT = {
 # 안전장치로 검사한다 - 자리가 없으면(비정상적으로 짧은 클립/이른 킬) 예전 빌드업1/2단계와
 # 같은 원칙으로 스킵한다(억지로 겹치게 밀어넣지 않음).
 PRE_BUILDUP_START_OFFSET_SEC = 0.4  # 상황 멘트: 클립 시작 후 이만큼 뒤에 시작(0.3~0.5 범위)
-PRE_BUILDUP_GAP_SEC = 0.2  # 상황 멘트 종료 ~ "어어??" 시작 사이 간격
+# 🛡️ [텀 확보 - 0.2 -> 0.6] 상황 멘트들 사이 간격을 늘려서 "다다다닥" 몰아치는 느낌 대신
+# 숨 쉴 틈을 만든다. EN_LEADIN_GAP_SEC은 이 상수에서 분리된 독립 상수라 이 변경이 영어
+# 리드인 간격에는 영향을 주지 않는다.
+PRE_BUILDUP_GAP_SEC = 0.6  # 상황 멘트 종료 ~ "어어??" 시작 사이 간격
 EOEO_GAP_SEC = 0.2         # "어어??" 종료 ~ 0단계(킬 시점) 시작 사이 최소 안전 여백(충돌 검사용)
 
 # ── 0단계(킬 순간, 3인 동시 폭발 - 닉네임 없는 순수 감탄사) ──
@@ -449,7 +464,10 @@ EN_LEADIN_TEXT = {
 EN_LEADIN_MIN_COUNT = 1  # 목표치(코드로 강제하진 않음 - 자리가 없으면 0개까지 줄어들 수 있음)
 EN_LEADIN_MAX_COUNT = 4
 EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 시작 후 이만큼 뒤에 첫 필러 시작
-EN_LEADIN_GAP_SEC = PRE_BUILDUP_GAP_SEC                    # 재사용: 필러 사이 간격
+# 🛡️ [독립 상수로 분리] 예전엔 PRE_BUILDUP_GAP_SEC을 그대로 재사용했는데, 그러면 한국어
+# 쪽 간격(PRE_BUILDUP_GAP_SEC)을 조정할 때마다 영어 간격도 같이 흔들렸다. 값 자체는
+# 분리 시점의 PRE_BUILDUP_GAP_SEC(0.2)과 동일하게 유지 - 영어는 그대로 0.2.
+EN_LEADIN_GAP_SEC = 0.2
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
 # 🛡️ [한국어 리드인도 N슬롯으로 확장] 상황멘트(PRE_BUILDUP) 자리 수를 EN_LEADIN과 같은 상한으로
 # 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치되고(자리가 없으면 더 적게), 그 뒤에
@@ -478,6 +496,10 @@ ELEVENLABS_VOICE_IDS = {
     # _synthesize_voice_line 자체는 voice_key 문자열 하나만 보고 조회할 뿐 언어를 모르므로 건드리지 않음.
     "sterling": "3hQzcLsCrO9a7MOEtScA",
     "carter": "LymGX871eqlpoxSlhtzG",
+    # 🛡️ [3보이스 동시 콜용] hype_nickname이 1콜(carter만)에서 main+hype+sub/sterling+
+    # carter+atlee 3콜 동시 호출로 바뀌면서, 기존엔 정적 wav 풀(ATLEE_POOL) 전용이던
+    # atlee도 실시간 TTS 보이스로 추가됐다.
+    "atlee": "yhtcul5bvNND79PLysM4",
 }
 ELEVENLABS_MODEL_ID = "eleven_v3"
 # 🛡️ [output_format 명시] 예전엔 지정을 아예 안 해서 API 기본값(mp3_44100_128)을 그대로 썼다.
@@ -499,42 +521,47 @@ def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
     return {"t1": t1, "t2": t2, "t3": t3}
 
 
+def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_count: int) -> list[float]:
+    """0부터 시작하는 available 구간 안에 durs(순서대로) 최대 max_count개를 "평균 길이+gap"
+    기준으로 자연스럽게 들어갈 개수 N을 정한 뒤, 그 구간을 N등분해 각 조각 앞쪽에 필러
+    하나씩 배치한 오프셋 리스트를 반환하는 순수 함수(테스트 가능). N이 0이면(구간이 필러
+    하나 자리도 안 될 만큼 짧으면) 빈 리스트 - 억지로 겹치게 밀어넣지 않는다는 기존 원칙
+    그대로."""
+    if available <= 0 or not durs:
+        return []
+    avg_dur = sum(durs) / len(durs)
+    unit = avg_dur + gap
+    n = min(len(durs), max_count, int(available // unit)) if unit > 0 else 0
+    if n <= 0:
+        return []
+    segment_width = available / n
+    return [i * segment_width for i in range(n)]
+
+
 def plan_lead_in_forward(kill_t: float, pre_buildup_durs: list[float], eoeo_dur: float,
                           start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
                           gap: float = PRE_BUILDUP_GAP_SEC,
                           end_gap: float = EOEO_GAP_SEC) -> tuple[list[float], float | None]:
-    """상황 멘트(N개, 유동) -> "어어??"(마지막 1개) 시작 시각들(순수 함수, 테스트 가능) -
-    plan_leadin_fillers_en(영어)과 같은 "클립 시작(t=0) 기준 앞에서부터 순차 배치, 자리가
-    없으면 그만큼만" 원칙을 한국어의 "상황멘트 먼저 - 어어?? 마지막" 관례에 맞게 일반화한
-    버전. 예전엔 상황멘트 정확히 1개 + 어어?? 1개 고정이었는데, 이제 상황멘트가 pre_buildup_durs
-    리스트 순서대로 몇 개든(자리가 허락하는 만큼) 들어갈 수 있다:
-    - 1번째 상황멘트는 예전과 동일하게 "그 자체만" kill_t 전에 안 끝나면(end_gap 여유 포함)
-      전부 스킵([], None) - 비정상적으로 짧은 클립/이른 킬 방어.
-    - 2번째부터는 "이 상황멘트를 넣고도 그 뒤에 어어??가 들어갈 자리(gap+eoeo_dur+end_gap)가
-      남아있을 때만" 추가한다 - 상황멘트를 욕심껏 채우다 정작 마지막 "어어??"가 밀려나는
-      일이 없도록, 항상 어어?? 몫을 먼저 남겨두고 남는 공간에만 상황멘트를 더 채우는
-      방식이다("상황멘트 먼저, 마지막 슬롯 근처에 어어??" 관례를 새 구조에서도 지킴).
-    - 상황멘트가 1개라도 들어갔다면, 그 다음 남은 자리에 어어??가 들어가는지 마지막에
-      한 번 더 확인한다(안 들어가면 상황멘트만, 예전과 동일).
-    pre_buildup_durs가 원소 1개짜리 리스트면 예전 plan_lead_in_forward와 완전히 동일한
-    결과를 낸다(회귀 없음 - 순수 함수 단위 테스트로 확인됨)."""
-    pre_starts: list[float] = []
-    cursor = start_offset
-    for i, dur in enumerate(pre_buildup_durs):
-        end = cursor + dur
-        if i == 0:
-            if end + end_gap > kill_t:
-                break
-        else:
-            if end + gap + eoeo_dur + end_gap > kill_t:
-                break
-        pre_starts.append(cursor)
-        cursor = end + gap
-
-    if not pre_starts:
+    """"어어??"(EOEO)를 kill_t 직전(kill_t - end_gap - eoeo_dur)에 먼저 고정 배치하고,
+    그 앞의 사용 가능한 시간(start_offset ~ EOEO 시작 전)에 상황 멘트(N개, 유동)를 균등
+    분산 배치하는 순수 함수(테스트 가능).
+    🛡️ [재설계 - "몰림" 문제 수정] 예전엔 상황 멘트를 앞에서부터 순서대로 빽빽하게 채우고
+    남는 자리에 EOEO를 붙이는 방식이라, 클립이 길수록 상황 멘트가 전부 초반에 몰리고
+    EOEO~킬 사이에 의미 없이 긴 침묵이 생기는 문제가 실측으로 확인됐다. 이제는 EOEO를
+    "킬 직전"이라는 고정 역할에 항상 앵커링하고, 상황 멘트는 남는 시간을 "평균 길이+gap"
+    기준 개수(N, 상한은 len(pre_buildup_durs))로 나눠 N등분한 구간 앞쪽에 하나씩 흩어
+    놓는다(_spread_fillers_evenly) - 클립이 길수록 상황 멘트 사이 간격도 같이 넓어져서
+    자연스럽게 퍼진다.
+    - EOEO 자체가 들어갈 자리조차 없으면(비정상적으로 짧은 클립/이른 킬) 전부
+      스킵([], None) - 기존과 동일한 안전장치.
+    - EOEO는 들어가지만 상황 멘트 자리가 안 나오면(N=0) 상황 멘트 없이 EOEO만 재생된다."""
+    eoeo_start = kill_t - end_gap - eoeo_dur
+    if eoeo_start < start_offset:
         return [], None
 
-    eoeo_start = cursor if cursor + eoeo_dur + end_gap <= kill_t else None
+    available = eoeo_start - start_offset
+    offsets = _spread_fillers_evenly(available, pre_buildup_durs, gap, PRE_BUILDUP_MAX_COUNT)
+    pre_starts = [start_offset + off for off in offsets]
     return pre_starts, eoeo_start
 
 
@@ -543,19 +570,13 @@ def plan_leadin_fillers_en(kill_t: float, durations: list[float],
                             gap: float = EN_LEADIN_GAP_SEC,
                             end_gap: float = EN_LEADIN_END_GAP_SEC) -> list[float]:
     """영어 리드인 필러 N개(순서대로 durations)의 시작 시각 리스트(순수 함수, 테스트
-    가능) - plan_lead_in_forward의 "클립 시작(t=0) 기준 앞에서부터 순차 배치, kill_t와
-    안 겹치면 계속 채움" 원칙을 고정 2자리에서 임의 개수로 일반화한 버전. 채워 넣다가
-    다음 필러가 kill_t와 겹치는 순간 멈추고 그때까지 들어간 만큼만 반환한다(durations
-    보다 짧을 수 있고, 첫 필러조차 자리가 없으면 빈 리스트) - 억지로 겹치게 밀어넣지
-    않는다는 기존 원칙 그대로."""
-    starts: list[float] = []
-    cursor = start_offset
-    for dur in durations:
-        if cursor + dur + end_gap > kill_t:
-            break
-        starts.append(cursor)
-        cursor += dur + gap
-    return starts
+    가능) - plan_lead_in_forward와 동일한 "평균 길이+gap 기준 개수 산정 + N등분 균등
+    분산" 원칙을 쓴다(_spread_fillers_evenly). 영어 쪽은 EOEO에 해당하는 고정 앵커
+    요소가 없어서, start_offset부터 kill_t - end_gap까지 전체가 "사용 가능한 시간"이다.
+    자리가 하나도 안 나오면 빈 리스트(억지로 겹치게 밀어넣지 않는다는 기존 원칙 그대로)."""
+    available = kill_t - end_gap - start_offset
+    offsets = _spread_fillers_evenly(available, durations, gap, EN_LEADIN_MAX_COUNT)
+    return [start_offset + off for off in offsets]
 
 
 # ══════════════════════════════════════════════════════════
@@ -1394,8 +1415,8 @@ class KyvoHighlight(KyvoBaseCog):
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
         pre_buildup(상황 멘트)/eoeo("어어??") (둘 다 킬 이전 리드인, 자리 없으면 없을 수도
-        있음)/main_explode/hype_explode/sub_explode(0단계)/hype_nickname(1단계)/
-        sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
+        있음)/main_explode/hype_explode/sub_explode(0단계)/hype_nickname_1~3(1단계, 3보이스
+        동시 콜)/sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
         {"wav","text","start","duration"}. 타이밍 자체는
         호출부에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로 ffmpeg 인풋/필터그래프를
         조립하기만 한다."""
@@ -1445,8 +1466,11 @@ class KyvoHighlight(KyvoBaseCog):
         # pre_buildup_1~4(PRE_BUILDUP_MAX_COUNT개)로 늘어났다 - 자리가 없는 슬롯은 schedule에
         # 아예 안 생겨서(아래 for 루프에서 None으로 조용히 스킵) 렌더당 실제로 쓰이는 개수가
         # 1~4개로 유동적이다.
+        # 🛡️ [3보이스 동시 콜] "hype_nickname" 단일 키가 3보이스 동시 콜에 맞춰
+        # hype_nickname_1/2/3(KO: main+hype+sub, EN: sterling+carter+atlee)로 늘어났다.
         for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
-                    "eoeo", "main_explode", "hype_explode", "sub_explode", "hype_nickname", "sub_question", "main_fact",
+                    "eoeo", "main_explode", "hype_explode", "sub_explode",
+                    "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
             if entry is None:
@@ -2129,7 +2153,8 @@ class KyvoHighlight(KyvoBaseCog):
         for key, idx in voice_indices.items():
             entry = schedule[key]
             delay_ms = max(0, int(entry["start"] * 1000))
-            audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={VOICE_MIX_GAIN_DB}dB[v_{key}];")
+            gain_db = VOICE_MIX_GAIN_DB_OVERRIDE.get(key, VOICE_MIX_GAIN_DB)
+            audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={gain_db}dB[v_{key}];")
             mix_labels.append(f"[v_{key}]")
 
         n_mix = len(mix_labels)
@@ -2208,9 +2233,10 @@ class KyvoHighlight(KyvoBaseCog):
 
     async def _synthesize_voice_line(self, text: str, voice_key: str, work_dir: str, out_basename: str) -> str:
         """실제 킬러/희생자 이름이 들어가는 대사를 ElevenLabs로 실시간 합성 - 렌더당 정확히
-        2회 호출된다(1단계 Hype의 닉네임 샤우팅, 3단계 Main의 사실 서술). voice_key는
-        ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub") 중 하나. 나머지 네 자리(0단계 세
-        목소리 + 2단계 Sub)는 닉네임이 필요 없는 순수 감정 표현이라 정적 풀에서 고른다."""
+        4회 호출된다(1단계 닉네임 샤우팅 3보이스 동시 콜 + 3단계 Main의 사실 서술).
+        voice_key는 ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub"/"sterling"/"carter"/
+        "atlee") 중 하나. 나머지 자리(0단계 세 목소리 + 2단계 Sub)는 닉네임이 필요 없는
+        순수 감정 표현이라 정적 풀에서 고른다."""
         tagged_text = f"[excited][shouts] {text}"
         voice_id = ELEVENLABS_VOICE_IDS[voice_key]
         async with aiohttp.ClientSession() as session:
@@ -2805,14 +2831,22 @@ class KyvoHighlight(KyvoBaseCog):
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
 
-        # ── 1단계(Hype 닉네임 샤우팅) + 3단계(Main 사실 전달)만 실시간 TTS
-        # (렌더당 ElevenLabs 호출 정확히 2회) - 나머지 네 자리는 정적 풀에서 고른다.
+        # ── 1단계(닉네임 샤우팅, 3보이스 동시 콜) + 3단계(Main 사실 전달)만 실시간 TTS
+        # (렌더당 ElevenLabs 호출 정확히 4회, asyncio.gather로 병렬) - 나머지 네 자리는
+        # 정적 풀에서 고른다.
         hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=killer_name)
+        # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+Hype+
+        # Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는 것으로 바꿔 임팩트를
+        # 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라 asyncio.gather로 4콜을
+        # 한 번에 병렬 처리해, 콜 수가 1->4로 늘어나도 순차 대기 시간이 그만큼 늘어나지
+        # 않게 한다(네트워크 latency가 동시에 겹친다).
+        nickname_voice_keys = ("sterling", "carter", "atlee") if lang == "en" else ("main", "hype", "sub")
         try:
-            hype_nickname_wav_raw = await self._synthesize_voice_line(
-                hype_nickname_text, "carter" if lang == "en" else "hype", work_dir, "hype_nickname_raw")
-            main_fact_wav = await self._synthesize_voice_line(
-                main_fact_text, "sterling" if lang == "en" else "main", work_dir, "main_fact")
+            *hype_nickname_wavs_raw, main_fact_wav = await asyncio.gather(
+                *(self._synthesize_voice_line(hype_nickname_text, vk, work_dir, f"hype_nickname_raw_{i + 1}")
+                  for i, vk in enumerate(nickname_voice_keys)),
+                self._synthesize_voice_line(main_fact_text, "sterling" if lang == "en" else "main", work_dir, "main_fact"),
+            )
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] ElevenLabs TTS failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
@@ -2843,11 +2877,16 @@ class KyvoHighlight(KyvoBaseCog):
                     await self._to_executor(self._probe_audio_duration, atlee_sub_question_file)
                     if atlee_sub_question_file else 0.0
                 )
-                hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
+                hype_nickname_durations = [
+                    await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
+                ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
-                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
-                hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
-                await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리(3개 파일 각각 적용) - 길이는 그대로, 음량만 바뀐다.
+                hype_nickname_wavs = []
+                for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
+                    swelled = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
+                    await self._to_executor(self._apply_nickname_swell, raw, dur, swelled)
+                    hype_nickname_wavs.append(swelled)
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
@@ -2880,12 +2919,16 @@ class KyvoHighlight(KyvoBaseCog):
             #있으면 atlee_sub_question_duration=0.0이라 plan_kill_sequence가 "즉시 끝난 것"으로
             # 계산해 예전과 동일하게 우아히 스킵된다 - 하드 실패 없음). 스케줄 키는 한국어와
             # 동일하게 "sub_question" 그대로 재사용(별도 키 불필요, _render_video는 언어를 모름).
-            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, atlee_sub_question_duration)
+            # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
+            # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계(2/3단계)가 밀리는 시점은
+            # 가장 늦게 끝나는 목소리에 맞춰야 한다.
+            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), atlee_sub_question_duration)
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
-            schedule["hype_nickname"] = {"wav": hype_nickname_wav, "text": hype_nickname_text,
-                                          "start": hype_nickname_start, "duration": hype_nickname_duration}
+            for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
+                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text,
+                                                       "start": hype_nickname_start, "duration": dur}
             if atlee_sub_question_file is not None:
                 schedule["sub_question"] = {
                     "wav": atlee_sub_question_file,
@@ -2909,8 +2952,8 @@ class KyvoHighlight(KyvoBaseCog):
                     leadin_end_times.append(start + leadin_durations[i])
 
             end_times = stage0_end_times + leadin_end_times + [
-                hype_nickname_start + hype_nickname_duration, main_fact_start + main_fact_duration,
-            ]
+                hype_nickname_start + dur for dur in hype_nickname_durations
+            ] + [main_fact_start + main_fact_duration]
             if atlee_sub_question_file is not None:
                 end_times.append(sub_question_start + atlee_sub_question_duration)
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
@@ -2941,12 +2984,17 @@ class KyvoHighlight(KyvoBaseCog):
                 main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
                 hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
                 sub_explode_duration = await self._to_executor(self._probe_audio_duration, sub_explode_file)
-                hype_nickname_duration = await self._to_executor(self._probe_audio_duration, hype_nickname_wav_raw)
+                hype_nickname_durations = [
+                    await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
+                ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리 - 길이는 그대로, 음량만 바뀐다.
-                hype_nickname_wav = os.path.join(work_dir, "hype_nickname.wav")
-                await self._to_executor(self._apply_nickname_swell, hype_nickname_wav_raw, hype_nickname_duration, hype_nickname_wav)
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리(3개 파일 각각 적용) - 길이는 그대로, 음량만 바뀐다.
+                hype_nickname_wavs = []
+                for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
+                    swelled = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
+                    await self._to_executor(self._apply_nickname_swell, raw, dur, swelled)
+                    hype_nickname_wavs.append(swelled)
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
@@ -2958,8 +3006,11 @@ class KyvoHighlight(KyvoBaseCog):
             # STAGE_OVERLAP_RATIO" 지점으로 잡는다(고정 초 아님, 0단계 길이와 무관하게 1/2/3단계
             # 상호 간격은 각자 자기 길이 × 비율로만 정해진다 - 0단계가 길어져도 t2-t1/t3-t2 간격
             # 자체는 안 변하고, 셋 다 kill_t 기준으로 똑같이 더 뒤로 밀릴 뿐이다).
+            # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
+            # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계가 밀리는 시점은 가장
+            # 늦게 끝나는 목소리에 맞춰야 한다.
             stage0_dur = max(main_explode_duration, hype_explode_duration, sub_explode_duration)
-            seq = plan_kill_sequence(stage0_dur, hype_nickname_duration, sub_question_duration)
+            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), sub_question_duration)
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
@@ -2971,7 +3022,8 @@ class KyvoHighlight(KyvoBaseCog):
 
             end_times = [
                 kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
-                hype_nickname_start + hype_nickname_duration, sub_question_start + sub_question_duration,
+                *(hype_nickname_start + dur for dur in hype_nickname_durations),
+                sub_question_start + sub_question_duration,
                 main_fact_start + main_fact_duration,
             ]
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
@@ -2985,13 +3037,14 @@ class KyvoHighlight(KyvoBaseCog):
                                   "start": kill_t, "duration": hype_explode_duration},
                 "sub_explode": {"wav": sub_explode_file, "text": SUB_EXPLODE_TEXT[os.path.basename(sub_explode_file)],
                                  "start": kill_t, "duration": sub_explode_duration},
-                "hype_nickname": {"wav": hype_nickname_wav, "text": hype_nickname_text,
-                                   "start": hype_nickname_start, "duration": hype_nickname_duration},
                 "sub_question": {"wav": sub_question_file, "text": SUB_QUESTION_TEXT[os.path.basename(sub_question_file)],
                                   "start": sub_question_start, "duration": sub_question_duration},
                 "main_fact": {"wav": main_fact_wav, "text": main_fact_text,
                               "start": main_fact_start, "duration": main_fact_duration},
             }
+            for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
+                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text,
+                                                       "start": hype_nickname_start, "duration": dur}
             if eoeo_start is not None:
                 schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
                                      "start": eoeo_start, "duration": eoeo_duration}
