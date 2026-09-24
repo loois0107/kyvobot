@@ -2531,12 +2531,16 @@ class KyvoHighlight(KyvoBaseCog):
         # 로직에 나중에 실수로 return이 빠지거나 흐름이 바뀌어도 이 두 번째 검사가 마지막
         # 방어선이 된다.
         mapping = None
+        # 🛡️ [진단성] 어느 크롭이 최종적으로 성공했는지 나중에(highlight_err_no_kills 진단
+        # 로그에서) 알 수 있게 추적만 해둔다 - 동작 자체는 그대로.
+        crop_used = "NORMAL"
         try:
             try:
                 mapping = await try_crop_ratio(CLOCK_CROP_RATIO_NORMAL)
             except Exception as e:
                 print(f"[HIGHLIGHT][INFO] Normal clock crop failed ({type(e).__name__}: {e}) - "
                       f"retrying with replay-viewer crop (guild={guild_id})", flush=True)
+                crop_used = "REPLAY"
                 mapping = await try_crop_ratio(CLOCK_CROP_RATIO_REPLAY)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Clock OCR/mapping failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
@@ -2570,6 +2574,7 @@ class KyvoHighlight(KyvoBaseCog):
                     riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}"
                     details.append(await self._riot_get(tv_cog, session, riot_call_url))
 
+                match_pick_stage = "primary"  # 🛡️ [진단성] no_kills 로그에서 참고할 매치 판별 단계 추적
                 chosen = _pick_match_for_clip(details, creation)
                 if chosen is None:
                     # 🛡️ [진단성] 지난 라운드에 RiotNotFoundError 분기만 로그를 붙이고 이 분기(진짜
@@ -2624,6 +2629,7 @@ class KyvoHighlight(KyvoBaseCog):
                               f"중 없음 (guild={guild_id})", flush=True)
                         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
                         return
+                    match_pick_stage = "fallback_game_time_range"
                     print(f"[HIGHLIGHT][INFO] 2차 판별로 매치 선택됨: {chosen['metadata']['matchId']} "
                           f"(game_ms_end={game_ms_end:.0f}ms, guild={guild_id})", flush=True)
                 match_id = chosen["metadata"]["matchId"]
@@ -2658,6 +2664,25 @@ class KyvoHighlight(KyvoBaseCog):
         names = _participant_id_to_name(chosen)
         selected = _select_kills_in_clip(kills, mapping, duration)
         if not selected:
+            # 🛡️ [진단성] "OCR/크롭 자체가 잘못 읽었다" vs "매핑된 시간대엔 정말 킬이 없다"를
+            # 로그만 보고 구별할 수 있게, 실패 직전 상태를 전부 남긴다 - 어느 크롭이
+            # 최종적으로 성공했는지(crop_used)/그 매핑(slope,intercept)/그 매핑으로 추정된
+            # 클립의 game_ms 범위(_select_kills_in_clip과 동일한 slack_sec 적용)/그 범위
+            # 안에 든 킬 수(0)/매치 전체 킬 수/매치가 1차(창 기반)·2차(게임시각 근접) 중
+            # 어느 단계에서 선택됐는지까지 - 지난 실패 조사에서 이 정보가 하나도 로그에
+            # 남지 않아 원인(크롭 오류 vs 진짜 킬 없음)을 구별할 수 없었던 문제를 막는다.
+            no_kills_slack_sec = 1.5  # _select_kills_in_clip의 기본 slack_sec과 동일하게 유지
+            est_start_ms = _clip_t_to_game_ms(-no_kills_slack_sec, mapping)
+            est_end_ms = _clip_t_to_game_ms(duration + no_kills_slack_sec, mapping)
+            kills_in_range = sum(1 for k in kills if est_start_ms <= k["timestamp_ms"] <= est_end_ms)
+            print(
+                f"[HIGHLIGHT][WARN] No kills found in clip's estimated game-time window (guild={guild_id}): "
+                f"crop_used={crop_used} mapping(slope,intercept)=({mapping[0]:.2f}, {mapping[1]:.2f}) "
+                f"est_game_ms_range=[{est_start_ms:.0f}, {est_end_ms:.0f}] "
+                f"kills_in_range={kills_in_range} total_kills_in_match={len(kills)} "
+                f"match_id={match_id} match_pick_stage={match_pick_stage}",
+                flush=True,
+            )
             await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_no_kills"))
             return
 
