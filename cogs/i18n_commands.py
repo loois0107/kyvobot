@@ -170,7 +170,7 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
     ("language", "language"): {"name": "언어", "description": "이제부터 Kyvo가 응답할 언어"},
 
     # ── highlight.py ──
-    ("highlight", "video"): {"name": "클립", "description": "플레이 화면 클립(mp4), 시계가 우측 상단에 보여야 합니다. 킬 최소 7초 전부터 녹화하세요."},
+    ("highlight", "video"): {"name": "클립", "description": "플레이 화면 클립(mp4), 시계 우측 상단, 킬 7초 전부터 녹화. 리플레이는 게임 종료 직후 바로 녹화하세요(다른 게임을 하면 매치가 잘못 잡힐 수 있음)."},
 }
 
 
