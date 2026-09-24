@@ -188,6 +188,12 @@ MATCH_LOOKUP_COUNT_FALLBACK = 20
 # 이 임계값을 넘으면 "그럴듯한 오답"보다 명확한 실패가 낫다고 판단해 None 처리하는 기존
 # 철학은 그대로 유지.
 MATCH_GAME_TIME_MAX_STALENESS_SEC = 6 * 60 * 60
+# 🛡️ [킬 존재 검증 범위 - 2 -> 5] 2차 판별에서 거리(종료 시각 근접도) 상위 몇 개까지
+# timeline을 추가 조회해 실제 킬 존재를 확인할지. 처음엔 2개로 시작했는데, 사이에 게임을
+# 여러 판 더 하고서야 리플레이를 녹화하는 경우 정답이 3~4번째로 밀릴 수도 있어 5개로
+# 넓혔다 - 순서대로 조회하다 킬이 있는 첫 후보에서 즉시 멈추므로(조기 종료), 정답이
+# 상위권에 있는 흔한 경우엔 실제로 5개를 다 조회하지 않는다.
+MATCH_KILL_VERIFY_TOP_N = 5
 
 # 🛡️ [출력 용량 제어] 디스코드 업로드 한도(서버 부스트 레벨에 따라 다르지만 25MB가 기준선)를
 # 넘기지 않도록, 실측 결과(오늘 실제 배포 코드 경로로 렌더한 파일이 15.78s에 6.74MB = 0.427MB/s)
@@ -2650,15 +2656,17 @@ class KyvoHighlight(KyvoBaseCog):
                     # "종료 시각이 가장 가깝다"는 이유만으로 고르면, 게임을 끝낸 뒤 다른 게임을
                     # 더 하고 나서야 리플레이를 녹화한 경우 그 사이에 플레이한 "더 최근에 끝난
                     # 다른 게임"이 실제 정답보다 가까워서 오답으로 뽑히는 사고가 실측으로
-                    # 확인됐다. 상위 최대 2개 후보(그 이상은 확인하지 않음 - API 호출 상한)의
-                    # timeline을 추가로 조회해서, 클립의 추정 game_ms 구간(_select_kills_in_clip,
-                    # 기존 로직 그대로 재사용)에 실제 킬이 있는 후보를 거리 순서보다 우선한다.
-                    # 후보가 1개뿐이면 이 검증 자체를 스킵해서(추가 API 호출 0회) 기존과 동일하게
-                    # 빠르게 처리된다 - 둘 다 킬이 없으면 예전과 동일한 "거리가 가장 가까운 것"
-                    # 안전망으로 폴백한다.
+                    # 확인됐다. 상위 최대 MATCH_KILL_VERIFY_TOP_N개 후보(그 이상은 확인하지
+                    # 않음 - API 호출 상한)의 timeline을 거리가 가까운 순서대로 하나씩 추가
+                    # 조회하면서, 클립의 추정 game_ms 구간(_select_kills_in_clip, 기존 로직
+                    # 그대로 재사용)에 실제 킬이 있는 첫 후보를 찾는 즉시 멈춘다(조기 종료 -
+                    # 정답이 상위권일 때 나머지를 조회하는 낭비가 없음) - 거리 순서보다
+                    # "실제 킬 존재"를 우선한다. 후보가 1개뿐이면 이 검증 자체를 스킵해서
+                    # (추가 API 호출 0회) 기존과 동일하게 빠르게 처리된다 - 상위 후보 전부
+                    # 킬이 없으면 예전과 동일한 "거리가 가장 가까운 것" 안전망으로 폴백한다.
                     chosen = None
-                    top_candidates = ranked_candidates[:2]
-                    fetched_timelines = {}  # 🛡️ 폴백 시(둘 다 킬 없음) 이미 조회한 timeline 재사용용
+                    top_candidates = ranked_candidates[:MATCH_KILL_VERIFY_TOP_N]
+                    fetched_timelines = {}  # 🛡️ 폴백 시(전부 킬 없음) 이미 조회한 timeline 재사용용
                     if len(top_candidates) >= 2:
                         for cand in top_candidates:
                             cand_id = cand["metadata"]["matchId"]
@@ -2676,8 +2684,9 @@ class KyvoHighlight(KyvoBaseCog):
                                 break
                     if chosen is None:
                         chosen = ranked_candidates[0]
-                        # 둘 다 킬이 없어 거리 기준으로 폴백하는 경우 - ranked_candidates[0]은
-                        # top_candidates에 항상 포함되므로 이미 조회했다면 재조회하지 않는다.
+                        # 검증한 후보 전부 킬이 없어 거리 기준으로 폴백하는 경우 -
+                        # ranked_candidates[0]은 top_candidates에 항상 포함되므로(len>=2일 때)
+                        # 이미 조회했다면 재조회하지 않는다.
                         prefetched_timeline = fetched_timelines.get(chosen["metadata"]["matchId"])
                     match_pick_stage = "fallback_game_time_range"
                     print(f"[HIGHLIGHT][INFO] 2차 판별로 매치 선택됨: {chosen['metadata']['matchId']} "
