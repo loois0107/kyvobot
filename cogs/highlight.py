@@ -96,6 +96,13 @@ SFX_DIR = os.path.join(REPO_ROOT, "assets", "highlight_sfx")
 # 확인됨 - 배경음 용도로는 이제 4번만 고정으로 쓴다. 1/2/3.wav는 지우지 않고 디스크에 남겨둔다
 # (다른 용도로 재사용 가능하니 파일만 보존, 이 코드에서 더는 선택하지 않을 뿐).
 BACKGROUND_SFX_PATH = os.path.join(SFX_DIR, "crowd_cheer_4.wav")
+# 🛡️ [배경음 이원화 - 앰비언스 레이어 신규] crowd_cheer_4.wav(킬 시점 정점) 하나만으로는
+# 리드인 구간(킬 전)이 상대적으로 밋밋하다는 판단으로, ElevenLabs Sound Effects API로
+# 생성한 "낮고 평탄한 경기장 웅성거림"(mean -41.3dB, 1초 창 RMS 변동폭 0.92dB - crowd_cheer
+# 4종(mean -16~-21dB)보다 20dB 이상 낮음, 실측 확인)을 클립 전체에 상시 배경으로 추가로
+# 깐다. 30초짜리라 최대 클립 길이(45초+꼬리)를 못 채울 수 있어 렌더 시 -stream_loop -1로
+# 무한 루프시킨다(아래 _render_video).
+AMBIENT_SFX_PATH = os.path.join(SFX_DIR, "ambient_crowd_low.wav")
 
 # 대부분의 효과음은 "킬 시점 = 파일 시작(즉시 폭발)"이라 리드타임이 0이다. crowd_cheer_2.wav만
 # 예외 - 조용히 고조되다 마지막에 훅 터지는 구조라, "터짐이 완성된 시점"이 킬 시점에 오도록
@@ -226,6 +233,12 @@ SFX_MIX_GAIN_DB = 6.0
 # crowd_cheer_4.wav(연속 배경+킬 시 dB 앵커 상승, 이번 라운드 신규 - assets/highlight_sfx/README.md
 # 참고)도 이미 자체적으로 목표 레벨까지 차 있어 같은 이유로 추가 부스트를 뺀다.
 SFX_MIX_GAIN_DB_OVERRIDE = {"crowd_cheer_2.wav": 0.0, "crowd_cheer_4.wav": 0.0}
+# 🛡️ [앰비언스 레이어 게인 - 0dB, 추가 부스트 없음] ambient_crowd_low.wav도 crowd_cheer_2/4와
+# 같은 이유로 추가 게인을 얹지 않는다 - 애초에 "낮고 평탄하게"라는 목표 레벨(mean -41.3dB)에
+# 맞춰 생성/검증해둔 에셋이라, 여기에 SFX_MIX_GAIN_DB(+6dB)를 얹으면 "훨씬 낮게"라는 요구를
+# 못 지킨다. 목소리(VOICE_MIX_GAIN_DB 6~9dB 부스트 후 실효 레벨)보다도 한참 아래에 남도록
+# 0dB 그대로 믹스한다(실측: 최종 믹스에서 목소리 대비 25dB 이상 낮음 - 아래 검증 참고).
+AMBIENT_MIX_GAIN_DB = 0.0
 # alimiter limit (선형 스케일, 1.0=0dBFS). 0.97(-0.3dB 근처)로 뒀더니 PCM 단계에선 안전했지만
 # AAC로 인코딩한 뒤 다시 재보면 실측 피크가 +2.4dB까지 튀는 걸 확인함 - 트랜지언트(박수/함성)를
 # 0dBFS 바로 아래까지 밀어붙이면 손실 압축 특유의 인터샘플 오버슈트가 나온다는 뜻. 인코딩 후에도
@@ -1525,12 +1538,19 @@ class KyvoHighlight(KyvoBaseCog):
             inputs += ["-ss", f"{cheer_skip_sec:.3f}", "-i", cheer_path]
         else:
             inputs += ["-i", cheer_path]
+        # 🛡️ [배경음 이원화 - 앰비언스 레이어] ambient_crowd_low.wav(30초, 평탄한 저음량
+        # 웅성거림)를 리드인 시작(t=0)부터 클립 끝까지 항상 깔아둔다. 30초보다 긴 렌더(최대
+        # MAX_CLIP_DURATION_SECONDS=45초+꼬리)를 대비해 "-stream_loop -1"로 입력 자체를
+        # 무한 반복시킨다 - amix의 duration=first가 game0(비디오 오디오, total_duration까지
+        # apad됨) 길이에서 알아서 끊어주므로 별도 트림 로직 없이도 항상 끝까지 채워진다.
+        inputs += ["-stream_loop", "-1", "-i", AMBIENT_SFX_PATH]
         # 🛡️ [버그 수정] len(inputs)//2로 인덱스를 역산하던 방식은 모든 입력이 정확히
         # ["-i", path] 2칸짜리라는 가정에 의존했다 - cheer 입력에 "-ss"가 붙으면(4칸) 그 뒤
         # 모든 목소리의 인덱스가 통째로 틀어져서 "Invalid file index" 에러가 났다(실측으로
         # 발견). ffmpeg 입력 인덱스를 별도 카운터로 직접 추적해서 CLI 인자 개수와 무관하게
         # 정확한 인덱스를 매긴다.
-        next_input_idx = 2  # 0=video, 1=cheer
+        ambient_idx = 2
+        next_input_idx = 3  # 0=video, 1=cheer, 2=ambient
         voice_indices = {}
         # 🛡️ [영어 스케줄 키 추가] sterling/carter/atlee(0단계 캐스케이드)와 en_leadin_1~4(리드인
         # 필러)는 KO 스케줄에는 애초에 안 생기는 키라 schedule.get()이 None을 반환해 조용히
@@ -2222,6 +2242,12 @@ class KyvoHighlight(KyvoBaseCog):
         cheer_gain_db = SFX_MIX_GAIN_DB_OVERRIDE.get(cheer_basename, SFX_MIX_GAIN_DB)
         audio_parts.append(f"[1:a]adelay={cheer_delay_ms}|{cheer_delay_ms},volume={cheer_gain_db}dB[cheer0];")
         mix_labels.append("[cheer0]")
+
+        # 🛡️ [배경음 이원화] 앰비언스는 리드인 시작(t=0)부터 항상 깔리므로 delay가 필요 없다 -
+        # -stream_loop -1로 이미 무한 반복 입력이라 apad도 불필요(amix duration=first가
+        # game0 길이에서 알아서 잘라준다).
+        audio_parts.append(f"[{ambient_idx}:a]volume={AMBIENT_MIX_GAIN_DB}dB[ambient0];")
+        mix_labels.append("[ambient0]")
 
         for key, idx in voice_indices.items():
             entry = schedule[key]
