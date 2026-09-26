@@ -1237,6 +1237,83 @@ def _extract_dragon_sequence(timeline: dict, team_id: int, limit: int = DRAGON_S
     return subtypes[-limit:] if limit else subtypes
 
 
+def _compute_scoreboard_at_time(timeline: dict, participants: list[dict], kill_game_ms: float) -> dict:
+    """킬 시점(kill_game_ms) 기준으로 팀별 타워/드래곤/전령/바론/공허유충/챔피언킬/골드를
+    timeline에서 다시 계산한다(순수 함수, _compute_laning_gold_gaps/_extract_dragon_sequence와
+    동일한 스타일) - 예전엔 매치 상세(chosen["info"]["teams"]/participants)의 "게임 최종
+    종료 시점" 누적치를 그대로 썼는데, 화면에 찍히는 시간(킬 시점)과 기준 시점이 서로 달라
+    사고가 났다(예: 킬이 4분에 났는데 드래곤 "2마리"가 뜸 - 드래곤은 보통 5분 이후 스폰이라
+    시점 불일치가 바로 드러남). BUILDING_KILL/ELITE_MONSTER_KILL/CHAMPION_KILL 이벤트를
+    timestamp<=kill_game_ms로만 필터링해 팀별로 다시 센다.
+
+    🛡️ [BUILDING_KILL.teamId 반전 - 실측 2매치 교차검증] 이 이벤트의 teamId는 "파괴한 팀"이
+    아니라 "타워를 잃은 팀"이다 - 서로 다른 두 매치(KR_8393538099, KR_8393410432)에서
+    timeline 원본 teamId별 집계와 매치 상세의 최종 타워킬 수를 대조했더니 둘 다 정확히
+    뒤집혀 나왔다(예: KR_8393538099는 timeline teamId=100 집계 5회인데 매치상세 team100
+    최종 타워킬은 7회, team200이 5회). 그래서 100의 이벤트는 200의 타워파괴 수에 더한다.
+    ELITE_MONSTER_KILL(killerTeamId)/CHAMPION_KILL(killerId->참가자 팀)은 반전이 필요
+    없다 - 같은 두 매치에서 매치 상세 최종값(드래곤/바론/전령/공허유충/챔피언킬)과 정확히
+    일치함을 확인했다."""
+    participant_team = {p["participantId"]: p["teamId"] for p in participants}
+    towers = {100: 0, 200: 0}
+    dragons = {100: 0, 200: 0}
+    barons = {100: 0, 200: 0}
+    heralds = {100: 0, 200: 0}
+    hordes = {100: 0, 200: 0}
+    champ_kills = {100: 0, 200: 0}
+
+    for frame in timeline["info"]["frames"]:
+        for ev in frame.get("events", []):
+            ts = ev.get("timestamp")
+            if ts is None or ts > kill_game_ms:
+                continue
+            etype = ev.get("type")
+            if etype == "BUILDING_KILL" and ev.get("buildingType") == "TOWER_BUILDING":
+                lost_team = ev.get("teamId")
+                if lost_team == 100:
+                    towers[200] += 1
+                elif lost_team == 200:
+                    towers[100] += 1
+            elif etype == "ELITE_MONSTER_KILL":
+                team = ev.get("killerTeamId")
+                if team not in (100, 200):
+                    continue
+                monster = ev.get("monsterType")
+                if monster == "DRAGON":
+                    dragons[team] += 1
+                elif monster == "BARON_NASHOR":
+                    barons[team] += 1
+                elif monster == "RIFTHERALD":
+                    heralds[team] += 1
+                elif monster == "HORDE":
+                    hordes[team] += 1
+            elif etype == "CHAMPION_KILL":
+                team = participant_team.get(ev.get("killerId"))
+                if team in (100, 200):
+                    champ_kills[team] += 1
+
+    # 🛡️ [골드 - 가장 가까운 프레임 스냅샷] _compute_laning_gold_gaps와 동일한 원리(고정
+    # 타깃 대신 kill_game_ms에 가장 가까운 프레임을 고른다) - participantFrames는 약 60초
+    # 간격이라 최대 ±30초 오차가 있을 수 있지만, "게임 최종 골드"를 쓰던 것보다는 훨씬 더
+    # 킬 시점에 가깝다.
+    gold = {100: 0, 200: 0}
+    closest_frame = min(timeline["info"]["frames"], key=lambda f: abs(f["timestamp"] - kill_game_ms))
+    for pid_str, pframe in closest_frame["participantFrames"].items():
+        team = participant_team.get(int(pid_str))
+        if team in (100, 200):
+            gold[team] += pframe.get("totalGold", 0)
+
+    return {
+        "team100_towers": towers[100], "team200_towers": towers[200],
+        "team100_kills": champ_kills[100], "team200_kills": champ_kills[200],
+        "team100_dragons": dragons[100], "team200_dragons": dragons[200],
+        "team100_riftheralds": heralds[100], "team200_riftheralds": heralds[200],
+        "team100_barons": barons[100], "team200_barons": barons[200],
+        "team100_hordes": hordes[100], "team200_hordes": hordes[200],
+        "team100_gold": gold[100], "team200_gold": gold[200],
+    }
+
+
 def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
     for md in matches_detail:
         info = md["info"]
@@ -2860,30 +2937,18 @@ class KyvoHighlight(KyvoBaseCog):
         is_solo_kill = not selected[0]["assist_ids"]
         hud_event = "FIRST BLOOD" if is_first_blood else ("SOLO KILL" if is_solo_kill else None)
 
-        # 🛡️ [상단 2단 스코어바용 데이터 - 추가 Riot API 호출 없음] teams[].objectives의
-        # tower/champion/dragon과 participants[].goldEarned 합계 - 전부 이미 fetch된
-        # chosen에서만 뽑는다. 이 스코어보드는 FIRST BLOOD/SOLO KILL 여부(hud_event)와
-        # 무관하게 모든 클립에 항상 표시되는 상시 UI라서 hud_event가 None이어도 채운다.
-        team_objectives = {t["teamId"]: t.get("objectives", {}) for t in chosen["info"]["teams"]}
-        team100_gold = sum(p.get("goldEarned", 0) for p in chosen["info"]["participants"] if p.get("teamId") == 100)
-        team200_gold = sum(p.get("goldEarned", 0) for p in chosen["info"]["participants"] if p.get("teamId") == 200)
-        scoreboard = {
-            "team100_towers": team_objectives.get(100, {}).get("tower", {}).get("kills", 0),
-            "team200_towers": team_objectives.get(200, {}).get("tower", {}).get("kills", 0),
-            "team100_kills": team_objectives.get(100, {}).get("champion", {}).get("kills", 0),
-            "team200_kills": team_objectives.get(200, {}).get("champion", {}).get("kills", 0),
-            "team100_dragons": team_objectives.get(100, {}).get("dragon", {}).get("kills", 0),
-            "team200_dragons": team_objectives.get(200, {}).get("dragon", {}).get("kills", 0),
-            "team100_riftheralds": team_objectives.get(100, {}).get("riftHerald", {}).get("kills", 0),
-            "team200_riftheralds": team_objectives.get(200, {}).get("riftHerald", {}).get("kills", 0),
-            "team100_barons": team_objectives.get(100, {}).get("baron", {}).get("kills", 0),
-            "team200_barons": team_objectives.get(200, {}).get("baron", {}).get("kills", 0),
-            "team100_hordes": team_objectives.get(100, {}).get("horde", {}).get("kills", 0),
-            "team200_hordes": team_objectives.get(200, {}).get("horde", {}).get("kills", 0),
-            "team100_gold": team100_gold,
-            "team200_gold": team200_gold,
-            "game_time_ms": selected[0]["timestamp_ms"],
-        }
+        # 🛡️ [상단 2단 스코어바용 데이터 - 킬 시점 기준, 추가 Riot API 호출 없음] 예전엔
+        # chosen(매치 상세)의 "게임 최종 종료 시점" 누적치를 그대로 썼는데, 화면에 찍히는
+        # 시간(킬 시점)과 기준이 달라 사고가 났다(실제 사고 사례: 킬이 4분에 났는데 드래곤
+        # "2마리"가 뜸 - 드래곤은 보통 5분 이후 스폰이라 명백한 시점 불일치). timeline은
+        # 이미 fetch돼 있으므로(클록 매핑/킬 검증용) 추가 API 호출 없이 _compute_scoreboard_
+        # at_time(순수 함수, 실제 매치 2건으로 BUILDING_KILL 팀 반전 등 교차검증됨)으로
+        # 킬 시점(game_time_ms) 기준 값을 다시 계산한다. 이 스코어보드는 FIRST BLOOD/
+        # SOLO KILL 여부(hud_event)와 무관하게 모든 클립에 항상 표시되는 상시 UI라서
+        # hud_event가 None이어도 채운다.
+        game_time_ms = selected[0]["timestamp_ms"]
+        scoreboard = _compute_scoreboard_at_time(timeline, chosen["info"]["participants"], game_time_ms)
+        scoreboard["game_time_ms"] = game_time_ms
 
         # 🛡️ [드래곤 시간순 속성 시퀀스 - 팀별] timeline은 이미 fetch됨(추가 Riot API 호출
         # 없음). 순수 함수 _extract_dragon_sequence로 팀별 최근 DRAGON_SEQUENCE_MAX개의
