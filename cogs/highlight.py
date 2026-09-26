@@ -2053,33 +2053,54 @@ class KyvoHighlight(KyvoBaseCog):
             ]
 
             for name, icon_idx, key100, key200 in objective_items:
-                icon_x_l = mid_x - cursor_l - minor_icon_size
-                icon_x_r = mid_x + cursor_r
-                if icon_idx is not None:
-                    text_chain += (
-                        f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}L]"
-                        f";[{label}][v{name}L]overlay=x={int(round(icon_x_l))}:y={minor_icon_y:.2f}[v{name}1]"
-                        f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}R]"
-                        f";[v{name}1][v{name}R]overlay=x={int(round(icon_x_r))}:y={minor_icon_y:.2f}[v{name}2]"
-                    )
-                    label = f"v{name}2"
-                    num100_x = f"{int(round(icon_x_l - 4))}-text_w"
-                    num200_x = str(int(round(icon_x_r + minor_icon_size + 4)))
-                else:
-                    num100_x = f"{int(round(mid_x - cursor_l))}-text_w"
-                    num200_x = str(int(round(mid_x + cursor_r)))
+                # 🛡️ [0마리 오브젝트 - 드래곤과 동일한 완전 스킵 방식] 처음엔 30% 알파로
+                # 흐리게 처리했는데, 아예 그리지 않는 쪽으로 재변경 - 드래곤이 이미 쓰는
+                # "0마리면 자리 자체가 없음" 패턴을 그대로 재사용한다. 개수가 0인 쪽만
+                # 아이콘+숫자를 스킵하고 그 쪽 cursor도 전진시키지 않는다 - 그래야 바로
+                # 다음(더 안쪽) 오브젝트가 스킵된 자리를 자동으로 메우며 당겨진다(드래곤이
+                # 0마리일 때 리스트가 비어서 자동으로 자리가 안 생기는 것과 동일한 효과).
+                # 좌/우(team100/200)가 서로 다른 개수를 가질 수 있어 완전히 독립적으로
+                # 처리한다(cursor_l/cursor_r 각자 자기 쪽만 조건부 전진).
+                show100 = scoreboard[key100] > 0
+                show200 = scoreboard[key200] > 0
 
-                num100_tf = _write_textfile(f"{name}100", str(scoreboard[key100]))
-                num200_tf = _write_textfile(f"{name}200", str(scoreboard[key200]))
-                text_chain += (
-                    f";[{label}]drawtext=fontfile='{font_kr}':textfile='{num100_tf}':fontsize={minor_font_size}:"
-                    f"fontcolor={TEAM_BLUE_COLOR}:{top_text_style}:x='{num100_x}':y='{sub_text_y_expr}'[v{name}n1]"
-                    f";[v{name}n1]drawtext=fontfile='{font_kr}':textfile='{num200_tf}':fontsize={minor_font_size}:"
-                    f"fontcolor={TEAM_RED_COLOR}:{top_text_style}:x='{num200_x}':y='{sub_text_y_expr}'[v{name}n2]"
-                )
-                label = f"v{name}n2"
-                cursor_l += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
-                cursor_r += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
+                if show100:
+                    icon_x_l = mid_x - cursor_l - minor_icon_size
+                    if icon_idx is not None:
+                        text_chain += (
+                            f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}L]"
+                            f";[{label}][v{name}L]overlay=x={int(round(icon_x_l))}:y={minor_icon_y:.2f}[v{name}L2]"
+                        )
+                        label = f"v{name}L2"
+                        num100_x = f"{int(round(icon_x_l - 4))}-text_w"
+                    else:
+                        num100_x = f"{int(round(mid_x - cursor_l))}-text_w"
+                    num100_tf = _write_textfile(f"{name}100", str(scoreboard[key100]))
+                    text_chain += (
+                        f";[{label}]drawtext=fontfile='{font_kr}':textfile='{num100_tf}':fontsize={minor_font_size}:"
+                        f"fontcolor={TEAM_BLUE_COLOR}:{top_text_style}:x='{num100_x}':y='{sub_text_y_expr}'[v{name}n1]"
+                    )
+                    label = f"v{name}n1"
+                    cursor_l += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
+
+                if show200:
+                    icon_x_r = mid_x + cursor_r
+                    if icon_idx is not None:
+                        text_chain += (
+                            f";[{icon_idx}:v]scale={minor_icon_size}:{minor_icon_size}[v{name}R]"
+                            f";[{label}][v{name}R]overlay=x={int(round(icon_x_r))}:y={minor_icon_y:.2f}[v{name}R2]"
+                        )
+                        label = f"v{name}R2"
+                        num200_x = str(int(round(icon_x_r + minor_icon_size + 4)))
+                    else:
+                        num200_x = str(int(round(mid_x + cursor_r)))
+                    num200_tf = _write_textfile(f"{name}200", str(scoreboard[key200]))
+                    text_chain += (
+                        f";[{label}]drawtext=fontfile='{font_kr}':textfile='{num200_tf}':fontsize={minor_font_size}:"
+                        f"fontcolor={TEAM_RED_COLOR}:{top_text_style}:x='{num200_x}':y='{sub_text_y_expr}'[v{name}n2]"
+                    )
+                    label = f"v{name}n2"
+                    cursor_r += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
 
             text_chain += (
                 f";[{label}]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
