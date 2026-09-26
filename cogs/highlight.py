@@ -842,6 +842,18 @@ ROSTER_SHADOW_COLOR = "black@0.7"
 # 배경 그라데이션 위에서 너무 옅어서 빈 슬롯인지 그냥 배경인지 구분이 잘 안 됐다 - 어두운
 # 보라 계열로 바꾸고 두께도 1px로 줄인다(요청 스펙 그대로).
 ITEM_SLOT_BORDER_COLOR = "#2D274D"
+# 🛡️ [아이템 아이콘 개별 식별 - 간격+외곽선] 6칸이 서로 붙어 그려져 개별 아이콘 구분이 어렵다는
+# 피드백 반영. ITEM_SLOT_BORDER_COLOR(위)는 슬롯 자체의 틀이라 아이콘이 그 위에 덮어 그려지면
+# (item_idx가 있는 칸) 완전히 가려진다 - 실제로 보이는 건 빈 슬롯뿐이라, 아이콘이 있는 칸에는
+# 지금까지 어떤 외곽선도 없었다(코드 검토로 확인, 중복 아님). 이 외곽선은 아이콘을 그린 "뒤에"
+# 별도로 얹어서 채워진 칸에서도 항상 보이게 한다.
+# 🛡️ [진한 검정 vs 옅은 밝은 톤 비교 - 실측 렌더로 결정] black@0.5는 잘 안 보인다는 피드백에
+# black@0.8(더 진한 검정)과 white@0.3(옅은 밝은 톤) 둘 다 실제 렌더로 비교했다 - 아이템
+# 아이콘 자체가 어두운 모서리를 가진 경우가 많아서(LoL 아이콘 특성상 흔함), 검정 계열은
+# 0.8까지 올려도 아이콘의 원래 어두운 부분과 잘 구분되지 않았다. 반대로 밝은 톤은 아이콘이
+# 밝든 어둡든 거의 항상 대비가 생겨서 훨씬 뚜렷하게 개별 식별됨(실측 스크린샷으로 확인) -
+# 과하게 튀지도 않아서(옅은 은색 라인 정도) white@0.3을 최종 채택.
+ITEM_ICON_OUTLINE_COLOR = "white@0.3"
 # 🛡️ [챔피언 프레임 색 - 보라 vs 금색 중 금색 선택] 패널 배경 자체가 블루/네이비 계열이라
 # 보라 테두리는 배경과 명도가 비슷해 묻힌다. LoL 클라이언트가 소환사 아이콘/룬 테두리에
 # 표준으로 쓰는 골드(#C89B3C 계열)가 어두운 배경 위에서 확실히 도드라지고, 롤 유저에게
@@ -2108,7 +2120,10 @@ class KyvoHighlight(KyvoBaseCog):
             # 요청의 직접 원인). "CS " 라벨을 없애 숫자만 남기면서 자리가 남은 만큼도 반영해
             # 0.55로 올린다 - 실제 크롭 캡처로 재확인.
             grid_font_size = max(12, int(round(row_h_raw * 0.55)))
-            item_gap = max(1, int(round(item_size * 0.15)))
+            # 🛡️ [간격 확대 - 개별 식별성] 0.15는 6칸이 거의 붙어 보여서 0.25로 확대(요청
+            # 스펙) - items_zone_w가 그만큼 늘어나므로 CS/KDA zone과 안 겹치는지 실제 렌더로
+            # 확인 필요(아래 items_zone_w 계산 및 주석 참고).
+            item_gap = max(1, int(round(item_size * 0.25)))
 
             portrait_zone_w = portrait_size + 2 * pad
             # 🛡️ [CS/KDA zone 재분배 - 실제 텍스트 렌더 폭 기준] 조사에서 FontKR-Black.otf로
@@ -2219,6 +2234,14 @@ class KyvoHighlight(KyvoBaseCog):
                                 f";[{label}][vr{tag}item{k}]overlay=x={int(round(item_xs[k]))}:y={item_y:.2f}:"
                                 f"enable='{grid_enable}'[vr{tag}i{k}]")
                             label = f"vr{tag}i{k}"
+                            # 🛡️ [아이콘 개별 외곽선 - ITEM_SLOT_BORDER_COLOR 위 참고 주석대로
+                            # 슬롯 틀은 아이콘에 가려져 채워진 칸엔 안 보이므로 별개로 추가]
+                            # 아이콘을 "그린 뒤"에 얹어야 테두리가 아이콘 위에 살아있는다.
+                            grid_parts.append(
+                                f";[{label}]drawbox=x={int(round(item_xs[k]))}:y={item_y:.2f}:"
+                                f"w={item_size}:h={item_size}:color={ITEM_ICON_OUTLINE_COLOR}:t=1:"
+                                f"enable='{grid_enable}'[vr{tag}io{k}]")
+                            label = f"vr{tag}io{k}"
 
                     if j > 0:
                         divider_x0 = panel_x0 if side == "L" else int(round(panel_mid_x))
