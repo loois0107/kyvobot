@@ -712,6 +712,9 @@ SCOREBAR_FONT_KR = os.path.join(REPO_ROOT, "FontKR.otf")
 SCOREBAR_FONT_KR_BLACK = os.path.join(REPO_ROOT, "FontKR-Black.otf")
 TEAM_BLUE_COLOR = "#4C8BF5"
 TEAM_RED_COLOR = "#F14C4C"
+# 🛡️ [메인바 골드 색 - 킬 스코어와 구분용] 순백색(킬)보다 살짝 톤 다운된 회색 - 배경
+# 그라데이션 위에서도 충분히 읽히면서 킬의 순백색만큼 강조되지는 않게 한다.
+TOP_GOLD_TEXT_COLOR = "#C9C9C9"
 
 HUD_SLIDE_SEC = 0.4  # 배너 슬라이드업/다운 소요 시간 - PRE_BUILDUP_START_OFFSET_SEC과 같은 템포
 # 🛡️ [배너 위치 - 이번에도 하단 전체 영역을 시간대로 나눠 씀] 4단계 재설계로 하단 영역이
@@ -1860,6 +1863,11 @@ class KyvoHighlight(KyvoBaseCog):
             label = current_label
 
             top_font_size = max(10, int(round(top_main_h * 0.42)))
+            # 🛡️ [킬 스코어 강조 - 골드와 구분 안 되는 문제] 타워/골드/킬이 전부 같은 크기+흰색
+            # 이라 뭐가 더 중요한 정보인지 구분이 안 된다는 피드백 - 킬만 25% 키우고(20~30%
+            # 권장 범위 중간값), 골드는 흰색 대신 톤 다운된 회색(TOP_GOLD_TEXT_COLOR)으로
+            # 바꿔 킬의 순백색과 명확히 구분되게 한다. 타워는 건드리지 않음(피드백 대상 아님).
+            KILL_FONT_SIZE = max(10, int(round(top_font_size * 1.25)))
             top_icon_size = max(8, int(round(top_main_h * 0.6)))
             TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.08, 0.42, 0.75
             main_text_y_expr = f"({top_main_h}-text_h)/2"
@@ -1910,12 +1918,12 @@ class KyvoHighlight(KyvoBaseCog):
                 f";[vm1]drawtext=fontfile='{font_kr}':textfile='{tower200_tf}':fontsize={top_font_size}:"
                 f"fontcolor=white:{top_text_style}:x='{tower_num_x_r}':y='{main_text_y_expr}'[vm2]"
                 f";[vm2]drawtext=fontfile='{font_kr}':textfile='{gold100_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:{top_text_style}:x='{int(round(gold_x_l))}-text_w/2':y='{main_text_y_expr}'[vm3]"
+                f"fontcolor={TOP_GOLD_TEXT_COLOR}:{top_text_style}:x='{int(round(gold_x_l))}-text_w/2':y='{main_text_y_expr}'[vm3]"
                 f";[vm3]drawtext=fontfile='{font_kr}':textfile='{gold200_tf}':fontsize={top_font_size}:"
-                f"fontcolor=white:{top_text_style}:x='{int(round(gold_x_r))}-text_w/2':y='{main_text_y_expr}'[vm4]"
-                f";[vm4]drawtext=fontfile='{font_kr}':textfile='{kill100_tf}':fontsize={top_font_size}:"
+                f"fontcolor={TOP_GOLD_TEXT_COLOR}:{top_text_style}:x='{int(round(gold_x_r))}-text_w/2':y='{main_text_y_expr}'[vm4]"
+                f";[vm4]drawtext=fontfile='{font_kr}':textfile='{kill100_tf}':fontsize={KILL_FONT_SIZE}:"
                 f"fontcolor=white:{top_text_style}:x='{int(round(kill_x_l))}-text_w/2':y='{main_text_y_expr}'[vm5]"
-                f";[vm5]drawtext=fontfile='{font_kr}':textfile='{kill200_tf}':fontsize={top_font_size}:"
+                f";[vm5]drawtext=fontfile='{font_kr}':textfile='{kill200_tf}':fontsize={KILL_FONT_SIZE}:"
                 f"fontcolor=white:{top_text_style}:x='{int(round(kill_x_r))}-text_w/2':y='{main_text_y_expr}'[vm6]"
             )
             label = "vm6"
