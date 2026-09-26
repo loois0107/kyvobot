@@ -818,7 +818,11 @@ OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
 # 경계 블렌드 포함 31행)를 y=100~130으로 그대로 옮겨 다시 구웠다 - 서브바 코드는
 # top_main_h를 참조해서 위치를 계산하므로 이 상수만 바꾸면 자동으로 따라온다.
 TOP_MAIN_BAR_HEIGHT_RATIO = 100 / 1080
-TOP_SUB_BAR_HEIGHT_RATIO = 27 / 1080
+# 🛡️ [서브바 높이 확대 - 이미지 자산에 이미 준비된 여유분 활용] overlay_frame_v2.png의
+# 서브바 배경은 실측상 31행(y=100~130 @1080 네이티브) 불투명하게 구워져 있는데, 기존
+# 27/1080은 그중 27행만 쓰고 나머지 4행은 안 쓰는 여유로 남아있었다 - 이미지를 새로
+# 굽지 않고 이 상수만 31/1080로 올려도 안전하게 확장된다(요청 범위 2~4px 중 최대값).
+TOP_SUB_BAR_HEIGHT_RATIO = 31 / 1080
 TOP_SUB_BAR_X_RATIO = (490 / 1920, 1429 / 1920)
 # 🛡️ [메인바 폭 65%로 축소 - 서브바와 완전히 독립된 별개 변수] 메인바를 화면 전체 폭이
 # 아니라 중앙 65%짜리 좁은 바로 좁힌다. 서브바는 이미 자기만의 폭(TOP_SUB_BAR_X_RATIO,
@@ -1996,7 +2000,11 @@ class KyvoHighlight(KyvoBaseCog):
             # 좁은 서브바" 형태를 재현한다.
             sub_x0 = int(round(final_width * TOP_SUB_BAR_X_RATIO[0]))
             sub_x1 = int(round(final_width * TOP_SUB_BAR_X_RATIO[1]))
-            sub_font_size = max(8, int(round(top_sub_h * 0.55)))
+            # 🛡️ [타이머 폰트 확대] 0.55 -> 0.57로 올려서, 서브바 높이 확대분(top_sub_h
+            # 증가)과 합쳐 기존 대비 총 ~18% 커지게 계산했다(요청한 15~20% 범위 안,
+            # 실측: 이번 테스트 해상도 기준 11px -> 13px). sub_font_size는 오직 타이머
+            # 전용(위 주석 참고)이라 오브젝트 숫자에는 영향 없음.
+            sub_font_size = max(8, int(round(top_sub_h * 0.57)))
             # 🛡️ [오브젝트 스택 확대 - 시간 텍스트와 폰트 변수 분리] sub_font_size는
             # time_text가 그대로 쓰고 있어서(아래 vs3), 이 값 자체를 바꾸면 시간 텍스트도
             # 같이 커진다("건드리지 마" 지시 위반) - 그래서 오브젝트 숫자 전용
