@@ -2187,10 +2187,12 @@ class KyvoHighlight(KyvoBaseCog):
             # 요청의 직접 원인). "CS " 라벨을 없애 숫자만 남기면서 자리가 남은 만큼도 반영해
             # 0.55로 올린다 - 실제 크롭 캡처로 재확인.
             grid_font_size = max(12, int(round(row_h_raw * 0.55)))
-            # 🛡️ [간격 확대 - 개별 식별성] 0.15는 6칸이 거의 붙어 보여서 0.25로 확대(요청
-            # 스펙) - items_zone_w가 그만큼 늘어나므로 CS/KDA zone과 안 겹치는지 실제 렌더로
-            # 확인 필요(아래 items_zone_w 계산 및 주석 참고).
-            item_gap = max(1, int(round(item_size * 0.25)))
+            # 🛡️ [간격 추가 확대 - 여전히 붙어 보인다는 피드백] 0.15->0.25로 한 번 늘렸는데도
+            # 여전히 붙어 보인다는 재피드백으로 0.35까지 추가 확대. 여유 공간 재계산(한쪽 편
+            # 전체 폭 합 vs panel_half_w) 결과 margin이 72px(25%)에서 62px(35%)로 줄었을 뿐
+            # 여전히 넉넉하다 - 이론상 안전 상한은 item_size의 약 89%(margin=0 지점)라
+            # 35%는 그 절반에도 못 미친다.
+            item_gap = max(1, int(round(item_size * 0.35)))
 
             portrait_zone_w = portrait_size + 2 * pad
             # 🛡️ [CS/KDA zone 재분배 - 실제 텍스트 렌더 폭 기준] 조사에서 FontKR-Black.otf로
