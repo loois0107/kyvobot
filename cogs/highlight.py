@@ -857,7 +857,9 @@ RIGHT_MINIMAP_X_START_RATIO = 2100 / 2560
 # _render_video 참고) - 폭이 좁아진 지금은 안전지대 안에 넉넉한 여유를 두고 중앙에 온다.
 HUD_BANNER_MAX_WIDTH_RATIO = BOTTOM_PANEL_WIDTH_RATIO
 
-ROSTER_DIVIDER_COLOR = "white@0.2"
+# 🛡️ [행간 구분선 더 은은하게] 0.2는 눈에 잘 띄어서 0.05(매우 은은한 수준)로 낮췄다 -
+# 요청 스펙 그대로.
+ROSTER_DIVIDER_COLOR = "white@0.05"
 ROSTER_SHADOW_COLOR = "black@0.7"
 # 🛡️ [아이템 슬롯 틀 - 빈 칸도 항상 표시] 기존 ROSTER_DIVIDER_COLOR(white@0.2, t=2)는
 # 배경 그라데이션 위에서 너무 옅어서 빈 슬롯인지 그냥 배경인지 구분이 잘 안 됐다 - 어두운
@@ -1964,7 +1966,9 @@ class KyvoHighlight(KyvoBaseCog):
                 gap_badge_font_size = max(8, int(round(top_font_size * 0.45)))
                 gap_arrow_font_size = max(6, int(round(gap_badge_font_size * 0.75)))
                 gap_num_half_w = max(10, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62))) / 2
-                gap_arrow_gap = 4
+                # 🛡️ [화살표-숫자 간격 확대] 4px는 렌더에서 붙어서 찌그러져 보인다는
+                # 피드백으로 6px로 확대(+2px).
+                gap_arrow_gap = 6
 
                 main_ink_h = top_font_size * 0.645
                 main_ink_bottom = top_main_h / 2 + main_ink_h / 2
@@ -2350,12 +2354,27 @@ class KyvoHighlight(KyvoBaseCog):
                     arrow_tf = _write_textfile(f"roster_gap_arrow_{j}", arrow_char)
                     num_tf = _write_textfile(f"roster_gap_num_{j}", gap_num_text)
 
-                    # 🛡️ [배경 박스 제거 - 화살표 글리프 자체를 색상화] 예전엔 배경
-                    # drawbox(색 배경+흰 글리프)였는데, 이제 배경 없이 화살표 글리프의
-                    # fontcolor 자체를 gap_color로 바꿔서 표현한다(숫자 텍스트와 동일한
-                    # 색상 판별 로직 재사용). gap_badge_w/arrow_box_x 등은 실제로 사각형을
-                    # 안 그려도 좌표 계산(화살표 중심 정렬, 숫자 시작 위치)에는 그대로
-                    # 쓰인다 - 지우면 그 계산들이 다 같이 깨진다.
+                    # 🛡️ [좌우 여백 확보 - 은은한 배경 박스] 텍스트/화살표가 배경과 바로
+                    # 맞닿아 빽빽해 보인다는 피드백 - 폰트를 줄이는 대신(가독성 저하) 타이머
+                    # 뱃지(TIMER_BADGE_COLOR)와 같은 패턴으로 각각 뒤에 여유 있는 반투명
+                    # 박스를 깔아 좌우 패딩을 만든다. 숫자 박스 폭은 "+99.9k" 실측 최악값
+                    # (fontsize 대비 약 3.54배)에 여유를 둔 3.6배로 고정.
+                    _gap_box_color = "black@0.25"
+                    _num_box_w = int(round(GOLD_GAP_NUMBER_FONT_SIZE * 3.6))
+                    _num_box_x = panel_mid_x - _num_box_w / 2
+                    grid_parts.append(
+                        f";[{label}]drawbox=x={arrow_box_x:.2f}:y={gap_badge_y:.2f}:"
+                        f"w={gap_badge_w}:h={gap_badge_h}:color={_gap_box_color}:t=fill:"
+                        f"enable='{grid_enable}'[vgap{j}box1]")
+                    label = f"vgap{j}box1"
+                    grid_parts.append(
+                        f";[{label}]drawbox=x={_num_box_x:.2f}:y={gap_badge_y:.2f}:"
+                        f"w={_num_box_w}:h={gap_badge_h}:color={_gap_box_color}:t=fill:"
+                        f"enable='{grid_enable}'[vgap{j}box2]")
+                    label = f"vgap{j}box2"
+
+                    # 🛡️ [화살표] 색상화된 글리프를 방금 깐 박스 위에 얹는다 - 좌표 계산은
+                    # 기존과 동일(gap_badge_w/arrow_box_x).
                     grid_parts.append(
                         f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{arrow_tf}':"
                         f"fontsize={GOLD_GAP_ARROW_FONT_SIZE}:fontcolor={gap_color}:"
