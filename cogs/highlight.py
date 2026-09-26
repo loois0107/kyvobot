@@ -22,7 +22,7 @@ import discord
 from discord import app_commands
 import imageio_ffmpeg
 from openai import AsyncOpenAI
-from PIL import Image
+from PIL import Image, ImageFont
 
 from cogs.base import KyvoBaseCog
 from cogs.tier_verify import (
@@ -860,6 +860,8 @@ HUD_BANNER_MAX_WIDTH_RATIO = BOTTOM_PANEL_WIDTH_RATIO
 # 🛡️ [행간 구분선 더 은은하게] 0.2는 눈에 잘 띄어서 0.05(매우 은은한 수준)로 낮췄다 -
 # 요청 스펙 그대로.
 ROSTER_DIVIDER_COLOR = "white@0.05"
+# 🛡️ [홀/짝수 행 톤 차이] 2/4번째 행에만 깔아 행 구분을 돕는 아주 옅은 배경.
+ROW_STRIPE_COLOR = "white@0.03"
 ROSTER_SHADOW_COLOR = "black@0.7"
 # 🛡️ [아이템 슬롯 틀 - 빈 칸도 항상 표시] 기존 ROSTER_DIVIDER_COLOR(white@0.2, t=2)는
 # 배경 그라데이션 위에서 너무 옅어서 빈 슬롯인지 그냥 배경인지 구분이 잘 안 됐다 - 어두운
@@ -1965,7 +1967,12 @@ class KyvoHighlight(KyvoBaseCog):
                 # 골드 폰트(top_font_size)의 40~50% 크기 - 45%를 기준값으로 사용.
                 gap_badge_font_size = max(8, int(round(top_font_size * 0.45)))
                 gap_arrow_font_size = max(6, int(round(gap_badge_font_size * 0.75)))
-                gap_num_half_w = max(10, int(round(gap_badge_font_size * len(gap_badge_text) * 0.62))) / 2
+                # 🛡️ [중앙 정렬 - 글자 수 추정 대신 실측 폭] 기존엔 "글자수*0.62"로 폭을
+                # 대충 추정해서 자릿수가 바뀌면(예: "+0.8k" vs "+12.3k") 화살표 위치가
+                # 실제 렌더 폭과 미묘하게 안 맞아 흔들릴 수 있었다 - drawtext와 동일한
+                # 폰트(SCOREBAR_FONT_KR_BLACK)로 PIL이 실제 렌더 폭을 그대로 측정해서
+                # 자릿수와 무관하게 항상 정확한 절반 폭을 쓴다.
+                gap_num_half_w = ImageFont.truetype(SCOREBAR_FONT_KR_BLACK, gap_badge_font_size).getlength(gap_badge_text) / 2
                 # 🛡️ [화살표-숫자 간격 확대] 4px는 렌더에서 붙어서 찌그러져 보인다는
                 # 피드백으로 6px로 확대(+2px).
                 gap_arrow_gap = 6
@@ -2016,7 +2023,14 @@ class KyvoHighlight(KyvoBaseCog):
             # (time_text엔 아이콘이 없음) 직접 바꿔도 안전하다.
             sub_icon_size = top_sub_h
             obj_font_size = max(8, int(round(top_sub_h * 0.75)))
-            sub_text_y_expr = f"{top_main_h}+({top_sub_h}-text_h)/2"
+            # 🛡️ [세로 정렬 보정 - 실측으로 발견] ffmpeg drawtext의 text_h는 폰트의 전체
+            # 행간(어센더+디센더 포함) 기준이라, 디센더를 안 쓰는 숫자/콜론 글리프의 실제
+            # 잉크는 이 박스 중앙보다 아래로 치우친다 - 실측(스크린샷 픽셀 스캔) 결과
+            # 아이콘 중앙(y=85.5) 대비 타이머 텍스트 잉크 중앙이 y=87.5로 약 2px
+            # 낮았다(이번 해상도 top_sub_h=23 기준, 비율로 환산해 다른 해상도에서도
+            # 비슷하게 보정). 오브젝트 숫자도 같은 폰트/포뮬러를 쓰므로 동일 보정 적용.
+            TIMER_VALIGN_CORRECTION_RATIO = 0.087
+            sub_text_y_expr = f"{top_main_h}+({top_sub_h}-text_h)/2-{top_sub_h * TIMER_VALIGN_CORRECTION_RATIO:.2f}"
             dragon_offset = (sub_x1 - sub_x0) / 2 * 0.3
 
             gm = scoreboard["game_time_ms"] // 1000
@@ -2232,6 +2246,16 @@ class KyvoHighlight(KyvoBaseCog):
                 text_y_expr = f"{row_y0:.2f}+({row_h_raw:.2f}-text_h)/2"
                 portrait_y = row_y0 + (row_h_raw - portrait_size) / 2
                 item_y = row_y0 + (row_h_raw - item_size) / 2
+
+                # 🛡️ [홀/짝수 행 톤 차이] 2번째/4번째 행(j=1,3)에만 아주 옅은 흰색
+                # 배경(white@0.03)을 패널 전체 폭으로 깔아 행 구분을 돕는다 - 반드시
+                # 다른 요소(포트레이트/텍스트/아이템)보다 먼저 그려야 그 위에 덮이지 않는다.
+                if j in (1, 3):
+                    grid_parts.append(
+                        f";[{label}]drawbox=x={panel_x0}:y={row_y0:.2f}:"
+                        f"w={panel_w}:h={row_h_raw:.2f}:color={ROW_STRIPE_COLOR}:t=fill:"
+                        f"enable='{grid_enable}'[vrow{j}stripe]")
+                    label = f"vrow{j}stripe"
 
                 for side, r in (("L", left_p), ("R", right_p)):
                     if r is None:
