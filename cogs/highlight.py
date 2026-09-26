@@ -388,10 +388,27 @@ MAIN_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "main_explode_*.wav
 # 오는 파일(a~f)만 정확히 잡도록 좁힌다.
 HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_[a-z].wav")))
 SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
+# 🛡️ [발성 강도 재녹음 - "국어책 읽는 느낌" 피드백] 게인만 올렸을 뿐(VOICE_MIX_GAIN_DB_OVERRIDE)
+# 발성 자체의 텐션은 그대로였다는 피드백으로, 텍스트(모음 반복 구조)는 그대로 두고 태그/
+# voice_settings만 바꿔 재녹음했다. 1차로 [SCREAMING][terrified excitement]+stability=0.0+
+# style=0.9(가장 낮은 안정성·가장 높은 스타일 과장)를 채택했으나, 이후 "발음이 무너지고
+# 모음만 늘어진다(호우오호호우우우)"는 피드백으로 재조정 - 텍스트/태그는 그대로 두고
+# stability/style만 0.5/0(원본)와 0.0/0.9(무너진 값) 사이 중간 지점 4가지(0.35/0.4,
+# 0.35/0.6, 0.2/0.4, 0.2/0.6)를 비교해, 무음 게이트 통과·길이·attack_rise가 가장
+# 균형 잡힌 stability=0.35/style=0.6 조합을 최종 채택했다(발음 붕괴 없이 attack_rise가
+# 오히려 stability=0.0 버전보다 높게 나옴 - 실측 근거는 커밋 메시지 참고). a/b/c 전부
+# 동일 파라미터로 통일 재녹음 - 하나만 바뀌고 나머지가 다른 톤으로 남는 풀 내 불일치를
+# 피했다. 이전(stability=0.0/style=0.9) 버전은 _backup_main_explode_screaming_creative_*/,
+# 최초 원본(stability=0.5/style=0)은 _backup_main_explode_*/ 에 각각 백업.
+# 🛡️ [4번째 후보 추가] 중간 지점 비교 실험 중 나온 stability=0.2/style=0.6(mid_d) 후보도
+# 실제 0단계 캐스케이드(main+hype+sub 동시재생) 테스트까지 마친 뒤 풀에 정식 추가했다 -
+# a/b/c보다 stability가 더 낮아(과장 더 큼) 세트 안에서 유일하게 다른 파라미터지만,
+# 무음 게이트/길이/attack_rise 전부 기준 통과해 별도 텍스트 없이 풀만 확장.
 MAIN_EXPLODE_TEXT = {
-    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.52s, 무음/깊은 딥 없음(정밀 기준 통과)
-    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.44s, 1회 시도로 무음/깊은 딥 없음 통과
-    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.52s, 1회 시도로 무음/깊은 딥 없음 통과
+    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.28s, stability=0.35/style=0.6, 무음 0곳 통과
+    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.52s, stability=0.35/style=0.6, 무음 0곳 통과
+    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.36s, stability=0.35/style=0.6, 무음 0곳 통과
+    "main_explode_d.wav": "우와" + "아" * 10 + "악!!",  # 1.60s, stability=0.2/style=0.6, 무음 0곳 통과
 }
 HYPE_EXPLODE_TEXT = {
     "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, 무음/깊은 딥 없음(정밀 기준 통과)
