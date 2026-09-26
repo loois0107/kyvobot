@@ -957,6 +957,15 @@ def _commentary_names_killer(text: str, killer: str) -> bool:
     return bool(killer) and killer in text
 
 
+def _commentary_avoids_seumnida(text: str) -> bool:
+    """GPT가 생성한 문장에 습니다체가 섞여 있지 않은지 확인 - SYSTEM_PROMPT가 "습니다체
+    절대 금지, 요체만" 이라고 명시하지만, 온도 0.8 자유생성이 이 지시를 항상 지키는 건
+    아니라는 게 실제 배포에서 확인됨(예: "완전히 찢어버렸습니다"). _commentary_names_killer와
+    동일한 원칙 - 프롬프트 지시만 믿지 않고 코드로 사후 검증한다. 영어는 존댓말 어미 개념
+    자체가 없어 호출부에서 한국어 렌더에만 이 검증을 적용한다."""
+    return "습니다" not in text
+
+
 def _fit_linear_mapping(samples: list[dict]) -> tuple[float, float]:
     """clip_t_sec(x) -> game_ms(y) 최소자승 선형 회귀. game_ms = slope * clip_t_sec + intercept."""
     n = len(samples)
@@ -2412,7 +2421,7 @@ class KyvoHighlight(KyvoBaseCog):
             if k["index"] not in covered:
                 fallback = (
                     f"{k['killer']} takes down {k['victim']}!!" if is_en else
-                    f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치했습니다!"
+                    f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치했어요!"
                 )
                 lines.append({"event_index": k["index"], "text": fallback})
         lines.sort(key=lambda l: l["event_index"])
@@ -2994,8 +3003,36 @@ class KyvoHighlight(KyvoBaseCog):
                   f"falling back to template. killer={killer_name!r} text={main_fact_text!r}", flush=True)
             main_fact_text = (
                 f"{killer_name} takes down {victim_name}!!" if lang == "en" else
-                f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했습니다!!"
+                f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했어요!"
             )
+        elif lang != "en" and not _commentary_avoids_seumnida(main_fact_text):
+            # 🛡️ [습니다체 사후 검증 - 킬러 이름 검증과 동일 위치/패턴] SYSTEM_PROMPT가 요체를
+            # 강제하지만 GPT가 온도 0.8 자유생성에서 이 지시를 안 지키고 습니다체를 섞어
+            # 내놓는 사례가 실제 배포에서 확인됨("완전히 찢어버렸습니다" 등). 킬러 이름
+            # 누락과 달리 이건 "그 줄만 다시 GPT에게 물어볼 가치가 있는" 문제라 1회
+            # 재생성을 먼저 시도하고, 재시도 결과도 습니다체거나 킬러 이름이 빠지면 그때
+            # 비로소 안전한 고정 템플릿(요체)으로 대체한다.
+            print(f"[HIGHLIGHT][WARN] Commentary text uses 습니다체 (guild={guild_id}) - "
+                  f"retrying once. text={main_fact_text!r}", flush=True)
+            retry_text = None
+            try:
+                retry_lines = await self._generate_commentary(
+                    kills_with_names, lang, roster_pairs=roster_pairs,
+                    laning_gold_gaps=laning_gold_gaps, scoreboard=scoreboard,
+                )
+                retry_text = retry_lines[0]["text"]
+            except Exception as e:
+                print(f"[HIGHLIGHT][WARN] 습니다체 재생성 요청 실패 (guild={guild_id}): "
+                      f"{type(e).__name__}: {e}", flush=True)
+            if (retry_text is not None and _commentary_avoids_seumnida(retry_text)
+                    and _commentary_names_killer(retry_text, killer_name)):
+                main_fact_text = retry_text
+            else:
+                print(f"[HIGHLIGHT][WARN] 재시도도 검증 실패(guild={guild_id}) - 폴백 템플릿 사용. "
+                      f"retry_text={retry_text!r}", flush=True)
+                main_fact_text = (
+                    f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했어요!"
+                )
 
         await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
 
