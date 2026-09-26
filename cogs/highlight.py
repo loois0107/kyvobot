@@ -725,6 +725,10 @@ TEAM_RED_COLOR = "#F14C4C"
 # 🛡️ [메인바 골드 색 - 킬 스코어와 구분용] 순백색(킬)보다 살짝 톤 다운된 회색 - 배경
 # 그라데이션 위에서도 충분히 읽히면서 킬의 순백색만큼 강조되지는 않게 한다.
 TOP_GOLD_TEXT_COLOR = "#C9C9C9"
+# 🛡️ [타이머 뱃지 - 서브바와 미세하게 다른 톤] 서브바 배경 자체가 이미 어두운 무채색
+# 단일 톤이라, 순수 검정을 낮은 알파로 얹으면 살짝 더 어두워지는 정도로만 구분된다(밝은
+# 색을 쓰면 오히려 튀어서 "은은하게"라는 요청과 어긋남).
+TIMER_BADGE_COLOR = "black@0.25"
 
 HUD_SLIDE_SEC = 0.4  # 배너 슬라이드업/다운 소요 시간 - PRE_BUILDUP_START_OFFSET_SEC과 같은 템포
 # 🛡️ [배너 위치 - 이번에도 하단 전체 영역을 시간대로 나눠 씀] 4단계 재설계로 하단 영역이
@@ -2102,8 +2106,24 @@ class KyvoHighlight(KyvoBaseCog):
                     label = f"v{name}n2"
                     cursor_r += minor_icon_size + 4 + minor_num_zone_w + minor_group_gap
 
+            # 🛡️ [타이머 뱃지 - 서브바 중앙 시간 강조] 지금까지 타이머는 서브바 공통 배경
+            # 위에 텍스트만 있어서 다른 요소와 시각적으로 구분이 안 됐다 - 텍스트 뒤에 살짝
+            # 더 어두운 톤(black@0.25)의 작은 박스를 얹어 "여기 독립된 요소"라는 느낌만
+            # 준다(튀지 않게 은은한 정도). 폭은 "MM:SS" 실측 최악값(FontKR.otf 기준
+            # fontsize 대비 약 2.92배, "00:00"이 가장 넓음) + 여유 3.0배로 고정폭 계산 -
+            # time_text가 매번 달라져도(예: "9:05" vs "62:30") 항상 안전하게 담긴다.
+            # dragon_offset(오브젝트 존 시작 전 mid_x 기준 최소 여백, 이번 해상도 기준
+            # 141px)이 이 뱃지 절반 폭보다 훨씬 커서 좌우 오브젝트 아이콘과 구조적으로
+            # 겹칠 수 없다 - 실제 렌더로도 재확인.
+            timer_badge_pad_x = max(4, int(round(sub_font_size * 0.5)))
+            timer_badge_w = int(round(sub_font_size * 3.0)) + 2 * timer_badge_pad_x
+            timer_badge_h = int(round(top_sub_h * 0.82))
+            timer_badge_x = mid_x - timer_badge_w / 2
+            timer_badge_y = top_main_h + (top_sub_h - timer_badge_h) / 2
             text_chain += (
-                f";[{label}]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
+                f";[{label}]drawbox=x={timer_badge_x:.2f}:y={timer_badge_y:.2f}:"
+                f"w={timer_badge_w}:h={timer_badge_h}:color={TIMER_BADGE_COLOR}:t=fill[vtimerbadge]"
+                f";[vtimerbadge]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
                 f"fontcolor=white:{top_text_style}:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
             label = "vs3"
