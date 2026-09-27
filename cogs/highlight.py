@@ -812,6 +812,12 @@ STATIC_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "static_icons_cache")
 #     이미 일치함을 실측 RGB로 확인함(추가 반전 로직 불필요 - 뒤집으면 오히려 어긋남).
 UI_BG_COLOR = "0x0A0B0E"  # 이제 배경 그리기엔 안 쓰이지만, 혹시 남은 보조 요소용으로 유지
 OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
+# 🛡️ [메인바 중앙 장식 트로피 - 실루엣 교체] 기존 골드 트로피(trophy_icon.png, PIL
+# 자체 제작)를 검은 배경 위 흰색 실루엣 디자인(trophy_icon_new.png)으로 교체 -
+# make_trophy_transparent.py로 배경(순수 검정, RGB 18/18/18 균일)을 알파로
+# 변환해 투명화한 결과물을 실제로 사용한다(trophy_icon_new_transparent.png).
+# 원본 골드 버전(trophy_icon.png)은 삭제하지 않고 보관만 하며 더 이상 참조하지 않는다.
+TROPHY_ICON_PATH = os.path.join(OVERLAY_DIR, "trophy_icon_new_transparent.png")
 
 # 상단 2단 바 - 메인바(전체 폭)+서브바(중앙 940px만) 치수, 실측값 그대로.
 # 🛡️ [메인바+서브바 높이 축소 - LCK 실측 비교, 방안A 채택] 이전엔 50->100/1080으로 2배
@@ -1732,6 +1738,11 @@ class KyvoHighlight(KyvoBaseCog):
         frame_v2_idx = next_input_idx
         next_input_idx += 1
 
+        # 🛡️ [메인바 중앙 트로피 - 항상 추가] 자체 제작 장식 아이콘, 매 렌더마다 고정 입력.
+        inputs += ["-i", TROPHY_ICON_PATH]
+        trophy_icon_idx = next_input_idx
+        next_input_idx += 1
+
         # 🛡️ [오버레이 HUD 입력] FIRST BLOOD/SOLO KILL일 때만(schedule에 "hud" 키가 있을
         # 때만) 완성 배너 PNG를 추가 입력으로 붙인다 - 해당 없는 킬(추격전 등)에서는 아예
         # 입력조차 안 넣어서 필터그래프가 더 무거워지지 않는다.
@@ -2062,6 +2073,32 @@ class KyvoHighlight(KyvoBaseCog):
                 f"fontcolor=white:{top_text_style}:x='{int(round(kill_x_r))}-text_w/2':y='{main_text_y_expr}'[vm6]"
             )
             label = "vm6"
+
+            # 🛡️ [메인바 중앙 장식 트로피] 킬 숫자(kill_x_l/kill_x_r) 사이, 메인바
+            # 정중앙(final_width/2 - bar_x0/x1이 항상 대칭이라 이게 곧 bar 중앙)에 작은
+            # 장식 아이콘을 넣는다. 이 자리는 킬 텍스트 폭을 감안해도 실측 기준 약
+            # 290px 이상 비어 있어(1080 기준 kill_x_l=804, kill_x_r=1116) 여유가 크다.
+            # 트로피 실루엣(TROPHY_ICON_PATH)은 검은 배경+흰 실루엣 PNG를
+            # make_trophy_transparent.py로 알파 투명화한 것으로, 정사각형이 아니라
+            # (437x242, 약 1.81:1) 종횡비를 유지해서 스케일해야 한다.
+            # 🛡️ [크기 확대 - 1.6배] "너무 작아 보인다"는 피드백으로 이전 50%에서
+            # 80%로 키움(1.6배, 요청한 1.5~2배 범위 안). 가로로는 킬 텍스트 사이 실측
+            # 여유(296px, 1080 기준)에 비해 2배(top_main_h*1.0, 폭 약 116px)를 적용해도
+            # 전혀 안 부딪히지만, top_main_h*1.0은 세로 여백이 0이 되어(trophy_y=0)
+            # 바 위아래 경계에 아이콘이 딱 붙어버리는 문제가 있어 위아래 살짝 여백을
+            # 남기는 0.8로 확정했다.
+            with Image.open(TROPHY_ICON_PATH) as _trophy_im:
+                _trophy_native_w, _trophy_native_h = _trophy_im.size
+            trophy_icon_h = max(6, int(round(top_main_h * 0.8)))
+            trophy_icon_w = max(6, int(round(trophy_icon_h * _trophy_native_w / _trophy_native_h)))
+            trophy_center_x = final_width / 2
+            trophy_x = trophy_center_x - trophy_icon_w / 2
+            trophy_y = (top_main_h - trophy_icon_h) / 2
+            text_chain += (
+                f";[{trophy_icon_idx}:v]scale={trophy_icon_w}:{trophy_icon_h}[vtrophy_s]"
+                f";[{label}][vtrophy_s]overlay=x={int(round(trophy_x))}:y={trophy_y:.2f}[vtrophy]"
+            )
+            label = "vtrophy"
 
             # 🛡️ [골드 격차 - 서브바에서 메인바 안으로 재배치] 예전엔 서브바 구간에 독립
             # 배지로 그렸는데, gap_leader_x(=gold_x_l/gold_x_r) 자체가 애초에 메인바
