@@ -1904,7 +1904,10 @@ class KyvoHighlight(KyvoBaseCog):
             # 바꿔 킬의 순백색과 명확히 구분되게 한다. 타워는 건드리지 않음(피드백 대상 아님).
             KILL_FONT_SIZE = max(10, int(round(top_font_size * 1.25)))
             top_icon_size = max(8, int(round(top_main_h * 0.6)))
-            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.08, 0.42, 0.75
+            # 🛡️ [팀 라벨 보강 - TOWER_FRAC 추가 조정] 팀 라벨(BLUE/RED)에 깃발 심볼+자간
+            # 확보+배경 블록을 더하면서 전체 폭이 다시 늘어났다 - 실측 계산 결과 1080 높이
+            # 기준 최소 0.223 필요, 안전 여유를 더해 0.23으로 재조정.
+            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.23, 0.42, 0.75
             main_text_y_expr = f"({top_main_h}-text_h)/2"
 
             tower_x_l = bar_x0 + bar_half_w * TOWER_FRAC
@@ -1947,6 +1950,103 @@ class KyvoHighlight(KyvoBaseCog):
             # 배경 그라데이션 위에서 다소 밋밋했다 - 하단 패널 CS/KDA에 이미 쓰는
             # GRID_TEXT_BORDER_COLOR/W와 동일한 테두리를 추가한다(그림자는 제거됨).
             top_text_style = f"bordercolor={GRID_TEXT_BORDER_COLOR}:borderw={GRID_TEXT_BORDER_W}"
+            # 🛡️ [팀 사이드 라벨 - BLUE/RED 보강] 메인바 좌우 맨 끝(65% 폭 시작점)과 타워
+            # 아이콘 사이 자리에 팀 라벨을 추가한다. _render_video는 언어를 모르는 구조라
+            # (스케줄만 받아 그림, 실측으로 확인된 기존 설계 원칙) KO/EN 분기를 새로 만들지
+            # 않고, LCK 등 실제 방송에서도 "BLUE"/"RED" 사이드 표기를 그대로 영어로 쓰는
+            # 관례를 따라 언어 무관 고정 텍스트로 둔다.
+            # 🛡️ [폰트 굵기] FontKR(Bold)보다 더 두꺼운 FontKR-Black(하단 패널 CS/KDA에
+            # 이미 쓰는 최고 굵기 웨이트)으로 교체 - 실측 확인 결과 두 폰트의 advance
+            # width는 거의 같지만(BLUE 기준 248 vs 250), Black 웨이트가 같은 폭에서
+            # 획이 훨씬 두꺼워 "더 각지고 두꺼운" 느낌에 부합한다.
+            # 🛡️ [자간(letter-spacing) 확보] ffmpeg drawtext에는 자간 조정 파라미터가
+            # 아예 없다(letter_spacing/tracking 옵션 없음, 공식 문서 확인) - 유일한
+            # 실용적 우회책은 텍스트 자체에 공백 문자를 끼워 넣는 것이라("B L U E") 이
+            # 방식을 적용한다. PIL로 이 정확한 문자열의 실측 폭을 미리 재서(ffmpeg의
+            # self-reference text_w 대신) 아이콘/배경 블록 좌표를 전부 파이썬에서
+            # 확정값으로 계산한다.
+            # 🛡️ [깃발 아이콘 제거 + 텍스트 최대 확대] 깃발 심볼을 빼고 그 자리까지 전부
+            # 텍스트에 할당해서 가용 폭을 최대한 꽉 채운다. 가로/세로 두 제약을 모두
+            # 계산해서 더 작은 쪽을 최종 폰트 크기로 쓴다:
+            # - 가로 제약: 구분선(타워 쪽) 앞까지 남는 폭(edge_pad 두 번 제외)에 "B L U E"
+            #   (더 넓은 쪽) 실측 폭이 딱 맞도록 - bar_x0/bar_x1은 항상 final_width=1920
+            #   기준이라 이 값은 해상도(세로)와 무관하게 거의 고정된다.
+            # - 세로 제약: top_main_h를 넘지 않도록 0.72배를 안전 상한으로 둔다(실측
+            #   확인 - KILL_FONT_SIZE가 이미 0.525배로 문제없이 들어갔던 전례 대비 여유
+            #   있게 잡음).
+            # 🛡️ [배경 블록 제거] 텍스트가 충분히 크고 두꺼워져(FontKR-Black+자간) 별도
+            # 배경 없이도 시인성이 확보된다는 피드백 - 검정 반투명 블록을 없애고 팀 컬러
+            # 배경(메인바 그라데이션) 위에 텍스트만 직접 그린다.
+            blue_spaced_text = "B L U E"
+            edge_pad = 6
+            divider_gap_for_label = 6
+            divider_w_for_label = 2
+            _probe_font = ImageFont.truetype(SCOREBAR_FONT_KR_BLACK, 100)
+            _blue_ratio = _probe_font.getlength(blue_spaced_text) / 100
+            avail_text_w = (tower_x_l - divider_gap_for_label - divider_w_for_label - divider_gap_for_label) \
+                - (bar_x0 + edge_pad) - edge_pad
+            font_size_by_width = int(avail_text_w / _blue_ratio)
+            font_size_by_height = int(round(top_main_h * 0.72))
+            team_label_font_size = max(8, min(font_size_by_width, font_size_by_height))
+
+            _label_font = ImageFont.truetype(SCOREBAR_FONT_KR_BLACK, team_label_font_size)
+            blue_text_w = _label_font.getlength(blue_spaced_text)
+
+            # 🛡️ [정렬 기준 - 바 가장자리가 아니라 구분선] BLUE/RED를 각각 자기 쪽 바
+            # 가장자리에서부터 고정 여백으로 정렬하면, 폰트 크기가 더 넓은 단어("B L U E")
+            # 기준으로 정해지기 때문에 더 짧은 단어("R E D")는 안쪽(구분선 쪽)에 남는
+            # 여백이 훨씬 커 보여 "오른쪽 끝에 붙어 있으려는" 것처럼 비대칭으로 보인다는
+            # 피드백 - 바 가장자리 대신 구분선을 기준점으로 삼아, 두 라벨 모두 "구분선에서
+            # divider_gap_for_label만큼 떨어진 지점"에서 시작/끝나도록 통일한다(BLUE는
+            # 구분선 방향으로 끝나고, RED는 구분선 방향에서 시작).
+            blue_text_x = tower_x_l - divider_gap_for_label - divider_w_for_label \
+                - divider_gap_for_label - blue_text_w
+            red_text_x = tower_x_r + divider_gap_for_label + divider_w_for_label \
+                + divider_gap_for_label
+
+            blue_label_tf = _write_textfile("team_label_blue", blue_spaced_text)
+            text_chain += (
+                f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{blue_label_tf}':fontsize={team_label_font_size}:"
+                f"fontcolor=white:{top_text_style}:x={int(round(blue_text_x))}:y='{main_text_y_expr}'[vmlbl1]"
+            )
+            label = "vmlbl1"
+
+            # 🛡️ [RED 글자 간격 늘려서 영역 꽉 채우기] "R E D"는 "B L U E"보다 글자 수가
+            # 적어서 같은 폰트 크기, 같은 (한 칸) 자간으로는 BLUE가 채우는 폭(blue_text_w)
+            # 만큼 채우지 못하고 오른쪽에 빈 공간이 남는다는 피드백 - R/E/D 각 글자를
+            # 개별 drawtext로 따로 그리고, 글자 사이 간격을 넓혀서 전체 폭이 정확히
+            # blue_text_w와 같아지도록(=구분선에서 시작해 BLUE와 대칭인 지점까지 꽉 차게)
+            # 만든다.
+            red_letters = ["R", "E", "D"]
+            red_letter_w = [_label_font.getlength(ch) for ch in red_letters]
+            red_gap = max(0.0, (blue_text_w - sum(red_letter_w)) / (len(red_letters) - 1))
+
+            red_x = red_text_x
+            for i, ch in enumerate(red_letters):
+                ch_tf = _write_textfile(f"team_label_red_{i}", ch)
+                text_chain += (
+                    f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{ch_tf}':fontsize={team_label_font_size}:"
+                    f"fontcolor=white:{top_text_style}:x={int(round(red_x))}:y='{main_text_y_expr}'[vmlblr{i}]"
+                )
+                label = f"vmlblr{i}"
+                red_x += red_letter_w[i] + red_gap
+
+            # 🛡️ [라벨-타워 세로 구분선] 얇은(2px) 밝은 반투명 선으로 라벨 블록과 타워 통계
+            # 영역을 시각적으로 분리한다.
+            TEAM_LABEL_DIVIDER_COLOR = "white@0.2"
+            divider_w = 2
+            divider_gap = 6
+            divider_h = int(round(top_main_h * 0.6))
+            divider_y = (top_main_h - divider_h) / 2
+            divider_x_l = tower_x_l - divider_gap - divider_w
+            divider_x_r = tower_x_r + divider_gap
+            text_chain += (
+                f";[{label}]drawbox=x={int(round(divider_x_l))}:y={divider_y:.2f}:"
+                f"w={divider_w}:h={divider_h}:color={TEAM_LABEL_DIVIDER_COLOR}:t=fill[vmdiv1]"
+                f";[vmdiv1]drawbox=x={int(round(divider_x_r))}:y={divider_y:.2f}:"
+                f"w={divider_w}:h={divider_h}:color={TEAM_LABEL_DIVIDER_COLOR}:t=fill[vmdiv2]"
+            )
+            label = "vmdiv2"
             text_chain += (
                 f";[{label}]drawtext=fontfile='{font_kr}':textfile='{tower100_tf}':fontsize={top_font_size}:"
                 f"fontcolor=white:{top_text_style}:x={tower_num_x_l}:y='{main_text_y_expr}'[vm1]"
