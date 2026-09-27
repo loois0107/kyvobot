@@ -2058,6 +2058,54 @@ class KyvoHighlight(KyvoBaseCog):
                 f"w={divider_w}:h={divider_h}:color={TEAM_LABEL_DIVIDER_COLOR}:t=fill[vmdiv2]"
             )
             label = "vmdiv2"
+
+            # 🛡️ [세트 스코어 표시 - 순수 연출용 랜덤] LCK 스타일 "이번 세트 승수" 사각형
+            # 3개씩(팀당) - 실제 시리즈 데이터가 없으므로 매 렌더마다 무작위로 생성한다.
+            # 한쪽이 이미 3개를 다 채우면 시리즈가 끝났을 상황이라 부자연스러우므로,
+            # 리더 팀은 1~2개만 채우고 상대는 그보다 적은(0~리더-1) 개수만 채운 상태만
+            # 나오게 한다(3-3 등 대칭/완주 조합은 절대 나오지 않음).
+            # 🛡️ [위치 - 라벨 가로 중심 아래로, 크기 2.2배] 처음엔 바 가장자리에 붙여서
+            # 작게 뒀었는데, LCK 실측 비교 결과 팀 태그 바로 아래 그 폭 중심에 맞춰 눈에
+            # 띄는 크기로 박혀 있다는 피드백 - BLUE/RED 각 라벨의 실제 잉크 중심
+            # (blue_text_x+blue_text_w/2, red_text_x+blue_text_w/2 - RED도 자간
+            # 스트레치로 동일 폭이라 blue_text_w 재사용) 바로 아래로 그룹을 옮기고,
+            # 크기는 이전(top_sub_h*0.5)의 2.2배로 키웠다. 커진 만큼 top_sub_h 밴드
+            # 안에 억지로 맞추지 않고 메인바 바로 아래에 작은 여백만 두고 자연스럽게
+            # 게임 화면 위로 걸치게 둔다 - 이 x 구간(라벨 중심, 바 가장자리 쪽)은
+            # 오브젝트 서브바(695~1225px)나 타이머와 전혀 겹치지 않는 영역이라 문제없다.
+            set_sq_size = max(4, int(round(top_sub_h * 0.5 * 2.2)))
+            set_sq_gap = max(2, int(round(set_sq_size * 0.35)))
+            set_sq_border = max(1, int(round(set_sq_size * 0.18)))
+            set_group_w = 3 * set_sq_size + 2 * set_sq_gap
+            set_sq_y = top_main_h + max(2, int(round(set_sq_size * 0.15)))
+
+            _set_leader = random.choice(["left", "right"])
+            _set_leader_filled = random.randint(1, 2)
+            _set_other_filled = random.randint(0, _set_leader_filled - 1)
+            if _set_leader == "left":
+                left_filled, right_filled = _set_leader_filled, _set_other_filled
+            else:
+                right_filled, left_filled = _set_leader_filled, _set_other_filled
+
+            blue_label_center_x = blue_text_x + blue_text_w / 2
+            red_label_center_x = red_text_x + blue_text_w / 2
+            left_group_x0 = blue_label_center_x - set_group_w / 2
+            right_group_x0 = red_label_center_x - set_group_w / 2
+
+            for side_tag, side_x0, filled_count, sq_color in (
+                ("l", left_group_x0, left_filled, TEAM_BLUE_COLOR),
+                ("r", right_group_x0, right_filled, TEAM_RED_COLOR),
+            ):
+                for i in range(3):
+                    sq_x = int(round(side_x0 + i * (set_sq_size + set_sq_gap)))
+                    sq_t = "fill" if i < filled_count else str(set_sq_border)
+                    next_label = f"vmset_{side_tag}{i}"
+                    text_chain += (
+                        f";[{label}]drawbox=x={sq_x}:y={set_sq_y:.2f}:"
+                        f"w={set_sq_size}:h={set_sq_size}:color={sq_color}:t={sq_t}[{next_label}]"
+                    )
+                    label = next_label
+
             text_chain += (
                 f";[{label}]drawtext=fontfile='{font_kr}':textfile='{tower100_tf}':fontsize={top_font_size}:"
                 f"fontcolor=white:{top_text_style}:x={tower_num_x_l}:y='{main_text_y_expr}'[vm1]"
