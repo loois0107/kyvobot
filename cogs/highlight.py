@@ -725,10 +725,11 @@ TEAM_RED_COLOR = "#F14C4C"
 # 🛡️ [메인바 골드 색 - 킬 스코어와 구분용] 순백색(킬)보다 살짝 톤 다운된 회색 - 배경
 # 그라데이션 위에서도 충분히 읽히면서 킬의 순백색만큼 강조되지는 않게 한다.
 TOP_GOLD_TEXT_COLOR = "#C9C9C9"
-# 🛡️ [타이머 뱃지 - 서브바와 미세하게 다른 톤] 서브바 배경 자체가 이미 어두운 무채색
-# 단일 톤이라, 순수 검정을 낮은 알파로 얹으면 살짝 더 어두워지는 정도로만 구분된다(밝은
-# 색을 쓰면 오히려 튀어서 "은은하게"라는 요청과 어긋남).
-TIMER_BADGE_COLOR = "black@0.25"
+# 🛡️ [타이머 뱃지 - 서브바 반투명화 후 알파 보강] 0.25는 서브바 자체가 불투명(255)일
+# 때는 충분했는데, 서브바를 반투명(alpha 190)으로 낮춘 뒤에는 밝은 게임 배경(잔디 등)이
+# 이중으로 비쳐서 흰 타이머 텍스트 가독성이 떨어지는 게 실측으로 확인됨 - 0.5로 올려서
+# 배경이 밝아도 텍스트가 항상 또렷하게 보이도록 보강.
+TIMER_BADGE_COLOR = "black@0.5"
 
 HUD_SLIDE_SEC = 0.4  # 배너 슬라이드업/다운 소요 시간 - PRE_BUILDUP_START_OFFSET_SEC과 같은 템포
 # 🛡️ [배너 위치 - 이번에도 하단 전체 영역을 시간대로 나눠 씀] 4단계 재설계로 하단 영역이
@@ -825,10 +826,20 @@ OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
 # 비율값과 이미지가 반드시 같이 바뀌어야 그림자 띠 버그가 재발하지 않는다).
 TOP_MAIN_BAR_HEIGHT_RATIO = 64 / 1080
 TOP_SUB_BAR_HEIGHT_RATIO = 20 / 1080
-TOP_SUB_BAR_X_RATIO = (490 / 1920, 1429 / 1920)
+# 🛡️ [서브바 폭 재축소 - 39.6%도 여전히 넓다는 재피드백] 처음엔 안전 여유를 넉넉히 두고
+# 39.6%(580~1340)로 줄였는데, LCK 원본 대비 여전히 넓다는 피드백으로 안전 여유를 최소로
+# 줄여 재계산했다 - dragon_offset(드래곤 시작 전 여백)이 예전엔 "서브바 half-width의
+# 30%"라는 임의 비율이라 실제 필요치(타이머 뱃지 폭)보다 훨씬 컸던 게 원인 중 하나였음을
+# 발견 - 아래 dragon_offset 계산 자체를 타이머 뱃지 폭 기준으로 바꿨다. 마지막 오브젝트의
+# 숫자 폭 여유도 "최대 4자리 가정" 대신 실제 표시 값(보통 1~2자리) 기준으로 줄였다.
+# 재계산 결과 필요 half-width ≈261px -> 27.6%(695~1225/1920). overlay_frame_v2.png도
+# 이 범위에 맞춰 다시 리크롭 + 좌우 각 18px alpha 190->0 선형 페더 처리(하드 엣지 대신
+# 부드럽게 사라지는 형태) - 코드 좌표와 이미지가 어긋나면 그림자 띠 버그와 같은 종류의
+# 문제가 재발한다.
+TOP_SUB_BAR_X_RATIO = (695 / 1920, 1225 / 1920)
 # 🛡️ [메인바 폭 65%로 축소 - 서브바와 완전히 독립된 별개 변수] 메인바를 화면 전체 폭이
 # 아니라 중앙 65%짜리 좁은 바로 좁힌다. 서브바는 이미 자기만의 폭(TOP_SUB_BAR_X_RATIO,
-# 48.8%)을 쓰고 있고 이번 변경과 전혀 무관 - bar_x0/x1/bar_mid_x/bar_half_w는 렌더
+# 27.6%)을 쓰고 있고 이번 변경과 전혀 무관 - bar_x0/x1/bar_mid_x/bar_half_w는 렌더
 # 함수 안에서 이 비율로 새로 계산하는 독립 변수이고, 서브바가 쓰는 mid_x/half_w는
 # 그대로 final_width 기준을 유지한다(지난 panel_mid_x 분리와 동일한 패턴).
 MAIN_BAR_WIDTH_RATIO = 0.65
@@ -2033,7 +2044,15 @@ class KyvoHighlight(KyvoBaseCog):
             # 비슷하게 보정). 오브젝트 숫자도 같은 폰트/포뮬러를 쓰므로 동일 보정 적용.
             TIMER_VALIGN_CORRECTION_RATIO = 0.087
             sub_text_y_expr = f"{top_main_h}+({top_sub_h}-text_h)/2-{top_sub_h * TIMER_VALIGN_CORRECTION_RATIO:.2f}"
-            dragon_offset = (sub_x1 - sub_x0) / 2 * 0.3
+            # 🛡️ [dragon_offset - 실제 필요치(타이머 뱃지 폭) 기준으로 변경] 예전엔
+            # "서브바 half-width의 30%"라는 임의 비율이라, 서브바가 넓을 때는 실제 필요한
+            # 여백(타이머 뱃지와 안 겹칠 정도)보다 훨씬 컸다 - 서브바를 좁힐 때 이 여유가
+            # 그대로 발목을 잡는 구조였음. 타이머 뱃지 폭(아래에서 재계산하는 것과 동일
+            # 공식)의 절반 + 최소 여백(4px)으로 바꿔서, 서브바 폭과 무관하게 딱 필요한
+            # 만큼만 여백을 둔다.
+            _timer_badge_pad_x_for_offset = max(4, int(round(sub_font_size * 0.5)))
+            _timer_badge_w_for_offset = int(round(sub_font_size * 3.0)) + 2 * _timer_badge_pad_x_for_offset
+            dragon_offset = _timer_badge_w_for_offset / 2 + 4
 
             gm = scoreboard["game_time_ms"] // 1000
             # 🛡️ 콜론(:)은 필터 옵션 구분자와 충돌해서 홑따옴표로 감싸도 그대로 두면
@@ -2148,11 +2167,18 @@ class KyvoHighlight(KyvoBaseCog):
             timer_badge_h = int(round(top_sub_h * 0.82))
             timer_badge_x = mid_x - timer_badge_w / 2
             timer_badge_y = top_main_h + (top_sub_h - timer_badge_h) / 2
+            # 🛡️ [타이머 검정 외곽선 - 서브바 반투명화 대응] 배지 알파를 올려도 밝은 게임
+            # 배경(잔디 등) 위에서는 흰 글자가 묻히는 게 실측으로 확인됨 - 배경 박스만으로는
+            # 임의의 비디오 배경에 대응하기 부족해서, 방송 그래픽에서 흔히 쓰는 검정 스트로크
+            # 외곽선을 직접 추가한다(top_text_style은 GRID_TEXT_BORDER_W=0이라 테두리가
+            # 없어서 이 텍스트만 로컬로 별도 지정).
+            timer_border_w = max(1, int(round(sub_font_size * 0.15)))
             text_chain += (
                 f";[{label}]drawbox=x={timer_badge_x:.2f}:y={timer_badge_y:.2f}:"
                 f"w={timer_badge_w}:h={timer_badge_h}:color={TIMER_BADGE_COLOR}:t=fill[vtimerbadge]"
                 f";[vtimerbadge]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
-                f"fontcolor=white:{top_text_style}:x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
+                f"fontcolor=white:bordercolor=black:borderw={timer_border_w}:"
+                f"x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
             label = "vs3"
 
