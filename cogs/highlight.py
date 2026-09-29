@@ -258,13 +258,37 @@ VOICE_MIX_GAIN_DB = 6.0
 # 🛡️ [0단계 체감 강화] 킬 순간 "동시 폭발" 임팩트를 더 세게 느끼도록, 0단계 목소리
 # (main_explode/hype_explode/sub_explode(KO), 그리고 0단계로 쓰이는 sterling/carter/
 # atlee(EN))에만 나머지 단계(1~3단계: 닉네임/의문형/사실전달)보다 +3dB를 얹는다.
+# 🛡️ [sub_explode만 역할 단위 추가 보정 - v4 재생성 후 v3보다 조용해진 문제] hype_explode
+# 는 v3 원본으로 남아있는데 sub_explode는 전부 v4로 재생성되면서 실측(volumedetect) 결과
+# v3 hype 대비 mean_volume이 -2.11dB 더 조용해져 있었다(피크도 같이 낮음 - 다이나믹
+# 레인지 자체는 v3/v4가 12~13dB로 비슷해서 컴프레션 구조 차이가 아니라 단순히 더 조용하게
+# 나온 것으로 판단, 게인만 올리면 해결될 문제). 그 격차를 메우고 살짝 더 크게 들리도록
+# sub_explode만 +3.0->+5.5dB로 올렸다 - hype_explode/sterling/carter/atlee는 이 문제와
+# 무관해 +3.0dB 그대로 둔다. alimiter가 이미 하드 리미터(SFX_LIMITER_CEILING=0.65,
+# level=false)로 걸려 있어 게인을 올려도 최종 출력은 안전하게 캡된다.
+# 🛡️ [main_explode는 파일 단위 오버라이드로 분리] main_explode도 처음엔 역할 단위로
+# +7.0dB를 줬었는데, main_explode_a/b/c를 다시 v3로 원복(다른 커밋 참고 - v4 톤이 "얇고
+# 꽥꽥거림")하면서 문제가 생겼다: main_explode 풀이 이제 v3(a/b/c, 75%)+v4(d, 25%) 혼재라
+# 역할 단위 게인 하나로는 둘 다 만족 못 시킨다 - +7.0dB를 유지하면 v3인 a/b/c가 실측상
+# hype보다 오히려 +1.34dB 더 커지고(과함), +3.0dB로 낮추면 v4인 d가 다시 조용해지는
+# 원래 문제로 돌아간다. 그래서 게인 조회를 "파일명 우선 -> 역할 단위 -> 기본값" 3단계로
+# 확장해 main_explode_d.wav 하나에만 파일 단위로 +7.0dB를 주고, 역할 단위 기본값
+# ("main_explode")은 원래대로 +3.0dB로 되돌렸다 - a/b/c는 이 역할 기본값을 그대로 받고
+# d만 파일 단위 오버라이드로 별도 처리된다.
 VOICE_MIX_GAIN_DB_OVERRIDE = {
     "main_explode": VOICE_MIX_GAIN_DB + 3.0,
     "hype_explode": VOICE_MIX_GAIN_DB + 3.0,
-    "sub_explode": VOICE_MIX_GAIN_DB + 3.0,
+    "sub_explode": VOICE_MIX_GAIN_DB + 5.5,
     "sterling": VOICE_MIX_GAIN_DB + 3.0,
     "carter": VOICE_MIX_GAIN_DB + 3.0,
     "atlee": VOICE_MIX_GAIN_DB + 3.0,
+}
+# 🛡️ [파일명 단위 오버라이드 - 역할 단위보다 먼저 조회됨] main_explode_d.wav만 v4로 남아
+# 있어(main_explode 풀의 나머지 a/b/c는 v3) 역할 기본값(+3.0dB)과 무관하게 이 파일 하나만
+# +7.0dB를 받는다. 이 딕셔너리에 없는 파일은 그대로 VOICE_MIX_GAIN_DB_OVERRIDE(역할
+# 단위) -> VOICE_MIX_GAIN_DB(기본값) 순으로 fallback한다.
+VOICE_MIX_GAIN_DB_FILE_OVERRIDE = {
+    "main_explode_d.wav": VOICE_MIX_GAIN_DB + 7.0,
 }
 
 # ══════════════════════════════════════════════════════════
@@ -364,6 +388,11 @@ PRE_BUILDUP_TEXT = {
 # (hype_leadin_c/sub_leadin_a/sub_leadin_b, 전부 1음절)만 "1어절 이내" 원칙을
 # 유지한 채 텍스트를 살짝 늘려(음절 반복) 재생성 - 아래 값은 그 결과다. 기존
 # v3 버전 48개 전부는 assets/highlight_voice/_backup_v3_pool_20260930/ 에 백업.
+# 🛡️ [HYPE_EXPLODE_POOL만 재차 v3로 원복] 위 일괄 전환 직후 "0단계 3보이스가 다 같은
+# 목소리 같다"는 피드백으로 피치 실측(아래 HYPE_EXPLODE_TEXT 앞 주석 참고) 후
+# HYPE_EXPLODE_POOL(hype_a~f.wav, 이 LEADIN_OVERLAY_POOL의 hype_leadin_*와는 다른
+# 파일) 6개만 다시 v3로 되돌렸다 - 이 문단이 말하는 "48개 전부 v4"는 그 이전 상태이며,
+# 현재는 MAIN_EXPLODE/SUB_EXPLODE 등 나머지 42개만 v4, HYPE_EXPLODE 6개는 v3다.
 LEADIN_OVERLAY_POOL = (sorted(glob.glob(os.path.join(VOICE_DIR, "hype_leadin_*.wav")))
                        + sorted(glob.glob(os.path.join(VOICE_DIR, "sub_leadin_*.wav"))))
 LEADIN_OVERLAY_TEXT = {
@@ -478,23 +507,47 @@ SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
 # 실제 0단계 캐스케이드(main+hype+sub 동시재생) 테스트까지 마친 뒤 풀에 정식 추가했다 -
 # a/b/c보다 stability가 더 낮아(과장 더 큼) 세트 안에서 유일하게 다른 파라미터지만,
 # 무음 게이트/길이/attack_rise 전부 기준 통과해 별도 텍스트 없이 풀만 확장.
-# 🛡️ [아래 세 TEXT 딕셔너리, 텍스트는 그대로/오디오만 v4로 교체] 텍스트(모음 개수)를 바꿀
+# 🛡️ [아래 TEXT 딕셔너리들, 텍스트는 그대로/오디오만 v4로 교체] 텍스트(모음 개수)를 바꿀
 # 이유가 없어 문구는 유지했다 - 인라인 주석의 "stability=X/style=Y"와 "정밀 기준 통과"는
 # 전부 v3 시절 기록이라 지금 파일에는 더 이상 안 맞는다(지금은 위 LEADIN_OVERLAY_TEXT 앞
 # 주석에 적은 v4+트림 절차로 재생성됨) - 길이만 트림 후 최종값으로 갱신.
+# 🛡️ [main_explode a/b/c만 재차 v3로 원복 - "얇고 꽥꽥거리는" v4 톤이 메인 표준으로는
+# 안 맞는다는 피드백] v4 게인을 +7.0dB까지 올려봤지만(hype_explode v3는 +3.0dB) 통합
+# 라우드니스(loudnorm) 실측 결과 main_explode(-11.50LUFS)가 hype(-10.38LUFS)보다 여전히
+# 작았다 - alimiter로 인한 라우드니스 감소분 자체는 main/hype/sub 셋이 거의 동일(-8LU
+# 안팎)해서 리미터가 main만 더 세게 누르는 게 아니라, limiter 통과 *전*부터 이미 v4쪽
+# 통합 라우드니스가 더 낮았다(v4 오디오 자체의 "라우드니스 밀도"가 v3보다 낮은 것으로
+# 추정 - 게인을 더 올려도 리미터 심화 구간이라 한계 효용이 낮음). 게인만으로는 못 고치는
+# 문제라 판단해 톤 자체를 되돌리기로 하고, main_explode_d(원래도 "세트 안에서 유일하게
+# 다른 파라미터"로 도입된 슬롯)만 v4로 남기고 a/b/c는 v3 원본(_backup_v3_pool_20260930/)
+# 으로 되돌렸다 - 길이 가중 랜덤 선택(MAIN_EXPLODE_POOL 랜덤 픽 로직) 기준으로 d가 뽑힐
+# 확률은 대략 27%(d의 v4 길이 1.58s ÷ 전체 4개 길이 합) - "가끔 얇고 꽥꽥거리는 것도
+# 섞여 나오는" 정도의 포지션을 의도한 비율과 근접.
 MAIN_EXPLODE_TEXT = {
-    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.76s(트림), v4
-    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.58s(트림), v4
-    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 2.04s(트림), v4
-    "main_explode_d.wav": "우와" + "아" * 10 + "악!!",  # 1.58s(트림), v4
+    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.28s, v3(원복)
+    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.52s, v3(원복)
+    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.36s, v3(원복)
+    "main_explode_d.wav": "우와" + "아" * 10 + "악!!",  # 1.58s(트림), v4 유지
 }
+# 🛡️ [v4 -> v3 원복, 0단계 3보이스 음색 분리 문제] main/hype/sub_explode를 전부 v4로
+# 옮긴 뒤 "0단계 3보이스가 다 같은 목소리처럼 들린다"는 피드백이 나와 실측했더니, 자기상관
+# 기반 median pitch가 v3에서는 세 보이스 평균 pairwise 차이 107.8Hz였는데 균일하게
+# stability=0.55로 생성한 v4에서는 79.4Hz로 좁혀져 있었다(특히 main-hype 간격이
+# 161.6Hz->50.9Hz로 급격히 줄어듦 - main 피치는 올라가고 hype 피치는 내려가면서 서로
+# 수렴). stability를 보이스별로 다르게(hype=0.3/sub=0.8) 줘서 실측했지만 평균 77.8Hz로
+# 거의 개선이 없었다 - stability는 애초에 피치 레지스터를 조절하는 파라미터가 아니라는
+# 기존 결론과 일치. 대신 HYPE_EXPLODE_POOL만 v3 원본(assets/highlight_voice/
+# _backup_v3_pool_20260930/)으로 되돌리고 MAIN_EXPLODE/SUB_EXPLODE는 v4를 유지했더니
+# 평균 pairwise 차이가 101.0Hz로 v3 수준에 근접 회복됐다(main-hype 83.1Hz, main-sub
+# 68.3Hz, hype-sub 151.4Hz) - 아래 6개 파일은 v3 원본이다(모델/stability 정보는 이
+# 파일들을 처음 녹음했을 당시 기록 참고 - 이 라운드에서는 재생성하지 않음).
 HYPE_EXPLODE_TEXT = {
-    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 1.86s(트림), v4
-    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.30s(트림), v4
-    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.39s(트림), v4
-    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.67s(트림), v4
-    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 1.58s(트림), v4
-    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.58s(트림), v4
+    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, v3(원복)
+    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.76s, v3(원복)
+    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.36s, v3(원복)
+    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.68s, v3(원복)
+    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 2.00s, v3(원복)
+    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.76s, v3(원복)
 }
 SUB_EXPLODE_TEXT = {
     "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.30s(트림), v4
@@ -2888,7 +2941,12 @@ class KyvoHighlight(KyvoBaseCog):
         for key, idx in voice_indices.items():
             entry = schedule[key]
             delay_ms = max(0, int(entry["start"] * 1000))
-            gain_db = VOICE_MIX_GAIN_DB_OVERRIDE.get(key, VOICE_MIX_GAIN_DB)
+            # 🛡️ [파일명 우선 -> 역할 단위 -> 기본값] 정적 풀 하나가 여러 버전(v3/v4)이
+            # 섞여 있을 때(main_explode_d.wav만 v4인 경우 등) 파일 하나만 게인을 다르게 줄
+            # 수 있도록 조회 우선순위를 3단계로 둔다.
+            file_key = os.path.basename(entry["wav"])
+            gain_db = VOICE_MIX_GAIN_DB_FILE_OVERRIDE.get(
+                file_key, VOICE_MIX_GAIN_DB_OVERRIDE.get(key, VOICE_MIX_GAIN_DB))
             audio_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={gain_db}dB[v_{key}];")
             mix_labels.append(f"[v_{key}]")
 
