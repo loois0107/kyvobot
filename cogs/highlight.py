@@ -573,7 +573,19 @@ PRE_BUILDUP_MAX_COUNT = 3
 # 전체 길이가 3글자 닉네임 대비 +50%까지 늘어지는 걸 확인함. Riot 닉네임 자체를 제한할 수는
 # 없어서(강제 불가) /highlight 명령어 설명에 안내 문구만 추가했고(이미 반영됨), 이 트레이드
 # 오프 자체는 알려진 한계로 남겨둔다.
-STAGE_OVERLAP_RATIO = 0.65
+# 🛡️ [0단계 환호 비중 확대 - 0.65 -> 0.85] "길이 가중 랜덤 선택"(기존 풀에서 긴 파일이
+# 조금 더 자주 뽑히게 하는 방법)을 먼저 시도했으나 실측 결과 stage0_dur 평균이 겨우
+# +1.1%(약 20ms) 늘어나는 수준이라 체감 불가능한 크기였다 - 폐기하지 않고 그대로 유지는
+# 하되(부작용 없음, 아래 설명), 효과가 큰 이 방법으로 갈아탄다. plan_kill_sequence가
+# t1(0->1)/t2(1->2)/t3(2->3) 세 전환 모두 이 하나의 ratio를 공유하므로, 0.65->0.85로
+# 올리면 0단계가 더 오래 화면을 차지하는 것뿐 아니라 1->2, 2->3 전환도 같이 더 느슨해진다
+# (전부 같은 비율로 뒤로 밀림 - 별도 상수로 0단계 전환만 분리하는 대신, 전체적으로 "덜
+# 급하게" 넘어가는 쪽이 자연스러워 보여 하나의 상수를 그대로 올리는 방향을 택함).
+# 이로 인해 킬 시점~3단계(Main 사실 전달) 종료까지의 전체 구간이 길어지고, total_duration
+# 산식(max(원본 클립 길이, 마지막 종료 시각+RENDER_TAIL_BUFFER_SEC))이 그만큼 커져 영상이
+# 뒷단계를 압축하는 게 아니라 꼬리쪽(tpad로 마지막 프레임 고정, apad로 게임 오디오 루프)이
+# 늘어나는 방식으로 흡수한다 - 실측 결과는 커밋 메시지 참고.
+STAGE_OVERLAP_RATIO = 0.85
 RENDER_TAIL_BUFFER_SEC = 0.8      # 마지막으로 끝나는 목소리 종료 후 여유
 
 ELEVENLABS_VOICE_IDS = {
@@ -3658,17 +3670,39 @@ class KyvoHighlight(KyvoBaseCog):
             # plan_lead_in_forward가 kill_t와의 여유를 보고 나중에 정한다.
             pre_buildup_candidates = random.sample(PRE_BUILDUP_POOL, min(len(PRE_BUILDUP_POOL), PRE_BUILDUP_MAX_COUNT))
             eoeo_file = random.choice(EOEO_POOL)
-            main_explode_file = random.choice(MAIN_EXPLODE_POOL)
-            hype_explode_file = random.choice(HYPE_EXPLODE_POOL)
-            sub_explode_file = random.choice(SUB_EXPLODE_POOL)
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
                 pre_buildup_durations = [await self._to_executor(self._probe_audio_duration, f) for f in pre_buildup_candidates]
                 eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
-                main_explode_duration = await self._to_executor(self._probe_audio_duration, main_explode_file)
-                hype_explode_duration = await self._to_executor(self._probe_audio_duration, hype_explode_file)
-                sub_explode_duration = await self._to_executor(self._probe_audio_duration, sub_explode_file)
+                # 🛡️ [0단계 환호 비중 확대 - 길이 가중 랜덤] "환호 비중을 늘려달라"는 요청에
+                # 텍스트에 모음을 더 반복해서 새 긴 버전을 만들어보는 방법을 먼저 시도했으나,
+                # 실측 결과 무음 게이트 통과율이 급격히 떨어지고(main_explode 신규 후보
+                # 0/10, sub_shout 신규 후보 0/10 통과, hype만 7/10) 통과해도 기존 풀의
+                # 최장 파일보다 길다는 보장조차 없었다(모음을 더 늘려도 실제 발화 길이가
+                # 비례해서 늘어나지 않음 - 이 목소리/모델에서 텍스트 모음 반복으로 길이를
+                # 통제하는 건 신뢰할 수 없다는 걸 재확인, 이름 늘려 부르기 실패 사례와 같은
+                # 패턴). 새 녹음 없이도 안전하게 "평균 환호 길이"를 늘릴 수 있는 대안으로,
+                # 이미 무음 게이트를 통과한 기존 풀 파일들을 길이에 비례한 가중치로 뽑는다
+                # (긴 파일이 더 자주 걸리게) - 새 TTS 호출도, 무음 게이트 리스크도 없다.
+                main_explode_durations_all = [
+                    await self._to_executor(self._probe_audio_duration, f) for f in MAIN_EXPLODE_POOL
+                ]
+                hype_explode_durations_all = [
+                    await self._to_executor(self._probe_audio_duration, f) for f in HYPE_EXPLODE_POOL
+                ]
+                sub_explode_durations_all = [
+                    await self._to_executor(self._probe_audio_duration, f) for f in SUB_EXPLODE_POOL
+                ]
+                main_explode_idx = random.choices(range(len(MAIN_EXPLODE_POOL)), weights=main_explode_durations_all, k=1)[0]
+                hype_explode_idx = random.choices(range(len(HYPE_EXPLODE_POOL)), weights=hype_explode_durations_all, k=1)[0]
+                sub_explode_idx = random.choices(range(len(SUB_EXPLODE_POOL)), weights=sub_explode_durations_all, k=1)[0]
+                main_explode_file = MAIN_EXPLODE_POOL[main_explode_idx]
+                hype_explode_file = HYPE_EXPLODE_POOL[hype_explode_idx]
+                sub_explode_file = SUB_EXPLODE_POOL[sub_explode_idx]
+                main_explode_duration = main_explode_durations_all[main_explode_idx]
+                hype_explode_duration = hype_explode_durations_all[hype_explode_idx]
+                sub_explode_duration = sub_explode_durations_all[sub_explode_idx]
                 hype_nickname_durations = [
                     await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
                 ]
