@@ -352,15 +352,27 @@ PRE_BUILDUP_TEXT = {
 # 🛡️ [Sub 보이스 - 비음 회피] "음?"/"흠?"는 Sub 보이스에서 20회 전부 무음 게이트 실패
 # (비음 끝소리 감쇠 구간이 -35dB 밑으로 떨어져 게이트에 걸리는 것으로 추정) - 받침 없는
 # 텍스트로 교체하니 각각 3회 만에 통과. Hype는 셋 다 문제 없었다(2~6회).
+# 🛡️ [v4 일괄 재생성 - 트레일링 무음 트림] 아래 11개 정적 풀(EOEO/MAIN_EXPLODE/
+# HYPE_EXPLODE/SUB_EXPLODE/SUB_QUESTION/ATLEE_SUB_QUESTION/STERLING/CARTER/ATLEE/
+# EN_LEADIN/LEADIN_OVERLAY, 총 48개 파일) 전부를 eleven_v4 + voice_settings=
+# {"stability": 0.55}(style 제외)로 일괄 재생성했다. 실측 결과 완전한 문장(EOEO/
+# EN_LEADIN)은 그대로 잘 통과했지만, 짧은 감탄사·모음반복 텍스트 계열(나머지 9개 풀,
+# 35/48)은 v3와 달리 파일 끝에 0.15~0.4초짜리 트레일링 감쇠 구간이 거의 항상 남아
+# 무음 게이트에 걸렸다 - 재시도로는 해결이 안 되는 v4 자체의 구조적 특성으로 판단,
+# 무음 시작 직전(+0.05s 여유)까지 잘라내는 후처리로 32개를 해결했다(평균 14.0%,
+# 최대 36.4% 길이 감소). 이 트림만으로도 40% 이상 잘려나가는 극단적으로 짧은 3개
+# (hype_leadin_c/sub_leadin_a/sub_leadin_b, 전부 1음절)만 "1어절 이내" 원칙을
+# 유지한 채 텍스트를 살짝 늘려(음절 반복) 재생성 - 아래 값은 그 결과다. 기존
+# v3 버전 48개 전부는 assets/highlight_voice/_backup_v3_pool_20260930/ 에 백업.
 LEADIN_OVERLAY_POOL = (sorted(glob.glob(os.path.join(VOICE_DIR, "hype_leadin_*.wav")))
                        + sorted(glob.glob(os.path.join(VOICE_DIR, "sub_leadin_*.wav"))))
 LEADIN_OVERLAY_TEXT = {
-    "hype_leadin_a.wav": "오!",  # 0.48s, 2회 시도로 무음 0곳 통과
-    "hype_leadin_b.wav": "와",  # 0.56s, 6회 시도로 무음 0곳 통과
-    "hype_leadin_c.wav": "어?",  # 0.48s, 3회 시도로 무음 0곳 통과
-    "sub_leadin_a.wav": "오?",  # 0.48s, 3회 시도로 무음 0곳 통과
-    "sub_leadin_b.wav": "어",  # 0.64s, 3회 시도로 무음 0곳 통과
-    "sub_leadin_c.wav": "허어",  # 0.64s, 16회 시도로 무음 0곳 통과
+    "hype_leadin_a.wav": "오!",  # 0.56s(트림), v4
+    "hype_leadin_b.wav": "와",  # 0.65s(트림), v4
+    "hype_leadin_c.wav": "어어?",  # 0.74s(재생성+트림) - "어?"가 트림 42.2%로 과도해 텍스트 교체
+    "sub_leadin_a.wav": "오오?",  # 0.74s(재생성+트림) - "오?"가 트림 42.2%로 과도해 텍스트 교체
+    "sub_leadin_b.wav": "어어",  # 0.65s(재생성+트림) - "어"가 트림 42.5%로 과도해 텍스트 교체
+    "sub_leadin_c.wav": "허어",  # 0.74s(트림), v4
 }
 LEADIN_OVERLAY_CHANCE = 0.4
 # 🛡️ ["어어??" 신규] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣는 "이상 감지" 반응 - 옛날
@@ -375,9 +387,9 @@ LEADIN_OVERLAY_CHANCE = 0.4
 # buildup1_*.wav로 넓혀서 3개(a/b/c) 전부 잡는다.
 EOEO_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_*.wav")))
 EOEO_TEXT = {
-    "buildup1_a.wav": "어어?!",
-    "buildup1_b.wav": "어" * 3 + "?!",  # 0.88s, 1회 시도로 무음/깊은 딥 없음 통과
-    "buildup1_c.wav": "어" * 4 + "?!",  # 0.96s, 1회 시도로 무음/깊은 딥 없음 통과
+    "buildup1_a.wav": "어어?!",  # 0.72s, v4(트림 없이 직접 통과)
+    "buildup1_b.wav": "어" * 3 + "?!",  # 0.88s, v4(트림 없이 직접 통과)
+    "buildup1_c.wav": "어" * 4 + "?!",  # 0.96s, v4(트림 없이 직접 통과)
 }
 # 🛡️ [앵커링 기준 = 클립 시작(t=0), kill_t 역산 아님] 처음엔 "0단계(킬) 직전에 끝나도록"
 # kill_t에서 거꾸로 역산했는데, 실제로 들어보니 "영상 시작하자마자" 나와야 한다는 요구와
@@ -466,30 +478,35 @@ SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
 # 실제 0단계 캐스케이드(main+hype+sub 동시재생) 테스트까지 마친 뒤 풀에 정식 추가했다 -
 # a/b/c보다 stability가 더 낮아(과장 더 큼) 세트 안에서 유일하게 다른 파라미터지만,
 # 무음 게이트/길이/attack_rise 전부 기준 통과해 별도 텍스트 없이 풀만 확장.
+# 🛡️ [아래 세 TEXT 딕셔너리, 텍스트는 그대로/오디오만 v4로 교체] 텍스트(모음 개수)를 바꿀
+# 이유가 없어 문구는 유지했다 - 인라인 주석의 "stability=X/style=Y"와 "정밀 기준 통과"는
+# 전부 v3 시절 기록이라 지금 파일에는 더 이상 안 맞는다(지금은 위 LEADIN_OVERLAY_TEXT 앞
+# 주석에 적은 v4+트림 절차로 재생성됨) - 길이만 트림 후 최종값으로 갱신.
 MAIN_EXPLODE_TEXT = {
-    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.28s, stability=0.35/style=0.6, 무음 0곳 통과
-    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.52s, stability=0.35/style=0.6, 무음 0곳 통과
-    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.36s, stability=0.35/style=0.6, 무음 0곳 통과
-    "main_explode_d.wav": "우와" + "아" * 10 + "악!!",  # 1.60s, stability=0.2/style=0.6, 무음 0곳 통과
+    "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.76s(트림), v4
+    "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.58s(트림), v4
+    "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 2.04s(트림), v4
+    "main_explode_d.wav": "우와" + "아" * 10 + "악!!",  # 1.58s(트림), v4
 }
 HYPE_EXPLODE_TEXT = {
-    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, 무음/깊은 딥 없음(정밀 기준 통과)
-    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.76s, 무음/깊은 딥 없음(정밀 기준 통과)
-    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.36s, 무음/깊은 딥 없음(정밀 기준 통과)
-    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.68s, 1회 시도로 무음/깊은 딥 없음 통과
-    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 2.00s, 1회 시도로 무음/깊은 딥 없음 통과
-    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.76s, 1회 시도로 무음/깊은 딥 없음 통과
+    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 1.86s(트림), v4
+    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.30s(트림), v4
+    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.39s(트림), v4
+    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.67s(트림), v4
+    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 1.58s(트림), v4
+    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.58s(트림), v4
 }
 SUB_EXPLODE_TEXT = {
-    "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.60s, 무음/깊은 딥 없음(정밀 기준 통과)
+    "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.30s(트림), v4
     # 🛡️ [재녹음 - "우와아아악" 계열로 통일] "히"+"이" 계열("허"+"어" 실패 이후 택했던 회피
     # 전략)이 main/hype와 계열 자체가 달라 이질감이 있었다는 피드백으로, "우와"/"우아" 도입부
     # 뒷모음 개수만 다르게 변주하는 전략으로 재시도 - 이번엔 3개 다 1회 시도 만에 무음 0곳
-    # 통과(noise=-30dB:d=0.02 기준, edge_margin=0.1s).
-    "sub_shout_b.wav": "우와" + "아" * 6 + "악!!",  # 1.68s, 1회 시도로 무음 0곳 통과
-    "sub_shout_c.wav": "우아" + "아" * 8 + "악!!",  # 1.76s, 1회 시도로 무음 0곳 통과
-    "sub_shout_d.wav": "우와" + "아" * 6 + "!!",  # 1.76s, 1회 시도로 무음/깊은 딥 없음 통과
-    "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.36s, 1회 시도로 무음 0곳 통과
+    # 통과(noise=-30dB:d=0.02 기준, edge_margin=0.1s). (v3 시절 기록 - 텍스트 선택 사유는
+    # 여전히 유효, 오디오는 v4로 교체됨)
+    "sub_shout_b.wav": "우와" + "아" * 6 + "악!!",  # 1.39s(트림), v4
+    "sub_shout_c.wav": "우아" + "아" * 8 + "악!!",  # 1.49s(트림), v4
+    "sub_shout_d.wav": "우와" + "아" * 6 + "!!",  # 1.21s(트림), v4
+    "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.21s(트림), v4
 }
 
 # ── 1단계(Hype 닉네임 샤우팅, 실시간 TTS) ──
