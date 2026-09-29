@@ -384,24 +384,21 @@ PRE_BUILDUP_START_OFFSET_SEC = 0.4  # 상황 멘트: 클립 시작 후 이만큼
 PRE_BUILDUP_GAP_SEC = 0.6  # 상황 멘트 종료 ~ "어어??" 시작 사이 간격
 EOEO_GAP_SEC = 0.2         # "어어??" 종료 ~ 0단계(킬 시점) 시작 사이 최소 안전 여백(충돌 검사용)
 
-# 🛡️ ["진입 멘트" 신규 - 실시간 전투 감지 대신 kill_t 역산 고정 배치] "전투가 실제로 언제
-# 시작됐는지" 실시간 감지(신호처리/비전)는 별도로 조사했으나 신뢰도가 낮다는 결론이 나서
-# (ffmpeg scdet 실측 결과 킬과 무관한 스파이크가 흔해 오탐 위험 큼), 대신 kill_t 기준으로
-# 안전하게 역산되는 고정 위치에만 배치하는 훨씬 보수적인 방식을 택한다. "자, 들어갔습니다"
-# 류의 "진입 선언형" 문장은 EOEO("어어??")보다 먼저 오는 게 자연스럽다고 판단했다 - EOEO는
-# "킬이 터지는 순간의 놀람 반응"이라는 역할이 이미 확립돼 있고(kill_t 바로 앞, 0.2s 여백만
-# 두고 붙어 있음), 여기에 "들어갔다"는 선언을 추가로 끼워넣으면 [진입 선언] -> [놀람 반응]
-# -> [킬]로 자연스럽게 escalate된다. EOEO 자체의 타이밍(kill_t 기준 역산)은 전혀 안 건드리고,
-# 그 앞에 새 고정 앵커를 하나 더 추가하는 방식 - 이미 튜닝된 EOEO~킬 간격을 건드릴 위험이
-# 없다.
-ENTRY_LINE_GAP_SEC = 0.4  # 진입 멘트 종료 ~ "어어??" 시작 사이 간격(PRE_BUILDUP_GAP_SEC보다
-                          # 살짝 좁게 - 진입 선언과 놀람 반응이 붙어서 이어지는 느낌을 위해)
+# 🛡️ ["진입 멘트" 도입 후 제거 - 타이밍 맞출 방법 없음] kill_t 역산 고정 위치("자, 들어갔
+# 습니다"를 EOEO 앞에 배치)로 한때 시도했으나, 실측 결과(kill_t=17.86s 클립에서 진입 멘트가
+# kill_t 기준 85.9~91.7% 지점에 위치) 체감("싸움의 70%")과 실제 위치가 안 맞았고, 근본
+# 원인이 "실제 전투 시작 시점을 모른 채 kill_t에서 거꾸로 추측 배치"라는 구조적 한계라
+# (오늘 별도 조사 - 신호처리/비전 기반 실시간 감지 둘 다 신뢰도 미확보) 고칠 방법이 없다고
+# 판단해 기능 자체를 제거했다. 아래 3개 상수(ENTRY_LINE_GAP_SEC/POOL/TEXT)와
+# entry_line_01~04.wav 파일은 코드에서 더 이상 참조하지 않지만, 나중에 다른 용도로 재사용할
+# 수도 있어 삭제하지 않고 그대로 둔다(현재는 죽은 코드/미사용 에셋).
+ENTRY_LINE_GAP_SEC = 0.4
 ENTRY_LINE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "entry_line_*.wav")))
 ENTRY_LINE_TEXT = {
-    "entry_line_01.wav": "자, 들어갔습니다",  # 1.36s, 1회 시도로 무음 0곳 통과
-    "entry_line_02.wav": "결국 들어가네요",  # 1.04s, 2회 시도로 무음 0곳 통과
-    "entry_line_03.wav": "붙었습니다 지금",  # 1.20s, 2회 시도로 무음 0곳 통과
-    "entry_line_04.wav": "드디어 붙는데요",  # 1.12s, 2회 시도로 무음 0곳 통과
+    "entry_line_01.wav": "자, 들어갔습니다",
+    "entry_line_02.wav": "결국 들어가네요",
+    "entry_line_03.wav": "붙었습니다 지금",
+    "entry_line_04.wav": "드디어 붙는데요",
 }
 
 # ── 0단계(킬 순간, 3인 동시 폭발 - 닉네임 없는 순수 감탄사) ──
@@ -716,12 +713,9 @@ def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_
 
 
 def plan_lead_in_forward(kill_t: float, pre_buildup_durs: list[float], eoeo_dur: float,
-                          entry_line_dur: float | None = None,
                           start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
                           gap: float = PRE_BUILDUP_GAP_SEC,
-                          end_gap: float = EOEO_GAP_SEC,
-                          entry_gap: float = ENTRY_LINE_GAP_SEC,
-                          ) -> tuple[list[float], float | None, float | None]:
+                          end_gap: float = EOEO_GAP_SEC) -> tuple[list[float], float | None]:
     """"어어??"(EOEO)를 kill_t 직전(kill_t - end_gap - eoeo_dur)에 먼저 고정 배치하고,
     그 앞의 사용 가능한 시간(start_offset ~ EOEO 시작 전)에 상황 멘트(N개, 유동)를 균등
     분산 배치하는 순수 함수(테스트 가능).
@@ -733,31 +727,20 @@ def plan_lead_in_forward(kill_t: float, pre_buildup_durs: list[float], eoeo_dur:
     놓는다(_spread_fillers_evenly) - 클립이 길수록 상황 멘트 사이 간격도 같이 넓어져서
     자연스럽게 퍼진다.
     - EOEO 자체가 들어갈 자리조차 없으면(비정상적으로 짧은 클립/이른 킬) 전부
-      스킵([], None, None) - 기존과 동일한 안전장치.
+      스킵([], None) - 기존과 동일한 안전장치.
     - EOEO는 들어가지만 상황 멘트 자리가 안 나오면(N=0) 상황 멘트 없이 EOEO만 재생된다.
-    🛡️ [진입 멘트 추가 - EOEO 앞에 새 고정 앵커] entry_line_dur이 주어지면 "자, 들어갔습니다"
-    류의 진입 선언을 EOEO 바로 앞(entry_gap만큼 띄워서)에 배치한다 - EOEO 자체의 타이밍
-    공식(kill_t 역산)은 전혀 안 바꾸고, 그 앞에 새 앵커 하나를 추가하는 것뿐이라 이미 튜닝된
-    EOEO~킬 간격에 영향이 없다. 자리가 없으면(진입 멘트+EOEO 둘 다 넣을 여유가 없는 짧은
-    클립) 진입 멘트만 조용히 스킵하고 EOEO는 그대로 유지한다(entry_line_dur=None이었을 때와
-    동일한 동작으로 자연 축소) - 상황 멘트가 들어갈 자리는 그만큼 줄어든 available 기준으로
-    다시 계산된다."""
+    🛡️ [진입 멘트("entry_line") 실험 - 도입 후 제거됨] kill_t 역산 고정 위치로 EOEO 앞에
+    "자, 들어갔습니다" 류의 진입 선언을 넣어봤으나, 실제 전투 시작 시점을 모른 채 추측
+    배치하는 것뿐이라 체감 타이밍과 안 맞는 근본적 한계가 실측으로 확인돼 제거했다 - 이
+    함수는 그 도입 이전(EOEO만 고정 앵커) 상태로 되돌아온 것이다."""
     eoeo_start = kill_t - end_gap - eoeo_dur
     if eoeo_start < start_offset:
-        return [], None, None
+        return [], None
 
-    entry_start = None
-    buildup_end = eoeo_start
-    if entry_line_dur is not None:
-        candidate_entry_start = eoeo_start - entry_gap - entry_line_dur
-        if candidate_entry_start >= start_offset:
-            entry_start = candidate_entry_start
-            buildup_end = entry_start - gap
-
-    available = buildup_end - start_offset
+    available = eoeo_start - start_offset
     offsets = _spread_fillers_evenly(available, pre_buildup_durs, gap, PRE_BUILDUP_MAX_COUNT)
     pre_starts = [start_offset + off for off in offsets]
-    return pre_starts, entry_start, eoeo_start
+    return pre_starts, eoeo_start
 
 
 def plan_leadin_fillers_en(kill_t: float, durations: list[float],
@@ -1883,7 +1866,7 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [3보이스 동시 콜] "hype_nickname" 단일 키가 3보이스 동시 콜에 맞춰
         # hype_nickname_1/2/3(KO: main+hype+sub, EN: sterling+carter+atlee)로 늘어났다.
         for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
-                    "entry_line", "eoeo", "leadin_overlay", "main_explode", "hype_explode", "sub_explode",
+                    "eoeo", "leadin_overlay", "main_explode", "hype_explode", "sub_explode",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
@@ -3799,11 +3782,10 @@ class KyvoHighlight(KyvoBaseCog):
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
             schedule["total_duration"] = total_duration
         else:
-            if not (PRE_BUILDUP_POOL and EOEO_POOL and ENTRY_LINE_POOL and MAIN_EXPLODE_POOL
+            if not (PRE_BUILDUP_POOL and EOEO_POOL and MAIN_EXPLODE_POOL
                     and HYPE_EXPLODE_POOL and SUB_EXPLODE_POOL and SUB_QUESTION_POOL):
                 print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
                       f"pre_buildup={len(PRE_BUILDUP_POOL)} eoeo={len(EOEO_POOL)} "
-                      f"entry_line={len(ENTRY_LINE_POOL)} "
                       f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
                       f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
@@ -3814,13 +3796,11 @@ class KyvoHighlight(KyvoBaseCog):
             # plan_lead_in_forward가 kill_t와의 여유를 보고 나중에 정한다.
             pre_buildup_candidates = random.sample(PRE_BUILDUP_POOL, min(len(PRE_BUILDUP_POOL), PRE_BUILDUP_MAX_COUNT))
             eoeo_file = random.choice(EOEO_POOL)
-            entry_line_file = random.choice(ENTRY_LINE_POOL)
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
                 pre_buildup_durations = [await self._to_executor(self._probe_audio_duration, f) for f in pre_buildup_candidates]
                 eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
-                entry_line_duration = await self._to_executor(self._probe_audio_duration, entry_line_file)
                 # 🛡️ [0단계 환호 비중 확대 - 길이 가중 랜덤] "환호 비중을 늘려달라"는 요청에
                 # 텍스트에 모음을 더 반복해서 새 긴 버전을 만들어보는 방법을 먼저 시도했으나,
                 # 실측 결과 무음 게이트 통과율이 급격히 떨어지고(main_explode 신규 후보
@@ -3887,11 +3867,10 @@ class KyvoHighlight(KyvoBaseCog):
             main_fact_start = kill_t + seq["t3"]
 
             # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
-            # 자리가 허락하는 만큼) -> "자, 들어갔습니다"(진입 멘트, 자리 없으면 스킵) ->
-            # "어어??"(마지막 1개) 순서로 배치하고, kill_t와 안 겹치는지만 검사한다
-            # (plan_lead_in_forward가 순수 함수로 계산).
-            pre_buildup_starts, entry_line_start, eoeo_start = plan_lead_in_forward(
-                kill_t, pre_buildup_durations, eoeo_duration, entry_line_duration)
+            # 자리가 허락하는 만큼) -> "어어??"(마지막 1개) 순서로 배치하고, kill_t와 안
+            # 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
+            pre_buildup_starts, eoeo_start = plan_lead_in_forward(
+                kill_t, pre_buildup_durations, eoeo_duration)
 
             # 🛡️ [리드인 2보이스 겹침] LEADIN_OVERLAY_CHANCE 확률로만 시도한다 - 매번 나오면
             # 오히려 예측 가능한 패턴이 되어버리니 "가끔" 정도로만. 자리가 없으면(리드인 자체가
@@ -3916,8 +3895,6 @@ class KyvoHighlight(KyvoBaseCog):
             ]
             if leadin_overlay_start is not None:
                 end_times.append(leadin_overlay_start + leadin_overlay_duration)
-            if entry_line_start is not None:
-                end_times.append(entry_line_start + entry_line_duration)
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
 
             schedule = {
@@ -3940,9 +3917,6 @@ class KyvoHighlight(KyvoBaseCog):
             if eoeo_start is not None:
                 schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
                                      "start": eoeo_start, "duration": eoeo_duration}
-            if entry_line_start is not None:
-                schedule["entry_line"] = {"wav": entry_line_file, "text": ENTRY_LINE_TEXT[os.path.basename(entry_line_file)],
-                                           "start": entry_line_start, "duration": entry_line_duration}
             for i, start in enumerate(pre_buildup_starts):
                 f = pre_buildup_candidates[i]
                 schedule[f"pre_buildup_{i + 1}"] = {"wav": f, "text": PRE_BUILDUP_TEXT[os.path.basename(f)],
