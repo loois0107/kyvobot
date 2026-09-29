@@ -304,21 +304,35 @@ PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")
 # "짧을수록 안전하다"는 이전 결론은 문장 구조에 따라 뒤집힐 수 있다는 뜻이라, 앞으로도
 # 매번 실측으로 재확인이 필요하다. 원본 6개(순수 추임새)는 _backup_pre_buildup_situational_
 # 20260929/ 에 백업.
+# 🛡️ [재녹음 - 톤을 명시적으로 차분하게] 처음 생성할 때는 voice_settings를 아예 지정하지
+# 않아서(ElevenLabs API 기본값) 톤 제어가 전혀 없었다는 게 재확인됨(오늘 낮 main_explode의
+# 흥분 톤 설정이 실수로 재사용된 건 아니었음 - 그냥 아무 설정도 없었던 것). 상황 서술은
+# 흥분보다는 차분하게 긴장을 짚어주는 쪽이 맞다고 판단해 voice_settings={"stability": 0.75,
+# "style": 0.15}(안정적/과장 적음)로 명시하고 14개 전부 재생성했다 - 역시 14/14 무음 게이트
+# 통과(단, 평균 시도 횟수가 조금 늘어남 - 이전엔 대부분 1~2회였는데 이번엔 최대 4회까지
+# 감, 안정성 값을 올리면 발화 편차가 줄어드는 대신 무음 경계 판정이 살짝 더 엄격해지는
+# 것으로 추정). 실측 객관 지표(volumedetect로 잰 peak-mean 다이내믹 레인지)로는 이전
+# 버전(평균 14.12dB)과 새 버전(평균 13.71dB)의 차이가 0.4dB뿐이라 뚜렷한 "차분해짐"을
+# 이 지표로는 못 뒷받침했다 - 파일별로도 방향이 들쑥날쑥해서(일부는 오히려 range가 커짐)
+# 결론적 증거는 아니다. stability/style이 실제로 바꾸는 건 피치 억양 변주·화법 속도 같은
+# 요소라 단순 라우드니스 통계로는 안 잡힐 가능성이 높다 - "차분해졌는지"는 결국 직접 들어봐야
+# 확인 가능하다. 이전(voice_settings 미지정) 버전은 _backup_pre_buildup_default_settings_
+# 20260929/ 에 백업.
 PRE_BUILDUP_TEXT = {
     "pre_buildup_01.wav": "선수들이 서로 견제하고 있어요",  # 1.84s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_02.wav": "지금 거리 재고 있는 구도네요",  # 1.52s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_03.wav": "스킬 하나 잘못 쓰면 위험한 상황이에요",  # 2.32s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_02.wav": "지금 거리 재고 있는 구도네요",  # 1.76s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_03.wav": "스킬 하나 잘못 쓰면 위험한 상황이에요",  # 2.08s, 2회 시도로 무음 0곳 통과
     "pre_buildup_04.wav": "누가 먼저 들어가나 눈치 보고 있어요",  # 2.16s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_05.wav": "위험한 거리인데요, 지금",  # 1.28s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_05.wav": "위험한 거리인데요, 지금",  # 1.36s, 4회 시도로 무음 0곳 통과
     "pre_buildup_06.wav": "한 발짝만 다가가면 싸움 나겠는데요",  # 2.08s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_07.wav": "쉽게 안 들어가네요, 지금",  # 1.36s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_08.wav": "서로 눈치만 보고 있어요",  # 1.36s, 2회 시도로 무음 0곳 통과
-    "pre_buildup_09.wav": "숨 고르는 느낌인데요",  # 1.28s, 2회 시도로 무음 0곳 통과
-    "pre_buildup_10.wav": "긴장감이 흐르고 있어요",  # 1.36s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_11.wav": "먼저 움직이면 손해 보는 구도예요",  # 2.00s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_12.wav": "지금 딱 불붙기 좋은 거린데요",  # 1.60s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_13.wav": "물러설 수 없는 거리예요, 지금",  # 1.84s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_14.wav": "잘못 움직이면 그대로 끝나요",  # 1.68s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_07.wav": "쉽게 안 들어가네요, 지금",  # 1.52s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_08.wav": "서로 눈치만 보고 있어요",  # 1.36s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_09.wav": "숨 고르는 느낌인데요",  # 1.36s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_10.wav": "긴장감이 흐르고 있어요",  # 1.28s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_11.wav": "먼저 움직이면 손해 보는 구도예요",  # 2.16s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_12.wav": "지금 딱 불붙기 좋은 거린데요",  # 1.44s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_13.wav": "물러설 수 없는 거리예요, 지금",  # 1.76s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_14.wav": "잘못 움직이면 그대로 끝나요",  # 1.84s, 2회 시도로 무음 0곳 통과
 }
 # 🛡️ [리드인 2보이스 겹침 - 신규] 지금까지 리드인 구간(상황 멘트+"어어??")은 100% Main
 # 혼자였다 - 가끔(LEADIN_OVERLAY_CHANCE 확률로) Hype 또는 Sub가 짧게 끼어들어 반응하면
@@ -479,6 +493,49 @@ TEAM_ID_TO_NAME_KO = {100: "블루팀", 200: "레드팀"}
 TEAM_ID_TO_NAME_EN = {100: "Team Blue", 200: "Team Red"}
 NICKNAME_SWELL_START_RATIO = 0.55   # 이 지점부터(대략 물결표 여운 구간) 볼륨이 커지기 시작
 NICKNAME_SWELL_RISE = 0.6           # 클립 끝에서 최대 몇 배(1+RISE)까지 커지는지
+# 🛡️ [진짜 "늘려 부르기" - 타임스트레치 추가] 볼륨 스웰은 끝부분이 커지는 것뿐이라("강조") 실제
+# 발음이 길게 늘어지는("페이커~~"처럼) 효과는 아니었다는 게 재확인됐다. 텍스트로 음절을 늘려
+# 쓰는 방식은 이미 두 번(닉네임/팀명) 신뢰성 없음이 실측 확인됐으므로(TTS가 늘어난 텍스트를
+# 늘어난 길이로 발음해준다는 보장이 없음, 오히려 오발음 위험), 대신 오디오 레벨에서 물결표
+# 여운 구간만 잘라내 ffmpeg atempo(재생속도만 변경, 피치 보존)로 실제로 늦춰서 다시 이어
+# 붙인다 - 이미 정확히 발음된 음성을 그대로 쓰므로 발음 붕괴 위험이 없다. 0.5/0.6/0.7 세
+# 배율을 실측 비교한 결과(무음 게이트/피크 레벨 전부 이상 없음, 원본에 이미 있던 자연스러운
+# 꼬리 감쇠 구간 외 새 무음/클리핑 없음) 배율이 낮을수록(더 느리게) 더 길게 늘어나는 게
+# 예측 가능하게 확인됨(0.5→+40~44%, 0.6→+27~28%, 0.7→+17~19%, 개인명/팀명·KO/EN 4개
+# 샘플 공통) - 다만 "로봇틱하게 안 들리는지"는 라우드니스/무음 통계로는 판단이 안 되고
+# 직접 들어봐야 하는 영역이다. 가장 강한 0.5는 ffmpeg atempo 허용 범위(0.5~100)의 하한
+# 경계값이라 품질 저하 위험이 상대적으로 더 크다고 보고, 0.6/0.7 중 "확실히 늘어지는 느낌"에
+# 더 가까운 중간값 0.6을 기본값으로 채택했다 - 세 배율 전부 실제 파일로 만들어 비교해봤으니
+# 직접 들어보고 이 상수만 바꿔 조정 가능하다.
+NICKNAME_SWELL_ATEMPO_RATIO = 0.6
+# 🛡️ [개인 닉네임 타임스트레치 - 글자 수 분기 범위] 한글 기준 len(name)이 음절 수와 정확히
+# 일치한다는 게 실측 확인됨(len("페이커")==3 등) - 이 범위(3~5자)만 스트레치 적용, 2자
+# 이하/6자 이상은 원본 그대로(볼륨 스웰만). 팀명 샤우팅은 이 분기 대상이 아니고 항상
+# 스트레치 적용(고정 문자열 4개뿐이라 이미 개별 실측 검증됨).
+NICKNAME_STRETCH_MIN_LEN = 3
+NICKNAME_STRETCH_MAX_LEN = 5
+# 🛡️ [스웰 시작 비율 동적화 - 짧은 이름 실측 문제 수정] "넥스"(2음절) 실측 결과 고정
+# 0.55가 마지막 음절("스", 실측 경계 약 72% 지점)이 아니라 첫 음절("넥") 중간에 걸리는
+# 게 확인됐다 - 음절마다 실제 길이가 크게 다르고("넥"이 "스"보다 훨씬 길었음) 음절
+# 경계를 직접 감지할 신뢰할 만한 방법도 없어서(별도 조사 참고) 완벽한 해결책은 아니지만,
+# 최소한 "짧은 이름에서 첫 음절 중간에 걸리는" 명백한 오류는 음절 수 기반 근사로 피할
+# 수 있다. 한글 기준(len(name)==음절 수)에서만 정확하고, 영어 이름은 여전히 근사치일
+# 뿐이다(팀명 "Team Blue"/"Team Red"는 글자 수가 9/8이라 이 표에서는 그냥 else(0.55)
+# 로 떨어져 기존 그대로 - 변경 없음).
+NICKNAME_SWELL_START_RATIO_2SYL = 0.72   # 실측: "넥스"에서 "스" 시작 지점(약 0.749/1.04=0.72)과 일치
+NICKNAME_SWELL_START_RATIO_3SYL = 0.6
+
+
+def _nickname_swell_start_ratio(name: str) -> float:
+    """이름 길이(한글 기준 음절 수)에 맞춰 스웰/스트레치 시작 비율을 고른다(순수 함수,
+    테스트 가능). 2음절 이하는 0.72, 3음절은 0.6, 4음절 이상(팀명 EN 포함, else로 귀결)
+    은 기존 기본값(NICKNAME_SWELL_START_RATIO=0.55) 그대로."""
+    n = len(name)
+    if n <= 2:
+        return NICKNAME_SWELL_START_RATIO_2SYL
+    if n == 3:
+        return NICKNAME_SWELL_START_RATIO_3SYL
+    return NICKNAME_SWELL_START_RATIO
 
 # ── 2단계(Sub 의문형 감탄, 정적 풀) ──
 SUB_QUESTION_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_question_*.wav")))
@@ -1719,24 +1776,46 @@ class KyvoHighlight(KyvoBaseCog):
         return BACKGROUND_SFX_PATH
 
     @staticmethod
-    def _apply_nickname_swell(wav_path: str, duration: float, out_path: str) -> None:
-        """1단계 Hype 닉네임 샤우팅의 뒷부분(물결표 여운 구간으로 추정되는 지점)에만 볼륨을
-        서서히 키워 "길게 끄는 느낌"을 더한다 - 이름 음절 자체(앞쪽)는 안 건드림. 로컬
-        프로토타입 v8에서 검증된 값(시작점=길이의 55%, 최대 +60%) 그대로. 지속시간은 그대로
-        유지되고(순수 볼륨 오토메이션) 음량만 바뀐다.
+    def _apply_nickname_swell(wav_path: str, duration: float, out_path: str,
+                               atempo_ratio: float = NICKNAME_SWELL_ATEMPO_RATIO,
+                               start_ratio: float = NICKNAME_SWELL_START_RATIO) -> float:
+        """1단계 Hype 닉네임 샤우팅의 뒷부분(물결표 여운 구간으로 추정되는 지점)에 볼륨
+        스웰 + 실제 타임스트레치를 함께 적용해 "길게 끄는 느낌"을 낸다 - 이름 음절 자체
+        (앞쪽)는 완전히 그대로 유지. 로컬 프로토타입 v8에서 검증된 볼륨 값(최대 +60%)은
+        그대로 두고, 이번에 뒷부분을 ffmpeg atempo(재생속도 변경, 피치 보존)로 실제로
+        늦춰서 물리적으로 더 길게 만드는 단계를 추가했다 - 볼륨만 커지는 건 "강조"일 뿐
+        "늘어짐"이 아니라는 게 확인돼서다. 앞부분(head)은 원본 그대로 잘라 붙이고,
+        뒷부분(tail)만 atempo 적용 후 스웰까지 씌워서 이어붙인다.
+        🛡️ [start_ratio 파라미터화 - 음절 수 동적 조정] 원래 고정 0.55였는데, "넥스"(2음절)
+        실측 결과 55% 지점이 마지막 음절("스")이 아니라 첫 음절("넥") 중간에 걸리는 게
+        확인돼서 호출부(_nickname_swell_start_ratio)가 이름 길이에 맞는 비율을 계산해
+        넘길 수 있게 파라미터로 뺐다 - 기본값은 기존 0.55 그대로라 호출부에서 안 넘기면
+        회귀 없음.
+        🛡️ [반환값 변경 - 길이가 실제로 늘어남] 이전엔 길이가 안 바뀌어서 호출부가 원래
+        duration을 그대로 스케줄에 썼는데, 이제는 tail이 실제로 길어지므로(atempo_ratio가
+        1보다 작을수록 더 길어짐) 새 총 길이를 반환한다 - 호출부는 반드시 이 반환값을
+        스케줄(hype_nickname_durations)에 다시 반영해야 한다(안 그러면 뒤쪽이 total_duration
+        산정에서 빠져 믹스에서 잘릴 위험).
         🛡️ volume=eval=frame을 프레임 단위로 그대로 쓰면 프레임 경계마다 계단식 클릭 노이즈가
         남는다는 게 이 세션 초반(crowd_cheer_4.wav 빌드)에 스펙트로그램으로 실측 확인된 교훈 -
         asetnsamples로 프레임을 잘게(64샘플) 쪼개 계단을 사람 귀에 안 들릴 만큼 작게 만드는
-        동일 기법을 재사용한다."""
-        start_t = max(duration * NICKNAME_SWELL_START_RATIO, 0.01)
-        span = max(duration - start_t, 0.05)
-        vol_expr = f"if(gte(t,{start_t:.3f}),1+{NICKNAME_SWELL_RISE}*(t-{start_t:.3f})/{span:.3f},1)"
+        동일 기법을 재사용한다(atempo로 늘어난 tail에도 그대로 적용)."""
+        start_t = max(duration * start_ratio, 0.01)
+        tail_span = max(duration - start_t, 0.05)
+        new_tail_span = tail_span / atempo_ratio
+        new_duration = start_t + new_tail_span
+        filter_complex = (
+            f"[0:a]atrim=0:{start_t:.3f},asetpts=PTS-STARTPTS[head];"
+            f"[0:a]atrim={start_t:.3f}:{duration:.3f},asetpts=PTS-STARTPTS,atempo={atempo_ratio}[tailstretched];"
+            f"[tailstretched]asetnsamples=n=64:p=0,volume=eval=frame:"
+            f"volume='1+{NICKNAME_SWELL_RISE}*t/{new_tail_span:.3f}'[tailfinal];"
+            f"[head][tailfinal]concat=n=2:v=0:a=1[out]"
+        )
         subprocess.run(
-            [FFMPEG_EXE, "-y", "-i", wav_path, "-af",
-             f"asetnsamples=n=64:p=0,volume=eval=frame:volume='{vol_expr}'",
-             out_path],
+            [FFMPEG_EXE, "-y", "-i", wav_path, "-filter_complex", filter_complex, "-map", "[out]", out_path],
             capture_output=True, check=True,
         )
+        return new_duration
 
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
@@ -3567,9 +3646,29 @@ class KyvoHighlight(KyvoBaseCog):
         if has_assists and killer_team_id in TEAM_ID_TO_NAME_KO:
             team_name_map = TEAM_ID_TO_NAME_EN if lang == "en" else TEAM_ID_TO_NAME_KO
             shout_name = team_name_map[killer_team_id]
+            is_team_shout = True
         else:
             shout_name = killer_name
+            is_team_shout = False
         hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
+        # 🛡️ [개인 닉네임 타임스트레치 - 글자 수 분기] 팀명 샤우팅은 고정 문자열(레드팀/
+        # 블루팀/Team Red/Team Blue) 4개뿐이라 항상 타임스트레치를 적용해도 이미 실측
+        # 검증됨(무조건 NICKNAME_SWELL_ATEMPO_RATIO). 반면 개인 닉네임은 임의 길이라
+        # 아주 짧은 이름(1~2자)이나 긴 이름(6자+)까지 똑같이 늘리면 부자연스러울 위험이
+        # 있어, 글자 수 3~5자(한글 기준 음절 수와 일치)일 때만 스트레치를 걸고 그 밖엔
+        # atempo=1.0(무변화)으로 둬서 볼륨 스웰만 적용되게 한다 - _apply_nickname_swell은
+        # atempo_ratio=1.0이면 tail 길이가 그대로 유지되므로(수식상 자명) 별도 분기 없이
+        # 같은 함수를 그대로 재사용할 수 있다.
+        if is_team_shout:
+            nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
+        elif NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_STRETCH_MAX_LEN:
+            nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
+        else:
+            nickname_atempo_ratio = 1.0
+        # 🛡️ [스웰 시작 비율도 이름 길이에 맞춰 동적으로] 스트레치 여부와는 별개로,
+        # 볼륨 스웰 자체의 시작 지점도 이름이 짧으면 뒤로 밀어야 한다("넥스" 실측 문제) -
+        # 이건 스트레치 대상 여부(위 nickname_atempo_ratio)와 무관하게 항상 적용한다.
+        nickname_start_ratio = _nickname_swell_start_ratio(shout_name)
         # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+Hype+
         # Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는 것으로 바꿔 임팩트를
         # 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라 asyncio.gather로 4콜을
@@ -3616,11 +3715,17 @@ class KyvoHighlight(KyvoBaseCog):
                     await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
                 ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
-                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리(3개 파일 각각 적용) - 길이는 그대로, 음량만 바뀐다.
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰+타임스트레치 후처리(3개 파일 각각 적용) -
+                # tail이 실제로 늘어나므로 hype_nickname_durations를 반환된 새 길이로 갱신한다
+                # (이 리스트를 그대로 쓰는 아래 plan_kill_sequence/end_times가 늘어난 길이를
+                # 반영해야 뒤가 안 잘림).
                 hype_nickname_wavs = []
                 for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
                     swelled = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
-                    await self._to_executor(self._apply_nickname_swell, raw, dur, swelled)
+                    new_dur = await self._to_executor(
+                        self._apply_nickname_swell, raw, dur, swelled,
+                        nickname_atempo_ratio, nickname_start_ratio)
+                    hype_nickname_durations[i] = new_dur
                     hype_nickname_wavs.append(swelled)
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
@@ -3749,11 +3854,17 @@ class KyvoHighlight(KyvoBaseCog):
                 ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-                # 닉네임 샤우팅 뒷부분에 볼륨 스웰 후처리(3개 파일 각각 적용) - 길이는 그대로, 음량만 바뀐다.
+                # 닉네임 샤우팅 뒷부분에 볼륨 스웰+타임스트레치 후처리(3개 파일 각각 적용) -
+                # tail이 실제로 늘어나므로 hype_nickname_durations를 반환된 새 길이로 갱신한다
+                # (이 리스트를 그대로 쓰는 아래 plan_kill_sequence/end_times가 늘어난 길이를
+                # 반영해야 뒤가 안 잘림).
                 hype_nickname_wavs = []
                 for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
                     swelled = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
-                    await self._to_executor(self._apply_nickname_swell, raw, dur, swelled)
+                    new_dur = await self._to_executor(
+                        self._apply_nickname_swell, raw, dur, swelled,
+                        nickname_atempo_ratio, nickname_start_ratio)
+                    hype_nickname_durations[i] = new_dur
                     hype_nickname_wavs.append(swelled)
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
