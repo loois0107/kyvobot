@@ -675,7 +675,14 @@ ELEVENLABS_VOICE_IDS = {
     # atlee도 실시간 TTS 보이스로 추가됐다.
     "atlee": "yhtcul5bvNND79PLysM4",
 }
-ELEVENLABS_MODEL_ID = "eleven_v3"
+# 🛡️ [v3 -> v4 전환] GET /v1/models로 실측 확인: eleven_v4는 eleven_v3와 동일하게
+# can_use_style=False(둘 다 style 파라미터를 모델이 실제로 반영 안 함 - 기존 stability/style
+# 튜닝에서 style이 효과 없어 보였던 이유일 가능성), max_characters_request는 v3(5000)보다
+# 큰 10000. 실제 계정으로 status=200 합성 테스트도 통과했다(등급 문제 없음). 코드 안에서
+# 이 상수를 참조하는 곳은 실시간 합성 경로(_synthesize_voice_line) 하나뿐이고, 정적 풀
+# 생성용 스크래치 스크립트들도 하드코딩 없이 이 상수를 그대로 참조하므로 여기 하나만
+# 바꾸면 전체에 일괄 적용된다.
+ELEVENLABS_MODEL_ID = "eleven_v4"
 # 🛡️ [output_format 명시] 예전엔 지정을 아예 안 해서 API 기본값(mp3_44100_128)을 그대로 썼다.
 # Creator 티어로 업그레이드하면서 192kbps가 열려 명시적으로 올렸다 - pcm_44100(무손실)은
 # Pro 티어부터라 아직 못 쓴다. 받은 mp3를 바로 ffmpeg로 WAV 변환해서 믹싱하므로(아래
@@ -2931,7 +2938,11 @@ class KyvoHighlight(KyvoBaseCog):
         4회 호출된다(1단계 닉네임 샤우팅 3보이스 동시 콜 + 3단계 Main의 사실 서술).
         voice_key는 ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub"/"sterling"/"carter"/
         "atlee") 중 하나. 나머지 자리(0단계 세 목소리 + 2단계 Sub)는 닉네임이 필요 없는
-        순수 감정 표현이라 정적 풀에서 고른다."""
+        순수 감정 표현이라 정적 풀에서 고른다.
+        🛡️ [stability 최초 명시] 이 경로는 지금까지 voice_settings를 아예 안 보내서 API
+        기본값으로 돌아가고 있었다 - 이번에 처음으로 stability=0.55를 명시한다. style은
+        같이 안 보낸다(can_use_style=False 모델이라 반영 안 됨이 확인됨 - 값을 넣어도
+        무의미하고 혼동만 준다)."""
         tagged_text = f"[excited][shouts] {text}"
         voice_id = ELEVENLABS_VOICE_IDS[voice_key]
         async with aiohttp.ClientSession() as session:
@@ -2939,7 +2950,8 @@ class KyvoHighlight(KyvoBaseCog):
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
                 params={"output_format": ELEVENLABS_OUTPUT_FORMAT},
                 headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-                json={"text": tagged_text, "model_id": ELEVENLABS_MODEL_ID},
+                json={"text": tagged_text, "model_id": ELEVENLABS_MODEL_ID,
+                      "voice_settings": {"stability": 0.55}},
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
