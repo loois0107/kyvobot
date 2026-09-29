@@ -447,6 +447,11 @@ SUB_EXPLODE_TEXT = {
 # 결합해서 "길게 끄는 느낌"을 오디오 후처리로 흉내낸다(_apply_nickname_swell). 0단계가 이미
 # "우와아아아악!!" 감탄사를 셋이 같이 외치므로, 여기선 닉네임만 - 감탄사 중복 없음.
 HYPE_NICKNAME_SHOUT_TEMPLATE = "{killer}~~!!"
+# 🛡️ [협공 킬 - 팀명 샤우팅] 어시스트가 있는 킬(2대1 등 협공)은 킬러 개인 닉네임 대신
+# 팀명을 3보이스로 외친다 - team100=블루팀/team200=레드팀 매핑은 _format_match_context_block
+# (대본 컨텍스트 블록)에서 이미 쓰던 것과 동일하게 재사용.
+TEAM_ID_TO_NAME_KO = {100: "블루팀", 200: "레드팀"}
+TEAM_ID_TO_NAME_EN = {100: "Team Blue", 200: "Team Red"}
 NICKNAME_SWELL_START_RATIO = 0.55   # 이 지점부터(대략 물결표 여운 구간) 볼륨이 커지기 시작
 NICKNAME_SWELL_RISE = 0.6           # 클립 끝에서 최대 몇 배(1+RISE)까지 커지는지
 
@@ -1483,7 +1488,14 @@ SYSTEM_PROMPT = (
     "줄마다 다른 방식으로 표현해라.\n"
     "- 문장은 짧고 임팩트 있게 끊어라. 한 줄에 절 하나, 길어도 두 절.\n"
     "- 느낌표를 적극 사용하고 텐션을 끝까지 올려라. 감탄사 없는 밋밋한 사실 전달문('OO가 XX를 처치했습니다' "
-    "같은 문장)은 금지.\n\n"
+    "같은 문장)은 금지.\n"
+    "- 어시스트 규칙: 사실 목록의 킬 이벤트에 어시스트가 표시돼 있으면(예: '어시스트: OOO'), 그 어시스트를 "
+    "반드시 문장에 언급해라 - 빠뜨리면 안 된다. 다만 매번 똑같은 패턴만 쓰지 말고 표현은 다양하게 바꿔써라 "
+    "(아래는 예시일 뿐이니 그대로 베끼지 마라):\n"
+    "  a) 협공 강조형: '{killer}가 {victim} 잡았어요, {assist}가 어시스트했어요!!'\n"
+    "  b) 공동 마무리형: '{killer}랑 {assist}가 같이 {victim}를 끝장내버렸어요!!'\n"
+    "  c) 셋업-마무리형: '{assist}가 깔아준 걸 {killer}가 그대로 마무리했어요!!'\n"
+    "어시스트가 없는 킬은 위 1~5번처럼 킬러/피해자 둘만 다루는 문장으로 만들어라.\n\n"
     "사실관계 규칙 (절대 위반 금지):\n"
     "- 아래 '확정된 사실 목록'에는 킬 이벤트 외에도 게임 시각/팀별 스코어(킬/타워/드래곤/바론/전령/"
     "공허유충)/골드 격차/포지션별 KDA·CS·완성 아이템 개수/라인 골드 격차 같은 참고 정보가 같이 "
@@ -1515,7 +1527,14 @@ EN_SYSTEM_PROMPT = (
     "statements of fact (e.g. 'X killed Y.') are forbidden.\n\n"
     "Structure rules:\n"
     "- Make one sentence that clearly states who killed whom (e.g. '{killer} absolutely ends "
-    "{victim}!!').\n\n"
+    "{victim}!!').\n"
+    "- Assist rule: if a kill event's facts include an assist (e.g. 'assists: X'), you must "
+    "mention that assist in the sentence too - never drop it. Vary the phrasing each time though "
+    "(these are examples only, don't copy them verbatim):\n"
+    "  a) '{killer} finishes it, {assist} set it up!!'\n"
+    "  b) '{killer} and {assist} combine to end {victim}!!'\n"
+    "  c) '{assist} softens them up and {killer} closes it out!!'\n"
+    "Kills with no assist stay a plain killer/victim sentence like the example above.\n\n"
     "Factual rules (never violate):\n"
     "- The 'confirmed facts list' below may include, besides kill events, reference info like "
     "game time / team score (kills/towers/dragons/barons/rift heralds/voidgrubs) / gold gap / "
@@ -3285,9 +3304,14 @@ class KyvoHighlight(KyvoBaseCog):
             killer = names.get(k["killer_id"], {}).get("name", "Unknown") if k["killer_id"] else "미니언/포탑"
             victim = names.get(k["victim_id"], {}).get("name", "Unknown")
             assists = [names.get(a, {}).get("name", "Unknown") for a in k["assist_ids"]]
+            # 🛡️ [협공 닉네임 샤우팅용] killer_id가 있으면(미니언/포탑 킬이 아니면) 그 팀
+            # id(100/200)를 같이 들고 있는다 - 어시스트가 있는 킬일 때 "누구 닉네임"
+            # 대신 팀명으로 샤우팅을 바꾸기 위해 필요(아래 hype_nickname_text 참고).
+            killer_team_id = names.get(k["killer_id"], {}).get("team_id") if k["killer_id"] else None
             kills_with_names.append({
                 "index": i, "timestamp_ms": k["timestamp_ms"],
                 "killer": killer, "victim": victim, "assists": assists,
+                "killer_team_id": killer_team_id,
                 "clip_t_sec": k["clip_t_sec"],
             })
 
@@ -3469,7 +3493,19 @@ class KyvoHighlight(KyvoBaseCog):
         # ── 1단계(닉네임 샤우팅, 3보이스 동시 콜) + 3단계(Main 사실 전달)만 실시간 TTS
         # (렌더당 ElevenLabs 호출 정확히 4회, asyncio.gather로 병렬) - 나머지 네 자리는
         # 정적 풀에서 고른다.
-        hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=killer_name)
+        # 🛡️ [협공 킬 분기 - 팀명 샤우팅] 어시스트가 있으면(assists 비어있지 않음) 킬러
+        # 개인 이름 대신 킬러의 팀명("레드팀"/"블루팀", EN: "Team Red"/"Team Blue")으로
+        # 샤우팅 텍스트를 채운다 - 협공을 "누구 하나가 잡았다"처럼 들리게 하지 않기 위함.
+        # killer_team_id가 없는 경우(미니언/포탑 킬 등 killer_id=0)는 팀 매핑이 불가능하니
+        # 안전하게 기존 동작(킬러 이름 그대로)으로 폴백한다.
+        killer_team_id = kills_with_names[0].get("killer_team_id")
+        has_assists = bool(kills_with_names[0]["assists"])
+        if has_assists and killer_team_id in TEAM_ID_TO_NAME_KO:
+            team_name_map = TEAM_ID_TO_NAME_EN if lang == "en" else TEAM_ID_TO_NAME_KO
+            shout_name = team_name_map[killer_team_id]
+        else:
+            shout_name = killer_name
+        hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
         # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+Hype+
         # Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는 것으로 바꿔 임팩트를
         # 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라 asyncio.gather로 4콜을
