@@ -265,19 +265,31 @@ VOICE_MIX_GAIN_DB = 6.0
 # v3로 돌아온 파일들과 v4로 남은 파일을 동시에 만족 못 시키는 문제가 생겼다(v3 파일에
 # 보정용 게인을 그대로 주면 hype보다 오히려 더 커짐). 그래서 게인 조회를 "파일명 우선 ->
 # 역할 단위 -> 기본값" 3단계로 확장해 v4로 남은 파일 하나씩만 파일 단위로 높은 게인을
-# 주고, 역할 단위 기본값(main_explode/sub_explode 둘 다)은 원래대로 +3.0dB로 되돌렸다 -
-# v3로 돌아온 파일들은 이 역할 기본값을 그대로 받고, v4로 남은 파일만 파일 단위
-# 오버라이드로 별도 처리된다. hype_explode/sterling/carter/atlee는 이 문제와 무관해
-# +3.0dB 그대로 둔다. alimiter가 이미 하드 리미터(SFX_LIMITER_CEILING=0.65, level=false)
-# 로 걸려 있어 게인을 올려도 최종 출력은 안전하게 캡된다(리미터 천장을 0.65->0.75~0.8로
-# 완화해서 격차 자체를 줄이는 방법도 실측했으나, 격차가 v3/v4 오디오 자체의 라우드니스
-# 밀도 차이에서 오는 것이라 천장을 올려도 안 줄고(오히려 소폭 더 벌어짐) 전체 오디오만
+# 준다. alimiter가 이미 하드 리미터(SFX_LIMITER_CEILING=0.65, level=false)로 걸려 있어
+# 게인을 올려도 최종 출력은 안전하게 캡된다(리미터 천장을 0.65->0.75~0.8로 완화해서
+# 격차 자체를 줄이는 방법도 실측했으나, 격차가 v3/v4 오디오 자체의 라우드니스 밀도
+# 차이에서 오는 것이라 천장을 올려도 안 줄고(오히려 소폭 더 벌어짐) 전체 오디오만
 # 다같이 커지는 부작용만 있어 폐기 - alimiter는 0단계 전용이 아니라 게임 오디오/SFX/
 # 배경음/1~3단계까지 전부 공유하는 단일 최종 리미터라 파급 범위도 컸다).
+# 🛡️ [main/hype/sub_explode 역할 기본값 9.0dB -> 6.0dB - v4 마스킹 부분 완화] 0단계는
+# main/hype/sub_explode 3트랙이 kill_t에 완전히 동시 시작해서 하나의 amix+공유 alimiter로
+# 섞인다 - v4로 남은 파일(main_explode_d/sub_shout_c)에 파일 단위로 게인을 올려도(+7.0dB)
+# main+hype 두 트랙이 이미 리미터 헤드룸을 거의 다 채우고 있어서 실측 결과 v4 쪽 기여분이
+# 단독 대비 -11dB 넘게 마스킹당하는 게 확인됐다(실험 로그 참고). 리미터 천장 완화/
+# acompressor 둘 다 효과 없거나 역효과라 폐기하고, main/hype/sub_explode의 역할 기본값을
+# 9.0dB(6.0+3.0)에서 6.0dB(6.0+0.0)로 낮추는 걸 택했다 - 실측상 이 정도 완화로는 v4
+# 마스킹 격차(10dB)의 1.7dB 정도만 회복되어 완전한 해결은 아니지만, "전부 v3인 평소
+# 케이스" 음량 손해가 -0.1dB로 무시할 수준이라(리미터가 이미 포화 상태라 개별 트랙
+# 게인을 이 범위에서 낮춰도 최종 출력엔 거의 안 티남) 반영할 가치가 있다고 판단했다.
+# sterling/carter/atlee(EN 0단계)는 이번 라운드 범위 밖이라 +3.0dB 그대로 둔다.
+# 🛡️ [다음 세션 참고 - 0단계 v4 마스킹 근본 해결 메모, 오늘 범위 밖] 3트랙 동시재생+
+# 단일 공유 리미터 구조 자체가 원인이라 게인 조정만으로는 완전히 못 푼다. 근본 해법
+# 후보: sub만 별도 사이드체인/덕킹, 또는 0단계 전용 분리 믹싱 단계(공유 리미터를 안
+# 타는 구조) - 파급 범위가 커서 별도 세션에서 설계 필요.
 VOICE_MIX_GAIN_DB_OVERRIDE = {
-    "main_explode": VOICE_MIX_GAIN_DB + 3.0,
-    "hype_explode": VOICE_MIX_GAIN_DB + 3.0,
-    "sub_explode": VOICE_MIX_GAIN_DB + 3.0,
+    "main_explode": VOICE_MIX_GAIN_DB + 0.0,
+    "hype_explode": VOICE_MIX_GAIN_DB + 0.0,
+    "sub_explode": VOICE_MIX_GAIN_DB + 0.0,
     "sterling": VOICE_MIX_GAIN_DB + 3.0,
     "carter": VOICE_MIX_GAIN_DB + 3.0,
     "atlee": VOICE_MIX_GAIN_DB + 3.0,
