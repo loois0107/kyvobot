@@ -328,7 +328,13 @@ VOICE_DIR = os.path.join(REPO_ROOT, "assets", "highlight_voice")
 # 내용은 절대 지어내지 마라" 원칙과 정면으로 어긋남). 위치/챔피언을 지목하는 문장은 여전히
 # 절대 금지지만, "지금 이 구도가 긴장 국면이다"라는 사실 자체는 어떤 킬 클립에도 항상
 # 참이라 안전하다(누가/어디서/무엇을 했는지는 말하지 않고, "긴장하고 있다"는 상태만 서술).
-PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")))
+# 🛡️ [글롭 패턴 충돌 수정 - PRE_BUILDUP_URGENT_POOL 도입으로 발견] "pre_buildup_*.wav"는
+# 뒤에 어떤 파일명이 와도 다 매칭되는 와일드카드라, pre_buildup_urgent_01.wav 같은 파일도
+# 여기 같이 잡혀버렸다(실측: 13개여야 할 pool이 17개로 나옴 - urgent 4개가 섞여 들어감).
+# 기존 calm 파일이 전부 "pre_buildup_" + 두 자리 숫자(01~13) 형식이라, 언더스코어 뒤
+# 첫 글자가 숫자([0-9])인 것만 매칭하도록 좁혀서 urgent_*처럼 문자로 시작하는 접미사는
+# 배제한다.
+PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_[0-9]*.wav")))
 # 🛡️ [2차 전면 재녹음 - "순수 추임새" -> "상황 서술형"으로 재전환] 1차 재녹음(위 주석,
 # 폐기됨)에서는 "-는데요?" 서술형이 캐스터답지 않다는 피드백으로 1음절 추임새(음/어/오호 등)
 # 로 갔었는데, 이번엔 반대 방향 피드백 - 추임새만으로는 리드인이 너무 밋밋하니 "지금 긴장
@@ -436,10 +442,30 @@ PRE_BUILDUP_OPENER = {
     "pre_buildup_13.wav": "아 이게",
 }
 
+# 🛡️ [긴박 톤 풀 - 마지막 슬롯 전용, 실제 자산 등록] 리드인 마지막 자리(EOEO 직전, 킬에
+# 가장 가까운 자리)만 짧고 격앙된 긴박형 문장으로 채우기 위한 전용 풀 - 기존 PRE_BUILDUP_
+# POOL(차분 톤)과 분리한다. 처음엔 글롭 패턴만 맞춰두고 빈 풀로 시작했는데(_pick_pre_
+# buildup_slots가 빈 풀이면 차분 풀로 안전하게 폴백), 비교 청취 라운드에서 "본문 내용이
+# 아니라 도입부 감탄사 '아,' 자체(뒤 내용과 무관하게)가 탄식/걱정 톤을 만드는 핵심"이라는
+# 게 직접 청취로 확인됐다 - 본문만 다른 여러 문장보다, 검증된 "아," 계열 도입부(쉼표/
+# 말줄임/쉼표 위치 이동/"어어," 대체)를 쓴 문장들이 일관되게 더 긴박하게 들렸다. 최종
+# 확정 4개 중 2개는 본문("이거 위험한데요!!")을 그대로 두고, 나머지 2개는 같은 검증된
+# 도입부("아 이거,"/"어어,")에 본문만 바꿔 최소 리스크로 본문 다양성을 확보했다. 전부
+# eleven_v4 + lck_caster_dynamic(voice_id=GriSG3WMe4Ve3jcVnYBf) + [excited][shouts]
+# 프리픽스 + stability=0.45로 합성, 4개 전부 1회 시도로 무음 게이트(0곳) 통과(트레일링
+# 무음 트림 1회씩 적용).
+PRE_BUILDUP_URGENT_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_urgent_*.wav")))
+PRE_BUILDUP_URGENT_TEXT = {
+    "pre_buildup_urgent_01.wav": "아, 이거 위험한데요!!",
+    "pre_buildup_urgent_02.wav": "아... 이거 위험한데요!!",
+    "pre_buildup_urgent_03.wav": "아 이거, 심상치 않은데요!!",
+    "pre_buildup_urgent_04.wav": "어어, 지금이에요!!",
+}
+
 
 def _sample_pre_buildup_distinct_openers(pool: list[str], opener_map: dict[str, str], k: int) -> list[str]:
-    """PRE_BUILDUP_POOL에서 최대 k개를 뽑되, 같은 추임새(PRE_BUILDUP_OPENER 값)를 가진
-    파일이 두 개 이상 뽑히지 않도록 하는 순수 함수(테스트 가능) - random.sample을 대체한다.
+    """pool에서 최대 k개를 뽑되, 같은 추임새(PRE_BUILDUP_OPENER 값)를 가진 파일이 두 개
+    이상 뽑히지 않도록 하는 순수 함수(테스트 가능) - random.sample을 대체한다.
     추임새 종류(10종)가 k(PRE_BUILDUP_MAX_COUNT=3)보다 항상 많으므로 자리가 모자라
     k개를 못 채우는 경우는 현재 설정에서는 발생하지 않지만, 만약 그런 상황이 오면
     (추임새 종류를 k 밑으로 줄이는 등) k개보다 적게 반환할 수 있다(방식 자체는 안전)."""
@@ -456,6 +482,53 @@ def _sample_pre_buildup_distinct_openers(pool: list[str], opener_map: dict[str, 
         picked.append(f)
         used_openers.add(opener)
     return picked
+
+
+def _estimate_pre_buildup_count(available: float, avg_dur: float, gap: float, max_count: int) -> int:
+    """available 구간에 "평균 길이+gap" 기준으로 몇 개(N)가 들어갈지, 아직 어떤 파일이
+    뽑힐지 모르는 상태에서 "대표 길이"(호출부에서는 PRE_BUILDUP_POOL 전체 평균 사용)만
+    가지고 미리 추정하는 순수 함수(테스트 가능).
+    🛡️ [N-먼저-추정 재구성] 예전엔 파일을 먼저 뽑고 그 실제 길이로 N을 계산했는데
+    (_spread_fillers_evenly), 그러면 "마지막 슬롯은 항상 특정 풀에서" 같은 보장을 할 수
+    없었다(N이 나중에 줄어들면 뒤쪽 후보가 조용히 버려짐). 이 함수로 N을 먼저 정해두면
+    호출부가 정확히 N개만(마지막 1개는 별도 풀에서) 뽑을 수 있다 - 대표 길이와 실제
+    뽑힐 파일의 길이가 달라 N이 ±1 오차 날 수 있음은 감내 가능한 수준으로 판단,
+    별도 보정 없음."""
+    if available <= 0 or avg_dur <= 0:
+        return 0
+    unit = avg_dur + gap
+    if unit <= 0:
+        return 0
+    return max(0, min(max_count, int(available // unit)))
+
+
+def _pick_pre_buildup_slots(n: int, calm_pool: list[str], urgent_pool: list[str],
+                             opener_map: dict[str, str]) -> list[str]:
+    """_estimate_pre_buildup_count로 먼저 확정된 자리 개수 n을 받아, N-1개는 calm_pool
+    (오프닝 중복 방지 유지)에서, 마지막 1개(가장 킬에 가까운 자리)는 urgent_pool에서
+    뽑아 정확히 n개를 순서대로 반환하는 순수 함수(테스트 가능) - 리스트의 마지막
+    원소가 항상 urgent_pool 출신이 되도록 보장한다(n>=1이고 urgent_pool이 비어있지
+    않을 때). urgent_pool이 비어 있으면(아직 긴박 풀 자산이 없는 상태) 마지막 자리도
+    calm_pool로 채우는 안전한 폴백."""
+    if n <= 0:
+        return []
+    if not urgent_pool:
+        return _sample_pre_buildup_distinct_openers(calm_pool, opener_map, n)
+    calm_picks = _sample_pre_buildup_distinct_openers(calm_pool, opener_map, n - 1)
+    return calm_picks + [random.choice(urgent_pool)]
+
+
+def _spread_fixed_n(start_offset: float, available: float, n: int) -> list[float]:
+    """available 구간을 이미 확정된 자리 개수 n으로 등분해 각 조각 앞쪽에 배치한 절대
+    시작 시각 리스트를 반환하는 순수 함수(테스트 가능) - _spread_fillers_evenly와 달리
+    실제 파일 길이로 n을 다시 계산하지 않는다(재계산하면 _pick_pre_buildup_slots가
+    urgent_pool에서 뽑아둔 마지막 파일이 n이 줄어들 때 조용히 사라질 위험이 있어서,
+    그 경로 자체를 없앤다 - "몇 개가 들어가는지"는 이미 _estimate_pre_buildup_count가
+    정했고, 이 함수는 그 개수를 시간에 펼치기만 한다)."""
+    if n <= 0 or available <= 0:
+        return []
+    segment_width = available / n
+    return [start_offset + i * segment_width for i in range(n)]
 
 
 # 🛡️ [리드인 2보이스 겹침 - 신규] 지금까지 리드인 구간(상황 멘트+"어어??")은 100% Main
@@ -822,7 +895,7 @@ EN_LEADIN_GAP_SEC = 0.2
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
 # 🛡️ [한국어 리드인도 N슬롯으로 확장] 상황멘트(PRE_BUILDUP) 자리 수를 EN_LEADIN과 같은 상한으로
 # 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치되고(자리가 없으면 더 적게), 그 뒤에
-# "어어??"(EOEO) 하나가 마지막에 온다는 관례는 그대로 유지한다(plan_lead_in_forward 참고).
+# "어어??"(EOEO) 하나가 마지막에 온다는 관례는 그대로 유지한다(plan_lead_in_forward_eoeo 참고).
 # 🛡️ [4 -> 3으로 하향 - 문장형 교체에 따른 재조정] PRE_BUILDUP_POOL이 1어절 추임새에서
 # "긴장 국면" 서술 문장(2~4어절, 1.3~2.3s)으로 바뀌면서, 긴 클립(kill_t=15s 시뮬레이션)에서
 # 실제로 4개가 전부 배치되는 경우가 나왔다 - 4개 전부 "긴장하고 있다" 계열 문장이라 연속
@@ -917,35 +990,31 @@ def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_
     return [i * segment_width for i in range(n)]
 
 
-def plan_lead_in_forward(kill_t: float, pre_buildup_durs: list[float], eoeo_dur: float,
-                          start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
-                          gap: float = PRE_BUILDUP_GAP_SEC,
-                          end_gap: float = EOEO_GAP_SEC) -> tuple[list[float], float | None]:
-    """"어어??"(EOEO)를 kill_t 직전(kill_t - end_gap - eoeo_dur)에 먼저 고정 배치하고,
-    그 앞의 사용 가능한 시간(start_offset ~ EOEO 시작 전)에 상황 멘트(N개, 유동)를 균등
-    분산 배치하는 순수 함수(테스트 가능).
-    🛡️ [재설계 - "몰림" 문제 수정] 예전엔 상황 멘트를 앞에서부터 순서대로 빽빽하게 채우고
-    남는 자리에 EOEO를 붙이는 방식이라, 클립이 길수록 상황 멘트가 전부 초반에 몰리고
-    EOEO~킬 사이에 의미 없이 긴 침묵이 생기는 문제가 실측으로 확인됐다. 이제는 EOEO를
-    "킬 직전"이라는 고정 역할에 항상 앵커링하고, 상황 멘트는 남는 시간을 "평균 길이+gap"
-    기준 개수(N, 상한은 len(pre_buildup_durs))로 나눠 N등분한 구간 앞쪽에 하나씩 흩어
-    놓는다(_spread_fillers_evenly) - 클립이 길수록 상황 멘트 사이 간격도 같이 넓어져서
-    자연스럽게 퍼진다.
-    - EOEO 자체가 들어갈 자리조차 없으면(비정상적으로 짧은 클립/이른 킬) 전부
-      스킵([], None) - 기존과 동일한 안전장치.
-    - EOEO는 들어가지만 상황 멘트 자리가 안 나오면(N=0) 상황 멘트 없이 EOEO만 재생된다.
+def plan_lead_in_forward_eoeo(kill_t: float, eoeo_dur: float,
+                               start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
+                               end_gap: float = EOEO_GAP_SEC) -> tuple[float | None, float]:
+    """"어어??"(EOEO)를 kill_t 직전(kill_t - end_gap - eoeo_dur)에 고정 배치하고, 그 앞에
+    상황 멘트가 쓸 수 있는 시간(available)을 계산하는 순수 함수(테스트 가능) - EOEO 자체가
+    들어갈 자리조차 없으면(비정상적으로 짧은 클립/이른 킬) (None, 0.0)을 반환한다(기존과
+    동일한 안전장치). 반환된 available은 _estimate_pre_buildup_count -> _pick_pre_buildup_
+    slots -> _spread_fixed_n 순서로 이어지는 호출부가 사용한다.
+    🛡️ [N-먼저-추정 재구성으로 분리] 예전 plan_lead_in_forward는 이 EOEO 앵커링과 상황
+    멘트 오프셋 계산(_spread_fillers_evenly)을 한 함수에서 같이 했는데, 상황 멘트 쪽이
+    "먼저 파일을 뽑고 나중에 개수(N) 계산"에서 "먼저 N을 추정하고 그 수만큼만 뽑기"로
+    바뀌면서 두 책임이 더 이상 한 호출로 묶이지 않는다(N 추정 자체가 available을 필요로
+    하므로, 파일을 뽑기 전에 이 함수가 먼저 실행돼야 함) - EOEO 앵커링만 여기 남기고,
+    상황 멘트 오프셋 계산은 _spread_fixed_n으로 분리했다.
+    🛡️ [재설계 - "몰림" 문제 수정, 이전 라운드] 예전엔 상황 멘트를 앞에서부터 순서대로
+    빽빽하게 채우고 남는 자리에 EOEO를 붙이는 방식이라, 클립이 길수록 상황 멘트가 전부
+    초반에 몰리고 EOEO~킬 사이에 의미 없이 긴 침묵이 생기는 문제가 실측으로 확인됐다.
+    "킬 직전"이라는 고정 역할에 EOEO를 항상 앵커링하는 이 방식은 그대로 유지한다.
     🛡️ [진입 멘트("entry_line") 실험 - 도입 후 제거됨] kill_t 역산 고정 위치로 EOEO 앞에
     "자, 들어갔습니다" 류의 진입 선언을 넣어봤으나, 실제 전투 시작 시점을 모른 채 추측
-    배치하는 것뿐이라 체감 타이밍과 안 맞는 근본적 한계가 실측으로 확인돼 제거했다 - 이
-    함수는 그 도입 이전(EOEO만 고정 앵커) 상태로 되돌아온 것이다."""
+    배치하는 것뿐이라 체감 타이밍과 안 맞는 근본적 한계가 실측으로 확인돼 제거했다."""
     eoeo_start = kill_t - end_gap - eoeo_dur
     if eoeo_start < start_offset:
-        return [], None
-
-    available = eoeo_start - start_offset
-    offsets = _spread_fillers_evenly(available, pre_buildup_durs, gap, PRE_BUILDUP_MAX_COUNT)
-    pre_starts = [start_offset + off for off in offsets]
-    return pre_starts, eoeo_start
+        return None, 0.0
+    return eoeo_start, eoeo_start - start_offset
 
 
 def plan_leadin_fillers_en(kill_t: float, durations: list[float],
@@ -953,8 +1022,9 @@ def plan_leadin_fillers_en(kill_t: float, durations: list[float],
                             gap: float = EN_LEADIN_GAP_SEC,
                             end_gap: float = EN_LEADIN_END_GAP_SEC) -> list[float]:
     """영어 리드인 필러 N개(순서대로 durations)의 시작 시각 리스트(순수 함수, 테스트
-    가능) - plan_lead_in_forward와 동일한 "평균 길이+gap 기준 개수 산정 + N등분 균등
-    분산" 원칙을 쓴다(_spread_fillers_evenly). 영어 쪽은 EOEO에 해당하는 고정 앵커
+    가능) - 한국어 pre_buildup이 이전에 쓰던 "평균 길이+gap 기준 개수 산정 + N등분 균등
+    분산" 원칙을 그대로 쓴다(_spread_fillers_evenly) - 영어 쪽은 차분/긴박 풀 분리를
+    적용하지 않아 이 함수는 바꾸지 않았다. 영어 쪽은 EOEO에 해당하는 고정 앵커
     요소가 없어서, start_offset부터 kill_t - end_gap까지 전체가 "사용 가능한 시간"이다.
     자리가 하나도 안 나오면 빈 리스트(억지로 겹치게 밀어넣지 않는다는 기존 원칙 그대로)."""
     available = kill_t - end_gap - start_offset
@@ -3981,7 +4051,7 @@ class KyvoHighlight(KyvoBaseCog):
             schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
                                       "start": main_fact_start, "duration": main_fact_duration}
 
-            # 리드인 필러: 한국어와 마찬가지로(plan_lead_in_forward) 1~4개를 유동적으로
+            # 리드인 필러: 한국어와 마찬가지로(plan_lead_in_forward_eoeo) 1~4개를 유동적으로
             # 채운다(plan_leadin_fillers_en, 순수 함수) - 자리가 없으면 0개까지 줄어들 수 있다.
             leadin_end_times = []
             if EN_LEADIN_POOL:
@@ -4011,20 +4081,38 @@ class KyvoHighlight(KyvoBaseCog):
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
                 return
 
-            # 🛡️ [N슬롯화] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴(최대
-            # PRE_BUILDUP_MAX_COUNT개)으로 뽑는다 - 실제로 몇 개가 쓰일지는
-            # plan_lead_in_forward가 kill_t와의 여유를 보고 나중에 정한다.
-            # 🛡️ [추임새 중복 방지] 기존 random.sample은 같은 추임새("자," 등)를 가진
-            # 문장이 한 렌더에 2개 이상 뽑히는 걸 막지 못했다(실측 약 31.5% 확률) -
-            # _sample_pre_buildup_distinct_openers로 교체해 같은 추임새 중복을 원천 차단한다.
-            pre_buildup_candidates = _sample_pre_buildup_distinct_openers(
-                PRE_BUILDUP_POOL, PRE_BUILDUP_OPENER, PRE_BUILDUP_MAX_COUNT)
+            # 🛡️ [N슬롯화 - 이전 라운드] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴
+            # (최대 PRE_BUILDUP_MAX_COUNT개)으로 쓴다.
+            # 🛡️ [N-먼저-추정 재구성] 예전엔 파일을 먼저 뽑고(_sample_pre_buildup_distinct_
+            # openers, 추임새 중복 방지 포함) 그 실제 길이로 자리 개수(N)를 나중에
+            # 계산했다(_spread_fillers_evenly) - 이러면 N이 후보 개수보다 줄어들 때 schedule
+            # 조립이 뒤쪽 후보를 조용히 버리는 구조라, "마지막 자리는 항상 특정 풀에서"라는
+            # 보장을 할 수 없었다. 순서를 뒤집어 PRE_BUILDUP_POOL 전체 평균 길이("대표
+            # 길이")로 N을 먼저 추정(_estimate_pre_buildup_count)하고, N이 확정된 뒤에
+            # 정확히 N개(N-1개는 차분 풀, 마지막 1개는 PRE_BUILDUP_URGENT_POOL)만
+            # 뽑는다(_pick_pre_buildup_slots, 추임새 중복 방지는 그 안에서 그대로 유지) -
+            # 대표 길이와 실제 뽑힐 파일 길이가 달라 N이 ±1 오차 날 수 있음은 감내 가능한
+            # 수준으로 판단, 별도 보정 없음.
             eoeo_file = random.choice(EOEO_POOL)
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
-                pre_buildup_durations = [await self._to_executor(self._probe_audio_duration, f) for f in pre_buildup_candidates]
                 eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
+                eoeo_start_est, pre_buildup_available = plan_lead_in_forward_eoeo(kill_t, eoeo_duration)
+                pre_buildup_pool_durations = [
+                    await self._to_executor(self._probe_audio_duration, f) for f in PRE_BUILDUP_POOL
+                ]
+                avg_pre_buildup_dur = (
+                    sum(pre_buildup_pool_durations) / len(pre_buildup_pool_durations)
+                    if pre_buildup_pool_durations else 0.0
+                )
+                pre_buildup_slot_count = _estimate_pre_buildup_count(
+                    pre_buildup_available, avg_pre_buildup_dur, PRE_BUILDUP_GAP_SEC, PRE_BUILDUP_MAX_COUNT)
+                pre_buildup_candidates = _pick_pre_buildup_slots(
+                    pre_buildup_slot_count, PRE_BUILDUP_POOL, PRE_BUILDUP_URGENT_POOL, PRE_BUILDUP_OPENER)
+                pre_buildup_durations = [
+                    await self._to_executor(self._probe_audio_duration, f) for f in pre_buildup_candidates
+                ]
                 # 🛡️ [0단계 환호 비중 확대 - 길이 가중 랜덤] "환호 비중을 늘려달라"는 요청에
                 # 텍스트에 모음을 더 반복해서 새 긴 버전을 만들어보는 방법을 먼저 시도했으나,
                 # 실측 결과 무음 게이트 통과율이 급격히 떨어지고(main_explode 신규 후보
@@ -4091,10 +4179,14 @@ class KyvoHighlight(KyvoBaseCog):
             main_fact_start = kill_t + seq["t3"]
 
             # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
-            # 자리가 허락하는 만큼) -> "어어??"(마지막 1개) 순서로 배치하고, kill_t와 안
-            # 겹치는지만 검사한다(plan_lead_in_forward가 순수 함수로 계산).
-            pre_buildup_starts, eoeo_start = plan_lead_in_forward(
-                kill_t, pre_buildup_durations, eoeo_duration)
+            # 자리가 허락하는 만큼) -> "어어??"(마지막 1개) 순서로 배치한다. EOEO 앵커링/
+            # available 계산은 위에서 plan_lead_in_forward_eoeo로 이미 끝냈으므로, 여기서는
+            # 그 결과(eoeo_start_est/pre_buildup_available)와 이미 확정된 자리 개수
+            # (len(pre_buildup_candidates))로 오프셋만 펼친다(_spread_fixed_n) - 실제 파일
+            # 길이로 자리 개수를 다시 계산하지 않는다(마지막 슬롯이 조용히 잘리는 걸 막기 위함).
+            eoeo_start = eoeo_start_est
+            pre_buildup_starts = _spread_fixed_n(
+                PRE_BUILDUP_START_OFFSET_SEC, pre_buildup_available, len(pre_buildup_candidates))
 
             # 🛡️ [리드인 2보이스 겹침] LEADIN_OVERLAY_CHANCE 확률로만 시도한다 - 매번 나오면
             # 오히려 예측 가능한 패턴이 되어버리니 "가끔" 정도로만. 자리가 없으면(리드인 자체가
@@ -4143,7 +4235,11 @@ class KyvoHighlight(KyvoBaseCog):
                                      "start": eoeo_start, "duration": eoeo_duration}
             for i, start in enumerate(pre_buildup_starts):
                 f = pre_buildup_candidates[i]
-                schedule[f"pre_buildup_{i + 1}"] = {"wav": f, "text": PRE_BUILDUP_TEXT[os.path.basename(f)],
+                basename = os.path.basename(f)
+                # 🛡️ [긴박 풀 텍스트 병행 조회] 마지막 슬롯이 PRE_BUILDUP_URGENT_POOL에서 뽑힌
+                # 경우 PRE_BUILDUP_TEXT에는 없으므로 PRE_BUILDUP_URGENT_TEXT로 폴백한다.
+                text = PRE_BUILDUP_TEXT.get(basename) or PRE_BUILDUP_URGENT_TEXT.get(basename)
+                schedule[f"pre_buildup_{i + 1}"] = {"wav": f, "text": text,
                                                      "start": start, "duration": pre_buildup_durations[i]}
             if leadin_overlay_start is not None:
                 schedule["leadin_overlay"] = {
@@ -4153,7 +4249,7 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
         # 같이 퇴장하는 것으로 잡았다(플레이어에게 "이 킬에 대한 설명이 끝났다"는 인상과
-        # HUD 퇴장을 맞추기 위함) - plan_kill_sequence/plan_lead_in_forward와 마찬가지로
+        # HUD 퇴장을 맞추기 위함) - plan_kill_sequence/plan_lead_in_forward_eoeo와 마찬가지로
         # 새 상수를 발명하지 않고 이미 계산된 값(main_fact_start/duration)만 소비한다.
         if hud_event is not None:
             schedule["hud"] = {"event_label": hud_event, "start": kill_t,
