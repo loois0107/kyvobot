@@ -378,19 +378,64 @@ PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")
 # assets/highlight_voice/_backup_pre_buildup_written_style_20260930/ 에 백업.
 PRE_BUILDUP_TEXT = {
     "pre_buildup_01.wav": "자, 지금 선수들이 서로 견제하고 있거든요?",  # 3.04s, 2회 시도로 무음 0곳 통과
-    "pre_buildup_02.wav": "자, 지금 거리 재고 있는 구도거든요?",  # 2.80s, 재구성 문구 1회 시도로 통과 - 원문("아 이게, 지금 거리 재고 있는 구도란 말이죠")은 15회 전부 실패해 교체
+    "pre_buildup_02.wav": "음, 지금 거리 재고 있는 구도거든요?",  # 2.96s, 2회 시도로 무음 0곳 통과 - 도입부만 "자,"->"음,"으로 교체(추임새 재분배)
     "pre_buildup_03.wav": "근데 사실, 스킬 하나 잘못 쓰면 위험한 상황이거든요?",  # 4.16s, 2회 시도로 무음 0곳 통과
     "pre_buildup_04.wav": "일단은, 누가 먼저 들어가나 눈치 보고 있단 말이죠",  # 3.60s, 3회 시도로 무음 0곳 통과
     "pre_buildup_05.wav": "아 이게, 위험한 거리이긴 한데, 지금요",  # 3.84s, 9회 시도로 무음 0곳 통과
-    "pre_buildup_06.wav": "자, 한 발짝만 다가가면 싸움 나겠거든요?",  # 3.12s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_07.wav": "일단은, 쉽게 안 들어가고 있거든요",  # 2.96s, 재구성 문구 5회 시도로 통과 - 원문("근데 사실, 쉽게 안 들어가긴 하네요, 지금")은 15회 전부 실패해 교체
-    "pre_buildup_08.wav": "일단은 숨 고르는 느낌이거든요",  # 2.48s, 재구성 문구(쉼표 제거) 10회 시도로 통과 - 원문/1차 재구성 둘 다(쉼표 있는 버전) 각 15회씩 전부 실패해 쉼표 자체를 뺀 버전으로 교체
-    "pre_buildup_09.wav": "일단은, 팽팽한 긴장감이거든요?",  # 2.88s, 재구성 문구 7회 시도로 통과 - 원문("아 이게, 팽팽한 긴장감이란 말이죠")은 15회 전부 실패해 교체
-    "pre_buildup_10.wav": "자, 먼저 움직이면 손해 보는 구도거든요?",  # 3.28s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_06.wav": "어, 한 발짝만 다가가면 싸움 나겠거든요?",  # 3.04s, 2회 시도로 무음 0곳 통과 - 도입부만 "자,"->"어,"으로 교체(추임새 재분배)
+    "pre_buildup_07.wav": "이야, 쉽게 안 들어가고 있거든요",  # 2.48s, 2회 시도로 무음 0곳 통과 - 도입부만 "일단은,"->"이야,"로 교체(추임새 재분배)
+    "pre_buildup_08.wav": "진짜 숨 고르는 느낌이거든요",  # 2.48s, 1회 시도로 무음 0곳 통과 - 도입부만 "일단은"->"진짜"로 교체(쉼표 없는 형태 유지, 추임새 재분배)
+    "pre_buildup_09.wav": "와, 팽팽한 긴장감이거든요?",  # 2.48s, 1회 시도로 무음 0곳 통과 - 도입부만 "일단은,"->"와,"로 교체(추임새 재분배)
+    "pre_buildup_10.wav": "그니까, 먼저 움직이면 손해 보는 구도거든요?",  # 3.36s, 1회 시도로 무음 0곳 통과 - 도입부만 "자,"->"그니까,"로 교체(추임새 재분배)
     "pre_buildup_11.wav": "자, 지금 딱 불붙기 좋은 거리거든요?",  # 2.80s, 재구성 문구 9회 시도로 통과 - 원문("근데 사실, 지금 딱 불붙기 좋은 거리란 말이죠")은 15회 전부 실패해 교체
     "pre_buildup_12.wav": "근데 사실, 물러설 수 없는 거리거든요, 지금",  # 3.52s, 재구성 문구 2회 시도로 통과 - 원문("일단은, 물러설 수 없는 거리이긴 한데, 지금요")은 15회 전부 실패해 교체
     "pre_buildup_13.wav": "아 이게, 잘못 움직이면 그대로 끝나거든요?",  # 3.44s, 6회 시도로 무음 0곳 통과
 }
+# 🛡️ [추임새 다양화 + 중복 방지] 기존 4종(자,/아 이게,/근데 사실,/일단은,)이 13개 문장에
+# 고르게 안 퍼지고 "자,"만 5개로 쏠려 있었다(재작성 실패분을 재구성하는 과정에서 우연히
+# 몰림) - 한 렌더에서 최대 3개까지 뽑히는데, 같은 추임새가 2개 이상 뽑힐 확률이 약 31.5%로
+# 실측됨. 10종으로 늘리고(음,/어,/이야,/진짜/와,/그니까, 추가) 본문 내용은 그대로 둔 채
+# 도입부만 6개 문장(02/06/07/08/09/10)에 재배치해서 13개가 10종에 최대한 고르게(2개씩
+# 3종+1개씩 7종) 나뉘도록 했다. 파일명->추임새 매핑을 별도로 둬서, 아래 커스텀 샘플링
+# 함수가 "같은 추임새를 가진 문장이 한 렌더에 2개 이상 안 뽑히게" 강제한다.
+PRE_BUILDUP_OPENER = {
+    "pre_buildup_01.wav": "자",
+    "pre_buildup_02.wav": "음",
+    "pre_buildup_03.wav": "근데 사실",
+    "pre_buildup_04.wav": "일단은",
+    "pre_buildup_05.wav": "아 이게",
+    "pre_buildup_06.wav": "어",
+    "pre_buildup_07.wav": "이야",
+    "pre_buildup_08.wav": "진짜",
+    "pre_buildup_09.wav": "와",
+    "pre_buildup_10.wav": "그니까",
+    "pre_buildup_11.wav": "자",
+    "pre_buildup_12.wav": "근데 사실",
+    "pre_buildup_13.wav": "아 이게",
+}
+
+
+def _sample_pre_buildup_distinct_openers(pool: list[str], opener_map: dict[str, str], k: int) -> list[str]:
+    """PRE_BUILDUP_POOL에서 최대 k개를 뽑되, 같은 추임새(PRE_BUILDUP_OPENER 값)를 가진
+    파일이 두 개 이상 뽑히지 않도록 하는 순수 함수(테스트 가능) - random.sample을 대체한다.
+    추임새 종류(10종)가 k(PRE_BUILDUP_MAX_COUNT=3)보다 항상 많으므로 자리가 모자라
+    k개를 못 채우는 경우는 현재 설정에서는 발생하지 않지만, 만약 그런 상황이 오면
+    (추임새 종류를 k 밑으로 줄이는 등) k개보다 적게 반환할 수 있다(방식 자체는 안전)."""
+    shuffled = list(pool)
+    random.shuffle(shuffled)
+    picked: list[str] = []
+    used_openers: set[str] = set()
+    for f in shuffled:
+        if len(picked) >= k:
+            break
+        opener = opener_map.get(os.path.basename(f))
+        if opener in used_openers:
+            continue
+        picked.append(f)
+        used_openers.add(opener)
+    return picked
+
+
 # 🛡️ [리드인 2보이스 겹침 - 신규] 지금까지 리드인 구간(상황 멘트+"어어??")은 100% Main
 # 혼자였다 - 가끔(LEADIN_OVERLAY_CHANCE 확률로) Hype 또는 Sub가 짧게 끼어들어 반응하면
 # 리드인이 매번 똑같이 "혼잣말"처럼 들리지 않고 다른 목소리가 있다는 인상을 준다. 파일명
@@ -1718,16 +1763,21 @@ SYSTEM_PROMPT = (
     "- 의문형 감탄을 적극 활용해라 (예: '미쳤는데요?!', '이걸 잡아요?!', '지금 뭘 한 거예요?!').\n"
     "- 문장을 끝맺을 땐 습니다체가 아니라 요체를 유지해라 (예: '완전히 뒤집어버렸어요!!').\n\n"
     "구조 규칙:\n"
-    "- 누가 누구를 처치했는지 사실을 요체로 명확하게 전달하는 문장 하나로 만들어라. 화법은 여러 "
-    "가지가 있을 수 있다(아래는 화법의 다양성을 보여주는 예시일 뿐이니 그대로 베끼지 말고 매번 "
-    "새롭게 응용해라):\n"
+    "- 누가 죽였는지(킬러 이름)는 반드시 문장 어딘가에 등장해야 한다(피해자 이름은 없어도 "
+    "된다 - 아래 6~8번처럼 결과 중심으로만 서술해도 됨). 화법은 여러 가지가 있을 수 있다 "
+    "(아래는 화법의 다양성을 보여주는 예시일 뿐이니 그대로 베끼지 말고 매번 새롭게 응용해라):\n"
     "  1) 사실 보고형: '{killer}가 {victim} 잡았어요.'\n"
     "  2) 감탄형: '완전 미쳤네요, {killer}가 {victim}를!!'\n"
     "  3) 믿기지 않는다는 반응형: '{killer}가 {victim} 저걸 잡아버리네요, 돌았는데요 진짜로??!!'\n"
     "  4) 과격한 표현형: '{killer}가 {victim}를 박살내버렸어요!!'\n"
     "  5) 단정 마무리형: '{killer}가 {victim}를 완전히 끝내버렸어요!!'\n"
-    "- 절대 매번 같은 패턴을 반복하지 마라. 킬 이벤트가 여러 건이면 위 화법들을 골고루 섞어서 "
-    "줄마다 다른 방식으로 표현해라.\n"
+    "  6) 결과 우선형(피해자 이름 생략 가능): '{killer}, 이걸 그대로 압살해버리네요!!'\n"
+    "  7) 도치 강조형(피해자 이름 생략 가능): '완전히 끝나버렸어요, {killer} 손에!!'\n"
+    "  8) 임팩트 단정형(피해자 이름 생략 가능): '그냥 압살이에요, {killer}!!'\n"
+    "- 매 호출마다 위 1~8번 중 하나를 고르되, 특정 화법(특히 5번 '완전히 끝내버렸어요'류의 "
+    "단정 마무리형)에 치우치지 말고 8개를 최대한 고르게 순환해서 골라라 - 매번 같은 화법만 "
+    "반복하면 안 된다. 킬 이벤트가 여러 건이면(줄이 여러 개면) 그 줄들 사이에서도 서로 "
+    "다른 화법을 섞어써라.\n"
     "- 문장은 짧고 임팩트 있게 끊어라. 한 줄에 절 하나, 길어도 두 절.\n"
     "- 느낌표를 적극 사용하고 텐션을 끝까지 올려라. 감탄사 없는 밋밋한 사실 전달문('OO가 XX를 처치했습니다' "
     "같은 문장)은 금지.\n"
@@ -3939,10 +3989,14 @@ class KyvoHighlight(KyvoBaseCog):
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
                 return
 
-            # 🛡️ [N슬롯화] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴(random.sample,
-            # 최대 PRE_BUILDUP_MAX_COUNT개)으로 뽑는다 - 실제로 몇 개가 쓰일지는
+            # 🛡️ [N슬롯화] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴(최대
+            # PRE_BUILDUP_MAX_COUNT개)으로 뽑는다 - 실제로 몇 개가 쓰일지는
             # plan_lead_in_forward가 kill_t와의 여유를 보고 나중에 정한다.
-            pre_buildup_candidates = random.sample(PRE_BUILDUP_POOL, min(len(PRE_BUILDUP_POOL), PRE_BUILDUP_MAX_COUNT))
+            # 🛡️ [추임새 중복 방지] 기존 random.sample은 같은 추임새("자," 등)를 가진
+            # 문장이 한 렌더에 2개 이상 뽑히는 걸 막지 못했다(실측 약 31.5% 확률) -
+            # _sample_pre_buildup_distinct_openers로 교체해 같은 추임새 중복을 원천 차단한다.
+            pre_buildup_candidates = _sample_pre_buildup_distinct_openers(
+                PRE_BUILDUP_POOL, PRE_BUILDUP_OPENER, PRE_BUILDUP_MAX_COUNT)
             eoeo_file = random.choice(EOEO_POOL)
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
