@@ -347,7 +347,7 @@ PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")
 # 확인 가능하다. 이전(voice_settings 미지정) 버전은 _backup_pre_buildup_default_settings_
 # 20260929/ 에 백업.
 # 🛡️ [주 내레이터 교체 - main -> lck_caster_dynamic, 14 -> 13] pre_buildup 전용으로 새
-# 보이스 lck_caster_dynamic(voice_id=IsyjRUQuwWiaozHzGnr0)을 도입, eleven_v4 모델 +
+# 보이스 lck_caster_dynamic(당시 voice_id=IsyjRUQuwWiaozHzGnr0)을 도입, eleven_v4 모델 +
 # voice_settings={"stability": 0.55}(style 제외 - can_use_style=False 확인됨)로 14개
 # 전부 재생성했다. 13개는 1~10회 시도로 무음 게이트 통과했지만 "서로 눈치만 보고
 # 있어요"(구 08번) 하나는 30회(최초 10회 + 재시도 20회) 전부 실패했고 대본 자체도
@@ -356,20 +356,29 @@ PRE_BUILDUP_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "pre_buildup_*.wav")
 # (파일명 자체가 곧 순서라 결번 없는 쪽이 유지보수하기 더 쉽다고 판단). 기존 main
 # 보이스로 녹음된 14개(구 번호 그대로)는 _backup_pre_buildup_main_voice_20260930/
 # 에 백업.
+# 🛡️ [lck_caster_dynamic 보이스 자체 교체 - "스푼라디오 스타일" 피드백] 위 버전의
+# voice_id(IsyjRUQuwWiaozHzGnr0)는 ElevenLabs 라이브러리에서 이미 삭제/교체된 상태였고,
+# 같은 이름("lck_caster_dynamic")으로 계정에 새로 만들어진 보이스가 2개 있어서(서로 다른
+# voice_id) 어느 쪽이 최신인지 사용자 확인을 받아 voice_id=GriSG3WMe4Ve3jcVnYBf로 13개
+# 전부 재생성했다(eleven_v4 + stability=0.55, style 제외 - 이전과 동일 파라미터, 목소리
+# 소스만 교체). "긴장감이 흐르고 있어요"(09번) 하나만 15회 전부 무음 게이트 실패해서,
+# 같은 뜻의 다른 문구("팽팽한 긴장감이에요")로 교체 후 5회 만에 통과했다 - 나머지 12개는
+# 문구 변경 없이 그대로 재생성됨(1~13회 시도, 아래 각 줄 참고). 이전(첫 lck_caster_dynamic
+# 버전) 13개는 assets/highlight_voice/_backup_pre_buildup_lck_dynamic_v1_20260930/ 에 백업.
 PRE_BUILDUP_TEXT = {
-    "pre_buildup_01.wav": "선수들이 서로 견제하고 있어요",  # 2.16s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_02.wav": "지금 거리 재고 있는 구도네요",  # 2.00s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_03.wav": "스킬 하나 잘못 쓰면 위험한 상황이에요",  # 2.72s, 10회 시도로 무음 0곳 통과
-    "pre_buildup_04.wav": "누가 먼저 들어가나 눈치 보고 있어요",  # 2.40s, 2회 시도로 무음 0곳 통과
-    "pre_buildup_05.wav": "위험한 거리인데요, 지금",  # 1.92s, 5회 시도로 무음 0곳 통과
-    "pre_buildup_06.wav": "한 발짝만 다가가면 싸움 나겠는데요",  # 2.48s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_07.wav": "쉽게 안 들어가네요, 지금",  # 2.16s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_08.wav": "숨 고르는 느낌인데요",  # 1.60s, 3회 시도로 무음 0곳 통과
-    "pre_buildup_09.wav": "긴장감이 흐르고 있어요",  # 1.60s, 1회 시도로 무음 0곳 통과
-    "pre_buildup_10.wav": "먼저 움직이면 손해 보는 구도예요",  # 2.48s, 2회 시도로 무음 0곳 통과
-    "pre_buildup_11.wav": "지금 딱 불붙기 좋은 거린데요",  # 2.16s, 3회 시도로 무음 0곳 통과
-    "pre_buildup_12.wav": "물러설 수 없는 거리예요, 지금",  # 2.32s, 3회 시도로 무음 0곳 통과
-    "pre_buildup_13.wav": "잘못 움직이면 그대로 끝나요",  # 2.24s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_01.wav": "선수들이 서로 견제하고 있어요",  # 2.32s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_02.wav": "지금 거리 재고 있는 구도네요",  # 2.24s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_03.wav": "스킬 하나 잘못 쓰면 위험한 상황이에요",  # 2.80s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_04.wav": "누가 먼저 들어가나 눈치 보고 있어요",  # 2.56s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_05.wav": "위험한 거리인데요, 지금",  # 1.84s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_06.wav": "한 발짝만 다가가면 싸움 나겠는데요",  # 2.56s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_07.wav": "쉽게 안 들어가네요, 지금",  # 2.00s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_08.wav": "숨 고르는 느낌인데요",  # 1.60s, 2회 시도로 무음 0곳 통과
+    "pre_buildup_09.wav": "팽팽한 긴장감이에요",  # 1.84s, 재구성 문구 5회 시도로 무음 0곳 통과 - 원문 "긴장감이 흐르고 있어요"는 15회 전부 실패해 교체
+    "pre_buildup_10.wav": "먼저 움직이면 손해 보는 구도예요",  # 2.48s, 1회 시도로 무음 0곳 통과
+    "pre_buildup_11.wav": "지금 딱 불붙기 좋은 거린데요",  # 2.32s, 13회 시도로 무음 0곳 통과
+    "pre_buildup_12.wav": "물러설 수 없는 거리예요, 지금",  # 2.24s, 3회 시도로 무음 0곳 통과
+    "pre_buildup_13.wav": "잘못 움직이면 그대로 끝나요",  # 2.32s, 1회 시도로 무음 0곳 통과
 }
 # 🛡️ [리드인 2보이스 겹침 - 신규] 지금까지 리드인 구간(상황 멘트+"어어??")은 100% Main
 # 혼자였다 - 가끔(LEADIN_OVERLAY_CHANCE 확률로) Hype 또는 Sub가 짧게 끼어들어 반응하면
