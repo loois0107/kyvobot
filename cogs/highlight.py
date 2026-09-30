@@ -258,37 +258,41 @@ VOICE_MIX_GAIN_DB = 6.0
 # 🛡️ [0단계 체감 강화] 킬 순간 "동시 폭발" 임팩트를 더 세게 느끼도록, 0단계 목소리
 # (main_explode/hype_explode/sub_explode(KO), 그리고 0단계로 쓰이는 sterling/carter/
 # atlee(EN))에만 나머지 단계(1~3단계: 닉네임/의문형/사실전달)보다 +3dB를 얹는다.
-# 🛡️ [sub_explode만 역할 단위 추가 보정 - v4 재생성 후 v3보다 조용해진 문제] hype_explode
-# 는 v3 원본으로 남아있는데 sub_explode는 전부 v4로 재생성되면서 실측(volumedetect) 결과
-# v3 hype 대비 mean_volume이 -2.11dB 더 조용해져 있었다(피크도 같이 낮음 - 다이나믹
-# 레인지 자체는 v3/v4가 12~13dB로 비슷해서 컴프레션 구조 차이가 아니라 단순히 더 조용하게
-# 나온 것으로 판단, 게인만 올리면 해결될 문제). 그 격차를 메우고 살짝 더 크게 들리도록
-# sub_explode만 +3.0->+5.5dB로 올렸다 - hype_explode/sterling/carter/atlee는 이 문제와
-# 무관해 +3.0dB 그대로 둔다. alimiter가 이미 하드 리미터(SFX_LIMITER_CEILING=0.65,
-# level=false)로 걸려 있어 게인을 올려도 최종 출력은 안전하게 캡된다.
-# 🛡️ [main_explode는 파일 단위 오버라이드로 분리] main_explode도 처음엔 역할 단위로
-# +7.0dB를 줬었는데, main_explode_a/b/c를 다시 v3로 원복(다른 커밋 참고 - v4 톤이 "얇고
-# 꽥꽥거림")하면서 문제가 생겼다: main_explode 풀이 이제 v3(a/b/c, 75%)+v4(d, 25%) 혼재라
-# 역할 단위 게인 하나로는 둘 다 만족 못 시킨다 - +7.0dB를 유지하면 v3인 a/b/c가 실측상
-# hype보다 오히려 +1.34dB 더 커지고(과함), +3.0dB로 낮추면 v4인 d가 다시 조용해지는
-# 원래 문제로 돌아간다. 그래서 게인 조회를 "파일명 우선 -> 역할 단위 -> 기본값" 3단계로
-# 확장해 main_explode_d.wav 하나에만 파일 단위로 +7.0dB를 주고, 역할 단위 기본값
-# ("main_explode")은 원래대로 +3.0dB로 되돌렸다 - a/b/c는 이 역할 기본값을 그대로 받고
-# d만 파일 단위 오버라이드로 별도 처리된다.
+# 🛡️ [main_explode/sub_explode 둘 다 파일 단위 오버라이드로 분리] 두 풀 다 처음엔 역할
+# 단위로 게인을 올렸었다(main +7.0dB, sub +5.5dB, v4가 v3 hype보다 조용해진 문제 보정용).
+# 이후 두 풀 다 "v4 톤이 얇고 꽥꽥거림" 피드백으로 대부분을 v3로 원복하고 파일 하나만
+# v4로 남기면서(main_explode_d, sub_shout_c - 각각 25%/19% 비중), 역할 단위 게인 하나로는
+# v3로 돌아온 파일들과 v4로 남은 파일을 동시에 만족 못 시키는 문제가 생겼다(v3 파일에
+# 보정용 게인을 그대로 주면 hype보다 오히려 더 커짐). 그래서 게인 조회를 "파일명 우선 ->
+# 역할 단위 -> 기본값" 3단계로 확장해 v4로 남은 파일 하나씩만 파일 단위로 높은 게인을
+# 주고, 역할 단위 기본값(main_explode/sub_explode 둘 다)은 원래대로 +3.0dB로 되돌렸다 -
+# v3로 돌아온 파일들은 이 역할 기본값을 그대로 받고, v4로 남은 파일만 파일 단위
+# 오버라이드로 별도 처리된다. hype_explode/sterling/carter/atlee는 이 문제와 무관해
+# +3.0dB 그대로 둔다. alimiter가 이미 하드 리미터(SFX_LIMITER_CEILING=0.65, level=false)
+# 로 걸려 있어 게인을 올려도 최종 출력은 안전하게 캡된다(리미터 천장을 0.65->0.75~0.8로
+# 완화해서 격차 자체를 줄이는 방법도 실측했으나, 격차가 v3/v4 오디오 자체의 라우드니스
+# 밀도 차이에서 오는 것이라 천장을 올려도 안 줄고(오히려 소폭 더 벌어짐) 전체 오디오만
+# 다같이 커지는 부작용만 있어 폐기 - alimiter는 0단계 전용이 아니라 게임 오디오/SFX/
+# 배경음/1~3단계까지 전부 공유하는 단일 최종 리미터라 파급 범위도 컸다).
 VOICE_MIX_GAIN_DB_OVERRIDE = {
     "main_explode": VOICE_MIX_GAIN_DB + 3.0,
     "hype_explode": VOICE_MIX_GAIN_DB + 3.0,
-    "sub_explode": VOICE_MIX_GAIN_DB + 5.5,
+    "sub_explode": VOICE_MIX_GAIN_DB + 3.0,
     "sterling": VOICE_MIX_GAIN_DB + 3.0,
     "carter": VOICE_MIX_GAIN_DB + 3.0,
     "atlee": VOICE_MIX_GAIN_DB + 3.0,
 }
-# 🛡️ [파일명 단위 오버라이드 - 역할 단위보다 먼저 조회됨] main_explode_d.wav만 v4로 남아
-# 있어(main_explode 풀의 나머지 a/b/c는 v3) 역할 기본값(+3.0dB)과 무관하게 이 파일 하나만
-# +7.0dB를 받는다. 이 딕셔너리에 없는 파일은 그대로 VOICE_MIX_GAIN_DB_OVERRIDE(역할
-# 단위) -> VOICE_MIX_GAIN_DB(기본값) 순으로 fallback한다.
+# 🛡️ [파일명 단위 오버라이드 - 역할 단위보다 먼저 조회됨] main_explode_d.wav/sub_shout_c.wav
+# 만 각각 v4로 남아 있어(나머지는 v3) 역할 기본값(+3.0dB)과 무관하게 이 파일들만 개별
+# 게인을 받는다 - 둘 다 게인을 +5.5~7.0dB 범위에서 실측 스윕해본 결과 어느 지점부터는
+# 게인을 더 올려도 (이미 리미터가 깊게 걸린 상태라) 최종 라우드니스가 거의 안 늘어나는
+# 한계 효용 구간이라(sub_shout_c 기준 11.5dB->13.0dB total로 올려도 -12.6dB->-12.5dB로
+# 0.1dB밖에 안 늘어남), 두 파일 다 +7.0dB로 통일했다 - hype(v3, -12.2dB 최종)에 근접한
+# -12.5~-12.7dB까지 회복됨. 이 딕셔너리에 없는 파일은 그대로 VOICE_MIX_GAIN_DB_OVERRIDE
+# (역할 단위) -> VOICE_MIX_GAIN_DB(기본값) 순으로 fallback한다.
 VOICE_MIX_GAIN_DB_FILE_OVERRIDE = {
     "main_explode_d.wav": VOICE_MIX_GAIN_DB + 7.0,
+    "sub_shout_c.wav": VOICE_MIX_GAIN_DB + 7.0,
 }
 
 # ══════════════════════════════════════════════════════════
@@ -549,17 +553,24 @@ HYPE_EXPLODE_TEXT = {
     "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 2.00s, v3(원복)
     "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.76s, v3(원복)
 }
+# 🛡️ [sub_shout도 main_explode와 같은 패턴 - 일부만 v3 원복] main_explode와 동일하게
+# "v4 톤이 얇고 꽥꽥거림" 피드백으로 5개 중 1개만 v4로 남기고 나머지는 v3 원본으로
+# 되돌렸다. main_explode_d 같은 "원래부터 다른 파라미터로 도입된 슬롯" 이력은
+# sub_explode 쪽엔 없어서(5개 다 동일 stability/style로 통일 재녹음됐던 이력), 대신
+# 텍스트 자체가 유일하게 다른 sub_shout_c("우아"로 시작 - 나머지 4개는 전부 "우와")를
+# 자연스러운 v4 잔류 후보로 골랐다. 길이 가중 랜덤 선택 기준 c가 뽑힐 확률은 약 19%
+# (main_explode_d의 27%와 비슷한 자릿수) - "가끔 v4 톤이 섞여 나오는" 의도한 비중과
+# 부합. 게인은 VOICE_MIX_GAIN_DB_FILE_OVERRIDE 참고.
 SUB_EXPLODE_TEXT = {
-    "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.30s(트림), v4
+    "sub_shout_a.wav": "우와" + "아" * 8 + "!!",  # 1.60s, v3(원복)
     # 🛡️ [재녹음 - "우와아아악" 계열로 통일] "히"+"이" 계열("허"+"어" 실패 이후 택했던 회피
     # 전략)이 main/hype와 계열 자체가 달라 이질감이 있었다는 피드백으로, "우와"/"우아" 도입부
     # 뒷모음 개수만 다르게 변주하는 전략으로 재시도 - 이번엔 3개 다 1회 시도 만에 무음 0곳
-    # 통과(noise=-30dB:d=0.02 기준, edge_margin=0.1s). (v3 시절 기록 - 텍스트 선택 사유는
-    # 여전히 유효, 오디오는 v4로 교체됨)
-    "sub_shout_b.wav": "우와" + "아" * 6 + "악!!",  # 1.39s(트림), v4
-    "sub_shout_c.wav": "우아" + "아" * 8 + "악!!",  # 1.49s(트림), v4
-    "sub_shout_d.wav": "우와" + "아" * 6 + "!!",  # 1.21s(트림), v4
-    "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.21s(트림), v4
+    # 통과(noise=-30dB:d=0.02 기준, edge_margin=0.1s).
+    "sub_shout_b.wav": "우와" + "아" * 6 + "악!!",  # 1.68s, v3(원복)
+    "sub_shout_c.wav": "우아" + "아" * 8 + "악!!",  # 1.49s(트림), v4 유지
+    "sub_shout_d.wav": "우와" + "아" * 6 + "!!",  # 1.76s, v3(원복)
+    "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.36s, v3(원복)
 }
 
 # ── 1단계(Hype 닉네임 샤우팅, 실시간 TTS) ──
