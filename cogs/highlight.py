@@ -1005,7 +1005,14 @@ STAGE0_OFFSET_MAX_SEC = 0.15
 
 ELEVENLABS_VOICE_IDS = {
     "main": "tlUdVt24VftfDokp32eu",  # LCK_Main_caster
-    "hype": "IyAj6lA2EjUlXLg33b1o",  # LCK_Hype_Reaction
+    # 🛡️ [1단계 닉네임 샤우팅 - hype -> lck_caster_dynamic 교체] 0단계(환호, 정적 풀)가
+    # 아니라 1단계(닉네임 샤우팅, 실시간 TTS)가 원래 의도한 교체 자리였다 - 지난 라운드는
+    # 착오로 0단계에 적용했었고, 그건 되돌리지 않고 그대로 둔 채(0단계와 1단계 둘 다
+    # lck_caster_dynamic을 쓰게 됨) 이번에 1단계도 추가로 바꾼다. "hype" 키는 이제
+    # nickname_voice_keys(KO)에서만 쓰였는데 그 자리가 교체되면서 완전히 미사용이 돼
+    # 삭제했다(voice_id=IyAj6lA2EjUlXLg33b1o, LCK_Hype_Reaction - 필요하면 git 이력에서
+    # 복구 가능).
+    "lck_caster_dynamic": "GriSG3WMe4Ve3jcVnYBf",
     "sub": "K4OVml3awIZZxKC33zQV",   # Lck_Sub_Analyst
     # 🛡️ [영어 실시간 합성용] hype_nickname/main_fact 호출부에서 lang=="en"일 때만 골라 쓴다 -
     # _synthesize_voice_line 자체는 voice_key 문자열 하나만 보고 조회할 뿐 언어를 모르므로 건드리지 않음.
@@ -3334,9 +3341,9 @@ class KyvoHighlight(KyvoBaseCog):
     async def _synthesize_voice_line(self, text: str, voice_key: str, work_dir: str, out_basename: str) -> str:
         """실제 킬러/희생자 이름이 들어가는 대사를 ElevenLabs로 실시간 합성 - 렌더당 정확히
         4회 호출된다(1단계 닉네임 샤우팅 3보이스 동시 콜 + 3단계 Main의 사실 서술).
-        voice_key는 ELEVENLABS_VOICE_IDS의 키("main"/"hype"/"sub"/"sterling"/"carter"/
-        "atlee") 중 하나. 나머지 자리(0단계 세 목소리 + 2단계 Sub)는 닉네임이 필요 없는
-        순수 감정 표현이라 정적 풀에서 고른다.
+        voice_key는 ELEVENLABS_VOICE_IDS의 키("main"/"lck_caster_dynamic"/"sub"/"sterling"/
+        "carter"/"atlee") 중 하나. 나머지 자리(0단계 세 목소리 + 2단계 Sub)는 닉네임이
+        필요 없는 순수 감정 표현이라 정적 풀에서 고른다.
         🛡️ [stability 최초 명시] 이 경로는 지금까지 voice_settings를 아예 안 보내서 API
         기본값으로 돌아가고 있었다 - 이번에 처음으로 stability=0.55를 명시한다. style은
         같이 안 보낸다(can_use_style=False 모델이라 반영 안 됨이 확인됨 - 값을 넣어도
@@ -4079,12 +4086,12 @@ class KyvoHighlight(KyvoBaseCog):
         # 볼륨 스웰 자체의 시작 지점도 이름이 짧으면 뒤로 밀어야 한다("넥스" 실측 문제) -
         # 이건 스트레치 대상 여부(위 nickname_atempo_ratio)와 무관하게 항상 적용한다.
         nickname_start_ratio = _nickname_swell_start_ratio(shout_name)
-        # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+Hype+
-        # Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는 것으로 바꿔 임팩트를
-        # 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라 asyncio.gather로 4콜을
-        # 한 번에 병렬 처리해, 콜 수가 1->4로 늘어나도 순차 대기 시간이 그만큼 늘어나지
-        # 않게 한다(네트워크 latency가 동시에 겹친다).
-        nickname_voice_keys = ("sterling", "carter", "atlee") if lang == "en" else ("main", "hype", "sub")
+        # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+
+        # lck_caster_dynamic+Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는
+        # 것으로 바꿔 임팩트를 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라
+        # asyncio.gather로 4콜을 한 번에 병렬 처리해, 콜 수가 1->4로 늘어나도 순차 대기
+        # 시간이 그만큼 늘어나지 않게 한다(네트워크 latency가 동시에 겹친다).
+        nickname_voice_keys = ("sterling", "carter", "atlee") if lang == "en" else ("main", "lck_caster_dynamic", "sub")
         try:
             *hype_nickname_wavs_raw, main_fact_wav = await asyncio.gather(
                 *(self._synthesize_voice_line(hype_nickname_text, vk, work_dir, f"hype_nickname_raw_{i + 1}")
