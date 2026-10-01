@@ -723,15 +723,26 @@ MAIN_EXPLODE_TEXT = {
 # 기존 결론과 일치. 대신 HYPE_EXPLODE_POOL만 v3 원본(assets/highlight_voice/
 # _backup_v3_pool_20260930/)으로 되돌리고 MAIN_EXPLODE/SUB_EXPLODE는 v4를 유지했더니
 # 평균 pairwise 차이가 101.0Hz로 v3 수준에 근접 회복됐다(main-hype 83.1Hz, main-sub
-# 68.3Hz, hype-sub 151.4Hz) - 아래 6개 파일은 v3 원본이다(모델/stability 정보는 이
-# 파일들을 처음 녹음했을 당시 기록 참고 - 이 라운드에서는 재생성하지 않음).
+# 68.3Hz, hype-sub 151.4Hz) - 당시엔 이 6개가 v3 원본이었다(아래 보이스 교체로 더 이상
+# 해당 없음).
+# 🛡️ [Hype -> lck_caster_dynamic 교체] 0단계 3인조에서 Hype 보이스를 빼고 그 자리에
+# lck_caster_dynamic(pre_buildup 전용 내레이터)을 겸직으로 추가했다 - "셋이 겹쳐서
+# 한 명처럼 들린다"는 피드백 대응의 일환(완전 동시 시작 문제와 별개로, 세 번째 목소리
+# 자체가 더 뚜렷이 구분되도록). Hype 페르소나는 1단계 닉네임 샤우팅과 리드인 겹침
+# (LEADIN_OVERLAY_POOL)에는 그대로 남아 있다 - 0단계에서만 빠진다. 텍스트(모음 반복
+# 패턴)는 그대로 유지, eleven_v4 + stability=0.55(태그 없음, 기존 lck_caster_dynamic
+# 관례) + 트레일링 무음 트림으로 재생성했고 6개 전부 1회 시도로 무음 게이트 통과했다.
+# 게인은 기존 hype_explode 역할 기본값(VOICE_MIX_GAIN_DB_OVERRIDE, 6.0dB)을 그대로
+# 쓴다 - 파일 단위 오버라이드(VOICE_MIX_GAIN_DB_FILE_OVERRIDE)는 추가하지 않았다(이미
+# main/sub와 동일한 6.0dB 기반이라 새로운 마스킹 구조를 만들지 않음). 기존 v3 원본은
+# assets/highlight_voice/_backup_hype_explode_v3_20261001/ 에 백업.
 HYPE_EXPLODE_TEXT = {
-    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 2.08s, v3(원복)
-    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.76s, v3(원복)
-    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.36s, v3(원복)
-    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.68s, v3(원복)
-    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 2.00s, v3(원복)
-    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.76s, v3(원복)
+    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 1.67s(트림), lck_caster_dynamic
+    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.58s(트림), lck_caster_dynamic
+    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.49s(트림), lck_caster_dynamic
+    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.67s(트림), lck_caster_dynamic
+    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 1.86s(트림), lck_caster_dynamic
+    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.67s(트림), lck_caster_dynamic
 }
 # 🛡️ [sub_shout도 main_explode와 같은 패턴 - 일부만 v3 원복] main_explode와 동일하게
 # "v4 톤이 얇고 꽥꽥거림" 피드백으로 5개 중 1개만 v4로 남기고 나머지는 v3 원본으로
@@ -764,6 +775,16 @@ SUB_EXPLODE_TEXT = {
 # 결합해서 "길게 끄는 느낌"을 오디오 후처리로 흉내낸다(_apply_nickname_swell). 0단계가 이미
 # "우와아아아악!!" 감탄사를 셋이 같이 외치므로, 여기선 닉네임만 - 감탄사 중복 없음.
 HYPE_NICKNAME_SHOUT_TEMPLATE = "{killer}~~!!"
+# 🛡️ [하이픈 늘려 부르기 - "장이이인정시이인!!"과는 다른 방식] 위 주석의 음절 내부 반복
+# 방식(오발음 확인돼 폐기)과 달리, 이건 음절 "사이"에만 하이픈을 끼운다("페이커" ->
+# "페-이-커") - 오늘 재현 실험(하이픈 1개/2개 × main/lck_caster_dynamic × 각 5회, 총
+# 20회)에서 중간 무음(오발음 징후) 0건이었고, 뒤에 짧은 리액션 문장을 이어 붙이면
+# 단독 발화보다 억양이 더 자연스러워진다는 것도 실측 확인됐다(attack_rise 단독 0.079
+# -> 문맥 포함 0.127dB/ms, +60%). 물결표 2개+느낌표 4개(물결표가 ElevenLabs 텍스트
+# 정규화에서 "길게 끄는 소리"로 해석되는 것으로 추정)까지 포함해 실측된 조합 그대로
+# 가져온다. 리액션 문구는 팩트를 전혀 포함하지 않는 순수 반응이라(오늘 원칙과 동일)
+# 어떤 킬에도 안전하게 붙일 수 있다.
+HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE = "{hyphenated}~~!!!! 그냥 돌아버렸는데요??!!"
 # 🛡️ [협공 킬 - 팀명 샤우팅] 어시스트가 있는 킬(2대1 등 협공)은 킬러 개인 닉네임 대신
 # 팀명을 3보이스로 외친다 - team100=블루팀/team200=레드팀 매핑은 _format_match_context_block
 # (대본 컨텍스트 블록)에서 이미 쓰던 것과 동일하게 재사용.
@@ -792,6 +813,18 @@ NICKNAME_SWELL_ATEMPO_RATIO = 0.6
 # 스트레치 적용(고정 문자열 4개뿐이라 이미 개별 실측 검증됨).
 NICKNAME_STRETCH_MIN_LEN = 3
 NICKNAME_STRETCH_MAX_LEN = 5
+# 🛡️ [하이픈 늘려 부르기 - 3음절로 범위 축소, 실측 발견] 위 3~5자 범위는 기존 오디오
+# 후처리(atempo 스웰) 기준이다 - 텍스트에 하이픈을 직접 끼우는 새 기능(아래 use_hyphen_
+# stretch)은 "페이커"(3음절) 기준으로만 오늘 45회(20+25) 실측 검증됐다. 실제 구현 후
+# 4/5음절("쇼메이커"/"데프트초롱")로 재검증했더니 둘 다 하이픈 이름과 뒤에 붙인 리액션
+# 문장 사이에 새로운 중간 무음(1.3~1.5s 지점, 트레일링과 별개)이 생겨 무음 2곳으로
+# 걸렸다 - _trim_trailing_silence는 "정확히 1곳"일 때만 안전하게 자르므로 이 경우
+# 원본을 그대로 둔다(섣불리 첫 무음 앞까지 자르면 리액션 문장 전체가 날아감). 3음절만
+# 검증된 상태로 4~5음절까지 넓히는 건 근거가 부족하다고 판단해, 하이픈 늘려 부르기는
+# 정확히 3음절에서만 적용하고 4~5자는 기존 atempo 스웰 경로로 그대로 폴백한다(아래
+# NICKNAME_STRETCH_MIN_LEN<=len<=NICKNAME_STRETCH_MAX_LEN elif가 자연히 받아줌) -
+# 4~5음절 하이픈 늘려 부르기는 별도 조사 후 넓힐 수 있는 여지로 남겨둔다.
+NICKNAME_HYPHEN_STRETCH_MAX_LEN = 3
 # 🛡️ [스웰 시작 비율 동적화 - 짧은 이름 실측 문제 수정] "넥스"(2음절) 실측 결과 고정
 # 0.55가 마지막 음절("스", 실측 경계 약 72% 지점)이 아니라 첫 음절("넥") 중간에 걸리는
 # 게 확인됐다 - 음절마다 실제 길이가 크게 다르고("넥"이 "스"보다 훨씬 길었음) 음절
@@ -814,6 +847,26 @@ def _nickname_swell_start_ratio(name: str) -> float:
     if n == 3:
         return NICKNAME_SWELL_START_RATIO_3SYL
     return NICKNAME_SWELL_START_RATIO
+
+
+_HANGUL_SYLLABLE_RE = re.compile(r"^[가-힣]+$")
+
+
+def _is_pure_hangul(name: str) -> bool:
+    """name이 한글 음절(가-힣)로만 이루어졌는지 확인하는 순수 함수(테스트 가능) -
+    len(name)==음절 수라는 전제가 성립하는 범위를 한정한다. 롤 닉네임은 영문/숫자/특수
+    문자도 흔해서("Nyx", "Hide on bush" 등) 길이만 보고 하이픈을 끼우면 "N-y-x"처럼
+    글자 단위로 끊어 읽는 무의미한 표기가 될 위험이 있다(실측으로 발견 - 길이 조건만
+    쓰던 기존 atempo 스웰 분기는 오디오 후처리라 이 문제가 없었지만, 텍스트에 직접
+    하이픈을 끼우는 이 기능은 다르다)."""
+    return bool(_HANGUL_SYLLABLE_RE.fullmatch(name))
+
+
+def _hyphenate_korean_name(name: str) -> str:
+    """한글 이름을 음절(글자) 단위로 하이픈을 끼워 늘려 부르기 표기로 바꾸는 순수 함수
+    (테스트 가능) - "페이커" -> "페-이-커". 호출부가 _is_pure_hangul로 걸러낸 순수 한글
+    이름 3~5자 범위에서만 쓴다(HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE 참고)."""
+    return "-".join(name)
 
 # ── 2단계(Sub 의문형 감탄, 정적 풀) ──
 SUB_QUESTION_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_question_*.wav")))
@@ -942,6 +995,13 @@ PRE_BUILDUP_MAX_COUNT = 3
 # 늘어나는 방식으로 흡수한다 - 실측 결과는 커밋 메시지 참고.
 STAGE_OVERLAP_RATIO = 0.85
 RENDER_TAIL_BUFFER_SEC = 0.8      # 마지막으로 끝나는 목소리 종료 후 여유
+# 🛡️ [0단계 3트랙 시차 - "한 명처럼 들린다" 피드백] main/hype/sub_explode 셋 다 "start":
+# kill_t로 완전히 동일한 순간에 시작한다는 게 실측 확인됐다(delay_ms까지 밀리초 단위로
+# 동일) - 완전 동시 시작이 셋이 하나로 뭉쳐 들리는 원인일 수 있다고 판단해, 각 트랙에
+# 독립적인 0~150ms 랜덤 오프셋을 준다(_stage0_track_starts). 150ms는 "따로 외치는"
+# 느낌을 주면서도 킬 임팩트 타이밍 자체가 체감될 만큼 밀리지는 않는 범위로 잡았다 -
+# 더 정밀한 값은 직접 들어보고 조정 가능.
+STAGE0_OFFSET_MAX_SEC = 0.15
 
 ELEVENLABS_VOICE_IDS = {
     "main": "tlUdVt24VftfDokp32eu",  # LCK_Main_caster
@@ -981,6 +1041,29 @@ def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
     t2 = t1 + stage1_dur * ratio
     t3 = t2 + stage2_dur * ratio
     return {"t1": t1, "t2": t2, "t3": t3}
+
+
+def _stage0_track_starts(kill_t: float, max_offset_sec: float = STAGE0_OFFSET_MAX_SEC,
+                          rng: random.Random | None = None) -> tuple[float, float, float]:
+    """0단계 3트랙(main/hype/sub_explode) 각각에 독립적인 [0, max_offset_sec) 랜덤
+    오프셋을 더한 시작 시각(main, hype, sub 순)을 반환하는 순수 함수(테스트 가능, rng를
+    주입하면 결정적으로 테스트 가능) - 셋 다 kill_t에 완전히 동시 시작하던 걸 깨서
+    "한 명처럼 들린다"는 문제를 완화한다."""
+    _rng = rng if rng is not None else random
+    return (
+        kill_t + _rng.uniform(0, max_offset_sec),
+        kill_t + _rng.uniform(0, max_offset_sec),
+        kill_t + _rng.uniform(0, max_offset_sec),
+    )
+
+
+def _stage0_duration(starts: tuple[float, float, float], durations: tuple[float, float, float],
+                      kill_t: float) -> float:
+    """0단계가 끝나는 시점(세 트랙 중 가장 늦게 끝나는 지점)을 kill_t 기준 상대값으로
+    계산하는 순수 함수(테스트 가능) - 예전엔 셋 다 kill_t에서 동시 시작해 "길이의
+    최댓값=종료 시점의 최댓값"이 성립했지만, _stage0_track_starts로 트랙마다 시작이
+    달라지면 더는 아니다 - "시작+길이"의 최댓값으로 계산해야 정확하다."""
+    return max(s + d for s, d in zip(starts, durations)) - kill_t
 
 
 def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_count: int) -> list[float]:
@@ -2089,6 +2172,33 @@ class KyvoHighlight(KyvoBaseCog):
             capture_output=True, check=True,
         )
         return new_duration
+
+    @staticmethod
+    def _trim_trailing_silence(wav_path: str, duration: float, out_path: str,
+                                noise_db: float = -35.0, min_silence_sec: float = 0.15,
+                                margin_sec: float = 0.05) -> float:
+        """하이픈 늘려 부르기(HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE) 전용 후처리 -
+        _apply_nickname_swell 대신 쓴다(둘을 같이 적용하면 이미 하이픈+물결표로 늘어진
+        발화를 또 atempo로 늦추는 이중 적용이 되고, 스웰의 볼륨 페이드업 구간 가정도
+        뒤에 붙은 리액션 문장 때문에 안 맞게 됨). 오늘 재현 실험으로 확인된 "무음이
+        정확히 1곳, 항상 클립 끝(트레일링 꼬리)"이라는 패턴을 그대로 적용한다 - 실시간
+        경로라 재시도가 불가능하므로, 패턴과 다르면(무음 0곳 또는 2곳 이상 - 중간에도
+        무음이 있다는 뜻이라 섣불리 자르면 내용이 잘릴 위험) 원본을 그대로 복사하고
+        duration을 안 바꾼다("모르면 건드리지 않는다")."""
+        r = subprocess.run(
+            [FFMPEG_EXE, "-i", wav_path, "-af",
+             f"silencedetect=noise={noise_db}dB:d={min_silence_sec}", "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        starts = [float(x) for x in re.findall(r"silence_start:\s*([\d.]+)", r.stderr)]
+        if len(starts) == 1:
+            cut_at = starts[0] + margin_sec
+            subprocess.run([FFMPEG_EXE, "-y", "-i", wav_path, "-t", str(cut_at), "-c", "copy", out_path],
+                            capture_output=True, check=True)
+            return cut_at
+        subprocess.run([FFMPEG_EXE, "-y", "-i", wav_path, "-c", "copy", out_path],
+                        capture_output=True, check=True)
+        return duration
 
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
@@ -3933,17 +4043,34 @@ class KyvoHighlight(KyvoBaseCog):
         else:
             shout_name = killer_name
             is_team_shout = False
-        hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
+        # 🛡️ [하이픈 늘려 부르기 적용 조건] 개인 닉네임(팀 샤우팅 아님) + 순수 한글 정확히
+        # 3음절(NICKNAME_HYPHEN_STRETCH_MAX_LEN 주석 참고 - 4~5음절은 실측으로 중간 무음
+        # 문제 발견돼 제외) + KO(EN은 한글 음절 분리 구조 자체가 의미 없어 대상 아님) +
+        # _is_pure_hangul(영문 닉네임 "Nyx" 등을 "N-y-x"처럼 글자 단위로 쪼개는 무의미한
+        # 표기가 되는 걸 막음, 실측 중 발견된 버그)일 때만 적용.
+        use_hyphen_stretch = (
+            lang != "en" and not is_team_shout
+            and NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_HYPHEN_STRETCH_MAX_LEN
+            and _is_pure_hangul(killer_name)
+        )
+        if use_hyphen_stretch:
+            hype_nickname_text = HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE.format(
+                hyphenated=_hyphenate_korean_name(shout_name))
+        else:
+            hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
         # 🛡️ [개인 닉네임 타임스트레치 - 글자 수 분기] 팀명 샤우팅은 고정 문자열(레드팀/
         # 블루팀/Team Red/Team Blue) 4개뿐이라 항상 타임스트레치를 적용해도 이미 실측
-        # 검증됨(무조건 NICKNAME_SWELL_ATEMPO_RATIO). 반면 개인 닉네임은 임의 길이라
-        # 아주 짧은 이름(1~2자)이나 긴 이름(6자+)까지 똑같이 늘리면 부자연스러울 위험이
-        # 있어, 글자 수 3~5자(한글 기준 음절 수와 일치)일 때만 스트레치를 걸고 그 밖엔
-        # atempo=1.0(무변화)으로 둬서 볼륨 스웰만 적용되게 한다 - _apply_nickname_swell은
-        # atempo_ratio=1.0이면 tail 길이가 그대로 유지되므로(수식상 자명) 별도 분기 없이
-        # 같은 함수를 그대로 재사용할 수 있다.
+        # 검증됨(무조건 NICKNAME_SWELL_ATEMPO_RATIO). 개인 닉네임 순수 한글 정확히 3자만
+        # 위 하이픈 늘려 부르기로 대체됐고(use_hyphen_stretch=True면 호출부가
+        # _apply_nickname_swell 대신 _trim_trailing_silence를 쓴다 - 이 atempo 값은
+        # 그 경우 미사용), 4~5자(KO 한글 포함, 중간 무음 실측 문제로 하이픈 대상 아님)나
+        # 영문 닉네임 3~5자는 기존 그대로 atempo 스웰이 적용된다 - 2자 이하/6자 이상/EN만
+        # atempo=1.0(무변화, 볼륨 스웰만). _apply_nickname_swell은 atempo_ratio=1.0이면
+        # tail 길이가 그대로 유지되므로(수식상 자명) 별도 분기 없이 같은 함수를 재사용한다.
         if is_team_shout:
             nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
+        elif use_hyphen_stretch:
+            nickname_atempo_ratio = 1.0  # 미사용(트림 경로를 탐) - 값만 안전하게 채워둠
         elif NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_STRETCH_MAX_LEN:
             nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
         else:
@@ -4156,33 +4283,48 @@ class KyvoHighlight(KyvoBaseCog):
                 ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-                # 닉네임 샤우팅 뒷부분에 볼륨 스웰+타임스트레치 후처리(3개 파일 각각 적용) -
-                # tail이 실제로 늘어나므로 hype_nickname_durations를 반환된 새 길이로 갱신한다
-                # (이 리스트를 그대로 쓰는 아래 plan_kill_sequence/end_times가 늘어난 길이를
-                # 반영해야 뒤가 안 잘림).
+                # 닉네임 샤우팅 뒷부분 후처리(3개 파일 각각 적용) - use_hyphen_stretch면
+                # 하이픈+물결표+느낌표로 이미 텍스트 단에서 늘어진 발화이므로 볼륨 스웰/
+                # atempo 이중 적용 대신 트레일링 무음만 트림한다(_trim_trailing_silence),
+                # 그 외엔 기존 볼륨 스웰+타임스트레치 그대로(_apply_nickname_swell). 어느
+                # 쪽이든 길이가 바뀔 수 있으므로 hype_nickname_durations를 반환값으로
+                # 갱신한다(아래 plan_kill_sequence/end_times가 늘어난 길이를 반영해야
+                # 뒤가 안 잘림).
                 hype_nickname_wavs = []
                 for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
-                    swelled = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
-                    new_dur = await self._to_executor(
-                        self._apply_nickname_swell, raw, dur, swelled,
-                        nickname_atempo_ratio, nickname_start_ratio)
+                    out_path = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
+                    if use_hyphen_stretch:
+                        new_dur = await self._to_executor(self._trim_trailing_silence, raw, dur, out_path)
+                    else:
+                        new_dur = await self._to_executor(
+                            self._apply_nickname_swell, raw, dur, out_path,
+                            nickname_atempo_ratio, nickname_start_ratio)
                     hype_nickname_durations[i] = new_dur
-                    hype_nickname_wavs.append(swelled)
+                    hype_nickname_wavs.append(out_path)
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
                 return
 
-            # 0단계: Main+Hype+Sub 셋 다 kill_t에 정확히 동시 시작(닉네임 없는 순수 폭발).
+            # 0단계: Main+Hype+Sub 셋 다 kill_t 근처(0~150ms 각자 독립 랜덤 오프셋, 완전
+            # 동시 시작이 "한 명처럼 들린다"는 문제의 원인일 수 있다고 판단해 추가 -
+            # STAGE0_OFFSET_MAX_SEC 주석 참고)에서 시작(닉네임 없는 순수 폭발).
             # plan_kill_sequence()는 순수 함수 - 1/2/3단계 시작을 "직전 단계 최장 목소리 길이 ×
             # STAGE_OVERLAP_RATIO" 지점으로 잡는다(고정 초 아님, 0단계 길이와 무관하게 1/2/3단계
             # 상호 간격은 각자 자기 길이 × 비율로만 정해진다 - 0단계가 길어져도 t2-t1/t3-t2 간격
             # 자체는 안 변하고, 셋 다 kill_t 기준으로 똑같이 더 뒤로 밀릴 뿐이다).
+            # 🛡️ [stage0_dur 계산 수정 - 오프셋 반영] 예전엔 셋 다 kill_t에서 동시 시작해
+            # "길이의 최댓값=종료 시점의 최댓값"이 성립했지만, 트랙마다 시작이 달라지는
+            # 지금은 "시작+길이"의 최댓값으로 계산해야 한다(_stage0_duration).
+            main_explode_start, hype_explode_start, sub_explode_start = _stage0_track_starts(kill_t)
+            stage0_dur = _stage0_duration(
+                (main_explode_start, hype_explode_start, sub_explode_start),
+                (main_explode_duration, hype_explode_duration, sub_explode_duration),
+                kill_t)
             # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
             # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계가 밀리는 시점은 가장
             # 늦게 끝나는 목소리에 맞춰야 한다.
-            stage0_dur = max(main_explode_duration, hype_explode_duration, sub_explode_duration)
             seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), sub_question_duration)
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
@@ -4214,7 +4356,9 @@ class KyvoHighlight(KyvoBaseCog):
                     leadin_overlay_file = None
 
             end_times = [
-                kill_t + main_explode_duration, kill_t + hype_explode_duration, kill_t + sub_explode_duration,
+                main_explode_start + main_explode_duration,
+                hype_explode_start + hype_explode_duration,
+                sub_explode_start + sub_explode_duration,
                 *(hype_nickname_start + dur for dur in hype_nickname_durations),
                 sub_question_start + sub_question_duration,
                 main_fact_start + main_fact_duration,
@@ -4227,11 +4371,11 @@ class KyvoHighlight(KyvoBaseCog):
                 "kill_t": kill_t,
                 "total_duration": total_duration,
                 "main_explode": {"wav": main_explode_file, "text": MAIN_EXPLODE_TEXT[os.path.basename(main_explode_file)],
-                                  "start": kill_t, "duration": main_explode_duration},
+                                  "start": main_explode_start, "duration": main_explode_duration},
                 "hype_explode": {"wav": hype_explode_file, "text": HYPE_EXPLODE_TEXT[os.path.basename(hype_explode_file)],
-                                  "start": kill_t, "duration": hype_explode_duration},
+                                  "start": hype_explode_start, "duration": hype_explode_duration},
                 "sub_explode": {"wav": sub_explode_file, "text": SUB_EXPLODE_TEXT[os.path.basename(sub_explode_file)],
-                                 "start": kill_t, "duration": sub_explode_duration},
+                                 "start": sub_explode_start, "duration": sub_explode_duration},
                 "sub_question": {"wav": sub_question_file, "text": SUB_QUESTION_TEXT[os.path.basename(sub_question_file)],
                                   "start": sub_question_start, "duration": sub_question_duration},
                 "main_fact": {"wav": main_fact_wav, "text": main_fact_text,
