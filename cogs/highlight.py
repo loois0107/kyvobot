@@ -3849,7 +3849,7 @@ class KyvoHighlight(KyvoBaseCog):
             assists = [names.get(a, {}).get("name", "Unknown") for a in k["assist_ids"]]
             # 🛡️ [협공 닉네임 샤우팅용] killer_id가 있으면(미니언/포탑 킬이 아니면) 그 팀
             # id(100/200)를 같이 들고 있는다 - 어시스트가 있는 킬일 때 "누구 닉네임"
-            # 대신 팀명으로 샤우팅을 바꾸기 위해 필요(아래 hype_nickname_text 참고).
+            # 대신 팀명으로 샤우팅을 바꾸기 위해 필요(아래 hype_nickname_text_by_voice 참고).
             killer_team_id = names.get(k["killer_id"], {}).get("team_id") if k["killer_id"] else None
             kills_with_names.append({
                 "index": i, "timestamp_ms": k["timestamp_ms"],
@@ -4060,24 +4060,33 @@ class KyvoHighlight(KyvoBaseCog):
             and NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_HYPHEN_STRETCH_MAX_LEN
             and _is_pure_hangul(killer_name)
         )
+        # 🛡️ [보이스별 부분 적용 - sub 중간 무음 재현 확인 후] 하이픈 늘려 부르기를 3보이스
+        # 공유 문자열 하나로 보냈더니, sub만 떼서 5회 재테스트해도 5/5 전부 같은 지점
+        # (하이픈 이름과 리액션 문장 사이)에서 중간 무음이 재현됐다 - hype 탓이 아니라
+        # sub 자체가 이 텍스트 구조와 구조적으로 안 맞는다는 뜻. main/lck_caster_dynamic
+        # 둘만 늘림+리액션 텍스트를 받고, sub는 일반 템플릿(볼륨 스웰)을 그대로 받도록
+        # 보이스별 텍스트 매핑으로 바꿨다 - 팀명 샤우팅(EN 포함)은 전부 use_hyphen_stretch
+        # 가 False라 항상 일반 템플릿만 받는다(회귀 없음).
+        plain_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
+        hype_nickname_text_by_voice = {
+            vk: plain_nickname_text
+            for vk in ("main", "lck_caster_dynamic", "sub", "sterling", "carter", "atlee")
+        }
         if use_hyphen_stretch:
-            hype_nickname_text = HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE.format(
+            stretched_nickname_text = HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE.format(
                 hyphenated=_hyphenate_korean_name(shout_name))
-        else:
-            hype_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
+            hype_nickname_text_by_voice["main"] = stretched_nickname_text
+            hype_nickname_text_by_voice["lck_caster_dynamic"] = stretched_nickname_text
+            # sub는 plain_nickname_text 그대로(기존 볼륨 스웰 경로 유지)
         # 🛡️ [개인 닉네임 타임스트레치 - 글자 수 분기] 팀명 샤우팅은 고정 문자열(레드팀/
         # 블루팀/Team Red/Team Blue) 4개뿐이라 항상 타임스트레치를 적용해도 이미 실측
-        # 검증됨(무조건 NICKNAME_SWELL_ATEMPO_RATIO). 개인 닉네임 순수 한글 정확히 3자만
-        # 위 하이픈 늘려 부르기로 대체됐고(use_hyphen_stretch=True면 호출부가
-        # _apply_nickname_swell 대신 _trim_trailing_silence를 쓴다 - 이 atempo 값은
-        # 그 경우 미사용), 4~5자(KO 한글 포함, 중간 무음 실측 문제로 하이픈 대상 아님)나
-        # 영문 닉네임 3~5자는 기존 그대로 atempo 스웰이 적용된다 - 2자 이하/6자 이상/EN만
-        # atempo=1.0(무변화, 볼륨 스웰만). _apply_nickname_swell은 atempo_ratio=1.0이면
-        # tail 길이가 그대로 유지되므로(수식상 자명) 별도 분기 없이 같은 함수를 재사용한다.
+        # 검증됨(무조건 NICKNAME_SWELL_ATEMPO_RATIO). 이 값은 이제 "볼륨 스웰 경로를 타는
+        # 보이스"(sub는 항상, main/lck_caster_dynamic은 use_hyphen_stretch=False일 때만)
+        # 전용이라 use_hyphen_stretch 여부와 무관하게 글자 수 기준 그대로 계산한다 -
+        # 3~5자(한글 기준 음절 수와 일치)면 스웰 타임스트레치, 2자 이하/6자 이상/EN은
+        # atempo=1.0(무변화, 볼륨 스웰만).
         if is_team_shout:
             nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
-        elif use_hyphen_stretch:
-            nickname_atempo_ratio = 1.0  # 미사용(트림 경로를 탐) - 값만 안전하게 채워둠
         elif NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_STRETCH_MAX_LEN:
             nickname_atempo_ratio = NICKNAME_SWELL_ATEMPO_RATIO
         else:
@@ -4094,7 +4103,7 @@ class KyvoHighlight(KyvoBaseCog):
         nickname_voice_keys = ("sterling", "carter", "atlee") if lang == "en" else ("main", "lck_caster_dynamic", "sub")
         try:
             *hype_nickname_wavs_raw, main_fact_wav = await asyncio.gather(
-                *(self._synthesize_voice_line(hype_nickname_text, vk, work_dir, f"hype_nickname_raw_{i + 1}")
+                *(self._synthesize_voice_line(hype_nickname_text_by_voice[vk], vk, work_dir, f"hype_nickname_raw_{i + 1}")
                   for i, vk in enumerate(nickname_voice_keys)),
                 self._synthesize_voice_line(main_fact_text, "sterling" if lang == "en" else "main", work_dir, "main_fact"),
             )
@@ -4184,7 +4193,7 @@ class KyvoHighlight(KyvoBaseCog):
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
             for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
-                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text,
+                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
                                                        "start": hype_nickname_start, "duration": dur}
             if atlee_sub_question_file is not None:
                 schedule["sub_question"] = {
@@ -4290,17 +4299,19 @@ class KyvoHighlight(KyvoBaseCog):
                 ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
-                # 닉네임 샤우팅 뒷부분 후처리(3개 파일 각각 적용) - use_hyphen_stretch면
-                # 하이픈+물결표+느낌표로 이미 텍스트 단에서 늘어진 발화이므로 볼륨 스웰/
-                # atempo 이중 적용 대신 트레일링 무음만 트림한다(_trim_trailing_silence),
-                # 그 외엔 기존 볼륨 스웰+타임스트레치 그대로(_apply_nickname_swell). 어느
-                # 쪽이든 길이가 바뀔 수 있으므로 hype_nickname_durations를 반환값으로
+                # 🛡️ [보이스별 후처리 분기 - sub만 기존 방식 유지] use_hyphen_stretch여도
+                # 더 이상 3개 전부 트림하지 않는다 - sub는 하이픈+리액션 텍스트를 애초에
+                # 안 받으므로(hype_nickname_text_by_voice) 항상 기존 볼륨 스웰/타임스트레치
+                # 경로(_apply_nickname_swell)를 타고, main/lck_caster_dynamic만 늘린
+                # 텍스트를 받았을 때 트레일링 무음 트림(_trim_trailing_silence)을 쓴다.
+                # 어느 쪽이든 길이가 바뀔 수 있으므로 hype_nickname_durations를 반환값으로
                 # 갱신한다(아래 plan_kill_sequence/end_times가 늘어난 길이를 반영해야
                 # 뒤가 안 잘림).
                 hype_nickname_wavs = []
                 for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
                     out_path = os.path.join(work_dir, f"hype_nickname_{i + 1}.wav")
-                    if use_hyphen_stretch:
+                    vk = nickname_voice_keys[i]
+                    if use_hyphen_stretch and vk in ("main", "lck_caster_dynamic"):
                         new_dur = await self._to_executor(self._trim_trailing_silence, raw, dur, out_path)
                     else:
                         new_dur = await self._to_executor(
@@ -4389,7 +4400,7 @@ class KyvoHighlight(KyvoBaseCog):
                               "start": main_fact_start, "duration": main_fact_duration},
             }
             for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
-                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text,
+                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
                                                        "start": hype_nickname_start, "duration": dur}
             if eoeo_start is not None:
                 schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
