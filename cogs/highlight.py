@@ -768,6 +768,78 @@ SUB_EXPLODE_TEXT = {
     "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.36s, v3(원복)
 }
 
+# ══════════════════════════════════════════════════════════
+#  전투 지속 리액션 (0단계 ~ 1단계 사이, 조건부) - 설계 검토 라운드에서 확정된 결론을
+#  그대로 구현한다: kill_t부터 1단계 시작까지의 간격은 "뽑힌 환호 파일 길이"일 뿐이라
+#  전투 지속시간과 무관하고, 대신 이미 계산되는 pre_buildup_slot_count(N, 리드인에 상황
+#  멘트가 몇 개나 들어갔는지)가 "리드인이 충분히 길었다 = 어느 정도 공방이 있었을
+#  가능성이 높다"는 간접 신호로 쓸 만하다고 판단했다 - 새 임계값을 발명하는 대신 이미
+#  1000회 시뮬레이션으로 검증된 이 값을 그대로 재사용한다(BATTLE_REACTION_MIN_PRE_
+#  BUILDUP_SLOTS=2, N=3이 최대이므로 "최대 아니면 적어도 2"가 기준).
+#  0~3단계는 전부 85% 겹치게 설계돼 있어("빈 시간"이 없음) 삽입할 자리를 새로 만드는
+#  대신, 0단계->1단계 전환 지점(t1 = stage0_dur*ratio, 기존과 동일)에 전투 리액션을
+#  먼저 앵커링하고, 발동 시에만 1단계 시작을 그 리액션 길이만큼 통째로 뒤로 미는
+#  방식을 택했다(plan_kill_sequence에 battle_reaction_dur 파라미터 추가, 0이면 기존
+#  공식과 완전히 동일 - 회귀 없음).
+#  🛡️ [LEADIN_OVERLAY_CHANCE와 다른 구조] 그건 보이스 1개가 확률적으로 짧게 끼어드는
+#  "원-오프" 패턴이다. 이건 오늘 0단계에서 만든 패턴(main/lck_caster_dynamic/sub 3보이스가
+#  거의 동시에, 0~150ms 각자 랜덤 오프셋으로 겹쳐 말함)과 구조적으로 동일하다 -
+#  _stage0_track_starts/_stage0_duration을 이름 그대로 재사용한다(둘 다 범용적으로
+#  이미 작성돼 있어 "어느 단계냐"를 모른 채로도 동작함).
+# 🛡️ [비활성화 - 앵커링 위치 오류] 구현 직후 "환호+난입 리액션+닉네임이 연달아 쌓여
+# 난리/개판처럼 들린다"는 피드백으로 확인됨 - 의도는 "킬 나기 전, 싸우는 도중(리드인
+# 구간)"에 끼워 넣는 것이었는데, 실제 구현은 "킬 난 직후(0단계->1단계 사이)"에
+# 앵커링돼 완전히 다른 자리였다. plan_kill_sequence의 battle_reaction_dur 파라미터/
+# _pick_battle_reaction_files/BATTLE_MAIN_POOL 등 인프라와 15개 문구 음성 파일은
+# 그대로 남겨둔다(콘텐츠 자체는 재사용 가능) - 아래 플래그 하나로 트리거만 끈다.
+# 리드인 구간에 올바르게 앵커링하는 재설계는 별도 작업으로 진행한다.
+BATTLE_REACTION_ENABLED = False
+BATTLE_REACTION_MIN_PRE_BUILDUP_SLOTS = 2
+# 🛡️ [문구 5개, 서로 다른 포인트] "팩트를 지어내지 않는" 원칙 그대로 - 챔피언/행동을
+# 지목하지 않는 순수 격앙 반응만. 매 렌더 3개를 겹치지 않게(중복 없이) 뽑아 세 보이스가
+# 각자 다른 문구를 동시에 외치게 한다(아래 _run_pipeline 참고) - "계속 때려주고!" 3번
+# 반복처럼 안 들리게 하기 위함.
+BATTLE_REACTION_PHRASES = {
+    "a": "계속 때려주고!",
+    "b": "안 끝났어요, 이거!",
+    "c": "밀어붙이는데요!",
+    "d": "기회 왔어요, 지금!",
+    "e": "놓치지 마요, 이거!",
+}
+BATTLE_MAIN_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_main_*.wav")))
+BATTLE_LCK_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_lck_*.wav")))
+BATTLE_SUB_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_sub_*.wav")))
+# 🛡️ [합성 설정] eleven_v4 + [excited][shouts] 태그 + stability=0.45 - 오늘 확립된
+# "짧고 격앙된 문구"(urgent 풀) 레시피를 main/lck_caster_dynamic/sub 공통으로 그대로
+# 적용했다. 전부 정적 풀(사전 녹음)이라 실시간 경로의 트림 함수가 필요 없고, 생성
+# 시점에 이미 트레일링 무음을 트림해둔다(정적 풀 생성 관례 그대로).
+BATTLE_MAIN_TEXT = {f"battle_main_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
+BATTLE_LCK_TEXT = {f"battle_lck_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
+BATTLE_SUB_TEXT = {f"battle_sub_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
+
+
+def _pick_battle_reaction_files() -> dict[str, str] | None:
+    """BATTLE_REACTION_PHRASES 중 서로 다른 3개를 뽑아 main/lck_caster_dynamic/sub에
+    무작위로 배정한 파일 경로 매핑을 반환하는 순수 함수(테스트 가능) - 세 풀 중 하나라도
+    비어 있으면 안전하게 None(발동 스킵)을 반환한다. 문구-보이스 배정도 매번 섞어서,
+    "항상 같은 보이스가 같은 포인트를 외치는" 패턴이 안 생기게 한다."""
+    if not (BATTLE_MAIN_POOL and BATTLE_LCK_POOL and BATTLE_SUB_POOL):
+        return None
+    letters = random.sample(list(BATTLE_REACTION_PHRASES.keys()), 3)
+    voice_order = ["main", "lck_caster_dynamic", "sub"]
+    random.shuffle(voice_order)
+    pool_by_voice = {"main": BATTLE_MAIN_POOL, "lck_caster_dynamic": BATTLE_LCK_POOL, "sub": BATTLE_SUB_POOL}
+    prefix_by_voice = {"main": "battle_main_", "lck_caster_dynamic": "battle_lck_", "sub": "battle_sub_"}
+    result = {}
+    for vk, letter in zip(voice_order, letters):
+        fname = f"{prefix_by_voice[vk]}{letter}.wav"
+        match = next((p for p in pool_by_voice[vk] if os.path.basename(p) == fname), None)
+        if match is None:
+            return None  # 풀에 해당 글자 파일이 없으면(생성 누락 등) 안전하게 스킵
+        result[vk] = match
+    return result
+
+
 # ── 1단계(Hype 닉네임 샤우팅, 실시간 TTS) ──
 # 🛡️ [발음 표기] 이름 음절을 늘려 쓰는 방식("장이이인정시이인!!")은 TTS 발음 경계와 안 맞아
 # "장애~인정신"처럼 들리는 문제가 로컬 프로토타입에서 확인됨 - 음절은 그대로 두고 이름 끝에
@@ -1039,15 +1111,23 @@ ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_192"
 
 
 def plan_kill_sequence(stage0_dur: float, stage1_dur: float, stage2_dur: float,
+                        battle_reaction_dur: float = 0.0,
                         ratio: float = STAGE_OVERLAP_RATIO) -> dict:
     """0~3단계 타이밍 계획(순수 함수, 테스트 가능). kill_t를 기준(0)으로, 각 단계 시작을
     "직전 단계에서 가장 늦게 끝나는 목소리 길이 × ratio" 지점으로 잡는다 - 로컬 프로토타입
     v5~v9에서 검증된 방식 그대로. 반환값은 kill_t 기준 상대 오프셋(t1/t2/t3)이라, 호출부에서
-    kill_t를 더해 절대 시각으로 바꿔 쓴다."""
-    t1 = stage0_dur * ratio
+    kill_t를 더해 절대 시각으로 바꿔 쓴다.
+    🛡️ [전투 지속 리액션 삽입 - battle_reaction_dur] 0단계->1단계 전환 지점(t1 = stage0_dur
+    * ratio)은 그대로 두고, 그 지점에서 전투 리액션이 재생된 뒤에 1단계가 시작하도록
+    t1에 battle_reaction_dur*ratio를 더한다(같은 "겹침 철학"을 리액션->1단계 전환에도
+    동일하게 적용 - 새 전환 하나가 늘었을 뿐 규칙은 안 바꿈). battle_reaction_dur=0.0
+    (기본값, 조건 미충족/EN)이면 t1 = stage0_dur*ratio로 기존 공식과 완전히 동일하다 -
+    회귀 없음."""
+    t_battle = stage0_dur * ratio
+    t1 = t_battle + battle_reaction_dur * ratio
     t2 = t1 + stage1_dur * ratio
     t3 = t2 + stage2_dur * ratio
-    return {"t1": t1, "t2": t2, "t3": t3}
+    return {"t_battle": t_battle, "t1": t1, "t2": t2, "t3": t3}
 
 
 def _stage0_track_starts(kill_t: float, max_offset_sec: float = STAGE0_OFFSET_MAX_SEC,
@@ -2212,8 +2292,10 @@ class KyvoHighlight(KyvoBaseCog):
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
         pre_buildup(상황 멘트)/eoeo("어어??")/leadin_overlay(리드인 2보이스 겹침, 확률적,
         Hype 또는 Sub) (셋 다 킬 이전 리드인, 자리 없으면 없을 수도 있음)/main_explode/
-        hype_explode/sub_explode(0단계)/hype_nickname_1~3(1단계, 3보이스 동시 콜)/
-        sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
+        hype_explode/sub_explode(0단계)/battle_main·battle_lck_caster_dynamic·battle_sub
+        (전투 지속 리액션, 0단계~1단계 사이, pre_buildup_slot_count>=2일 때만 있을 수
+        있음)/hype_nickname_1~3(1단계, 3보이스 동시 콜)/sub_question(2단계)/main_fact
+        (3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
         {"wav","text","start","duration"}. 타이밍 자체는
         호출부에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로 ffmpeg 인풋/필터그래프를
         조립하기만 한다."""
@@ -2274,6 +2356,7 @@ class KyvoHighlight(KyvoBaseCog):
         # hype_nickname_1/2/3(KO: main+hype+sub, EN: sterling+carter+atlee)로 늘어났다.
         for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
                     "eoeo", "leadin_overlay", "main_explode", "hype_explode", "sub_explode",
+                    "battle_main", "battle_lck_caster_dynamic", "battle_sub",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
             entry = schedule.get(key)
@@ -4340,10 +4423,37 @@ class KyvoHighlight(KyvoBaseCog):
                 (main_explode_start, hype_explode_start, sub_explode_start),
                 (main_explode_duration, hype_explode_duration, sub_explode_duration),
                 kill_t)
+            # 🛡️ [전투 지속 리액션 - pre_buildup_slot_count(N)>=2일 때만] 설계 검토에서
+            # 확정된 결론 그대로 - N을 새 임계값 없이 그대로 재사용한다. 0단계->1단계
+            # 전환 지점(stage0_dur*STAGE_OVERLAP_RATIO)에 앵커링해 0단계와 같은 패턴
+            # (_stage0_track_starts)으로 3보이스가 서로 다른 문구를 겹쳐 외치고, 그
+            # 길이(battle_reaction_dur)만큼 plan_kill_sequence가 1~3단계 전체를 뒤로
+            # 민다 - 조건 미충족/풀 비어있음이면 battle_reaction_dur=0.0 그대로라 기존
+            # 공식과 완전히 동일(회귀 없음).
+            battle_reaction_dur = 0.0
+            battle_reaction_starts: dict[str, float] = {}
+            battle_reaction_files: dict[str, str] = {}
+            battle_reaction_durations: dict[str, float] = {}
+            if BATTLE_REACTION_ENABLED and pre_buildup_slot_count >= BATTLE_REACTION_MIN_PRE_BUILDUP_SLOTS:
+                battle_reaction_files = _pick_battle_reaction_files() or {}
+            if battle_reaction_files:
+                battle_anchor = kill_t + stage0_dur * STAGE_OVERLAP_RATIO
+                voice_order = list(battle_reaction_files.keys())
+                raw_starts = _stage0_track_starts(battle_anchor)
+                battle_reaction_starts = dict(zip(voice_order, raw_starts))
+                battle_reaction_durations = {
+                    vk: await self._to_executor(self._probe_audio_duration, path)
+                    for vk, path in battle_reaction_files.items()
+                }
+                battle_reaction_dur = _stage0_duration(
+                    tuple(battle_reaction_starts[vk] for vk in voice_order),
+                    tuple(battle_reaction_durations[vk] for vk in voice_order),
+                    battle_anchor)
             # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
             # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계가 밀리는 시점은 가장
             # 늦게 끝나는 목소리에 맞춰야 한다.
-            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), sub_question_duration)
+            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), sub_question_duration,
+                                      battle_reaction_dur)
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
@@ -4383,6 +4493,10 @@ class KyvoHighlight(KyvoBaseCog):
             ]
             if leadin_overlay_start is not None:
                 end_times.append(leadin_overlay_start + leadin_overlay_duration)
+            if battle_reaction_files:
+                end_times.extend(
+                    battle_reaction_starts[vk] + battle_reaction_durations[vk] for vk in battle_reaction_files
+                )
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
 
             schedule = {
@@ -4417,6 +4531,13 @@ class KyvoHighlight(KyvoBaseCog):
                 schedule["leadin_overlay"] = {
                     "wav": leadin_overlay_file, "text": LEADIN_OVERLAY_TEXT[os.path.basename(leadin_overlay_file)],
                     "start": leadin_overlay_start, "duration": leadin_overlay_duration,
+                }
+            for vk, path in battle_reaction_files.items():
+                basename = os.path.basename(path)
+                text = BATTLE_MAIN_TEXT.get(basename) or BATTLE_LCK_TEXT.get(basename) or BATTLE_SUB_TEXT.get(basename)
+                schedule[f"battle_{vk}"] = {
+                    "wav": path, "text": text,
+                    "start": battle_reaction_starts[vk], "duration": battle_reaction_durations[vk],
                 }
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
