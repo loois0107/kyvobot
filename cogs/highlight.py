@@ -1722,6 +1722,12 @@ OVERLAY_FRAME_V2_PATH = os.path.join(OVERLAY_DIR, "overlay_frame_v2.png")
 # 변환해 투명화한 결과물을 실제로 사용한다(trophy_icon_new_transparent.png).
 # 원본 골드 버전(trophy_icon.png)은 삭제하지 않고 보관만 하며 더 이상 참조하지 않는다.
 TROPHY_ICON_PATH = os.path.join(OVERLAY_DIR, "trophy_icon_new_transparent.png")
+# 🛡️ [골드 동전 아이콘 - PIL 자체 제작] "속이 빈 동전 윤곽선" - 원 2개(바깥 두꺼운
+# 테두리+안쪽 얇은 테두리, 동전 특유의 이중 엠보싱 디테일)를 RGBA(도형=TOP_GOLD_TEXT_COLOR
+# 고정색, 배경=투명)로 그렸다(4x 슈퍼샘플+LANCZOS 다운스케일, gold_gap_bar_mask.png와
+# 동일 기법). 팀 컬러를 입힐 필요가 없어(골드는 항상 같은 회색) 런타임 lutrgb 없이
+# 그대로 scale+overlay만 하면 된다.
+GOLD_COIN_ICON_PATH = os.path.join(OVERLAY_DIR, "gold_coin_icon.png")
 
 # 상단 2단 바 - 메인바(전체 폭)+서브바(중앙 940px만) 치수, 실측값 그대로.
 # 🛡️ [메인바+서브바 높이 축소 - LCK 실측 비교, 방안A 채택] 이전엔 50->100/1080으로 2배
@@ -2745,6 +2751,15 @@ class KyvoHighlight(KyvoBaseCog):
         trophy_icon_idx = next_input_idx
         next_input_idx += 1
 
+        # 🛡️ [골드 동전 아이콘 - 항상 추가] CDragon에서 화폐 아이콘 URL을 못 찾아서(추측한
+        # 3개 경로 전부 404) 트로피와 동일한 패턴(네트워크 없이 자체 제작 PNG를 고정
+        # 입력으로) 재사용한다 - make_gold_coin_icon.py로 PIL 생성(gold_gap_bar_mask.png
+        # 만들 때와 동일한 4x 슈퍼샘플+LANCZOS 다운스케일 기법), 팀컬러와 무관한 고정색
+        # (TOP_GOLD_TEXT_COLOR)을 이미 구워 넣어서 런타임 색상 처리가 필요 없다.
+        inputs += ["-i", GOLD_COIN_ICON_PATH]
+        gold_coin_icon_idx = next_input_idx
+        next_input_idx += 1
+
         # 🛡️ [오버레이 HUD 입력] FIRST BLOOD/SOLO KILL일 때만(schedule에 "hud" 키가 있을
         # 때만) 완성 배너 PNG를 추가 입력으로 붙인다 - 해당 없는 킬(추격전 등)에서는 아예
         # 입력조차 안 넣어서 필터그래프가 더 무거워지지 않는다.
@@ -2950,12 +2965,28 @@ class KyvoHighlight(KyvoBaseCog):
             # 바꿔 킬의 순백색과 명확히 구분되게 한다. 타워는 건드리지 않음(피드백 대상 아님).
             KILL_FONT_SIZE = max(10, int(round(top_font_size * 1.25)))
             top_icon_size = max(8, int(round(top_main_h * 0.6)))
-            # 🛡️ [팀 라벨 보강 - TOWER_FRAC 추가 조정] 팀 라벨(BLUE/RED)에 깃발 심볼+자간
-            # 확보+배경 블록을 더하면서 전체 폭이 다시 늘어났다 - 실측 계산 결과 1080 높이
-            # 기준 최소 0.223 필요, 안전 여유를 더해 0.23으로 재조정.
-            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.23, 0.42, 0.75
+            # 🛡️ [세 요소 간격 재배치 - 고른 분포] 이전엔 TOWER=0.23/GOLD=0.42로 바깥쪽에
+            # 붙여두고 KILL만 0.92로 트로피에 바짝 당겨서, tower-gold 간격(118.6px)보다
+            # gold-kill 간격(312px)이 2.6배나 커 "가운데가 휑하다"는 피드백을 받았다 -
+            # 세 요소를 0.30/0.60/0.85로 다시 잡아서 tower-gold(187px)/gold-kill(156px)
+            # 간격을 비슷하게 맞췄다(비율 1.2:1, 훨씬 고르게 분산). KILL_FRAC을 0.92->0.85로
+            # 살짝 물렸지만 트로피와의 간격은 여전히 59px로 가깝게 유지된다(기존 121.5px
+            # 대비 확실히 좁음 - "트로피에 가깝게"라는 원래 요청도 계속 충족).
+            # 🛡️ [충돌 재확인 - 극단값 포함] 골드 아이콘+숫자(최악값 "99.9k") 우측 끝
+            # (738px)과 킬 숫자(최악값 "99") 좌측 끝(832px) 사이 94px 여유, 타워 숫자
+            # 시작(556px)과 골드 아이콘 좌측 끝(652px) 사이 96px 여유 - 전부 사전 계산으로
+            # 재확인했다.
+            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.30, 0.60, 0.85
+            # 🛡️ [팀 라벨/구분선은 분리된 고정 기준점 유지] TOWER_FRAC을 0.23->0.30으로
+            # 올리면서 BLUE/RED 라벨과 구분선이 tower_x_l에 바로 종속돼 있어(아래
+            # divider_x_l/blue_text_x/red_text_x 계산) 같이 밀려버렸다 - 타워 "아이콘+숫자"
+            # 위치만 중앙으로 당기고, 라벨/구분선은 원래 자리(옛 TOWER_FRAC=0.23) 그대로
+            # 두기 위해 둘을 분리한다.
+            LABEL_DIVIDER_FRAC = 0.23
             main_text_y_expr = f"({top_main_h}-text_h)/2"
 
+            label_divider_x_l = bar_x0 + bar_half_w * LABEL_DIVIDER_FRAC
+            label_divider_x_r = bar_x1 - bar_half_w * LABEL_DIVIDER_FRAC
             tower_x_l = bar_x0 + bar_half_w * TOWER_FRAC
             tower_x_r = bar_x1 - bar_half_w * TOWER_FRAC
             gold_x_l = bar_x0 + bar_half_w * GOLD_FRAC
@@ -2984,6 +3015,27 @@ class KyvoHighlight(KyvoBaseCog):
             gap_k = abs(gold_diff) / 1000
             gold100_text = f"{scoreboard['team100_gold'] / 1000:.1f}k"
             gold200_text = f"{scoreboard['team200_gold'] / 1000:.1f}k"
+
+            # 🛡️ [골드 동전 아이콘 - 숫자 바깥쪽(중앙에서 먼 쪽)에 배치] 타워 아이콘과
+            # 동일한 "아이콘은 항상 바깥쪽, 숫자는 안쪽" 규칙을 따른다. 골드 숫자는
+            # gold_x_l/r에 "중앙 정렬"돼 있어(타워처럼 가장자리 고정이 아님) 아이콘
+            # 위치를 고정 비율로 잡을 수 없다 - 팀 라벨/골드 갭 배지와 같은 패턴으로
+            # PIL이 실제 렌더 폭을 그대로 측정해서(ffmpeg self-reference text_w 대신)
+            # 숫자의 실제 좌/우 가장자리를 구하고, 그 바로 바깥에 아이콘을 붙인다.
+            _gold_probe_font = ImageFont.truetype(SCOREBAR_FONT_KR, top_font_size)
+            gold100_text_w = _gold_probe_font.getlength(gold100_text)
+            gold200_text_w = _gold_probe_font.getlength(gold200_text)
+            gold_icon_gap = 4
+            gold_icon_y = (top_main_h - top_icon_size) / 2
+            gold_icon_x_l = gold_x_l - gold100_text_w / 2 - gold_icon_gap - top_icon_size
+            gold_icon_x_r = gold_x_r + gold200_text_w / 2 + gold_icon_gap
+            text_chain += (
+                f";[{gold_coin_icon_idx}:v]scale={top_icon_size}:{top_icon_size}[vgcL]"
+                f";[{label}][vgcL]overlay=x={int(round(gold_icon_x_l))}:y={gold_icon_y:.2f}[vgc1]"
+                f";[{gold_coin_icon_idx}:v]scale={top_icon_size}:{top_icon_size}[vgcR]"
+                f";[vgc1][vgcR]overlay=x={int(round(gold_icon_x_r))}:y={gold_icon_y:.2f}[vgc2]"
+            )
+            label = "vgc2"
 
             tower100_tf = _write_textfile("tower100", str(scoreboard["team100_towers"]))
             tower200_tf = _write_textfile("tower200", str(scoreboard["team200_towers"]))
@@ -3029,7 +3081,7 @@ class KyvoHighlight(KyvoBaseCog):
             divider_w_for_label = 2
             _probe_font = ImageFont.truetype(SCOREBAR_FONT_KR_BLACK, 100)
             _blue_ratio = _probe_font.getlength(blue_spaced_text) / 100
-            avail_text_w = (tower_x_l - divider_gap_for_label - divider_w_for_label - divider_gap_for_label) \
+            avail_text_w = (label_divider_x_l - divider_gap_for_label - divider_w_for_label - divider_gap_for_label) \
                 - (bar_x0 + edge_pad) - edge_pad
             font_size_by_width = int(avail_text_w / _blue_ratio)
             font_size_by_height = int(round(top_main_h * 0.72))
@@ -3045,9 +3097,9 @@ class KyvoHighlight(KyvoBaseCog):
             # 피드백 - 바 가장자리 대신 구분선을 기준점으로 삼아, 두 라벨 모두 "구분선에서
             # divider_gap_for_label만큼 떨어진 지점"에서 시작/끝나도록 통일한다(BLUE는
             # 구분선 방향으로 끝나고, RED는 구분선 방향에서 시작).
-            blue_text_x = tower_x_l - divider_gap_for_label - divider_w_for_label \
+            blue_text_x = label_divider_x_l - divider_gap_for_label - divider_w_for_label \
                 - divider_gap_for_label - blue_text_w
-            red_text_x = tower_x_r + divider_gap_for_label + divider_w_for_label \
+            red_text_x = label_divider_x_r + divider_gap_for_label + divider_w_for_label \
                 + divider_gap_for_label
 
             blue_label_tf = _write_textfile("team_label_blue", blue_spaced_text)
@@ -3084,8 +3136,8 @@ class KyvoHighlight(KyvoBaseCog):
             divider_gap = 6
             divider_h = int(round(top_main_h * 0.6))
             divider_y = (top_main_h - divider_h) / 2
-            divider_x_l = tower_x_l - divider_gap - divider_w
-            divider_x_r = tower_x_r + divider_gap
+            divider_x_l = label_divider_x_l - divider_gap - divider_w
+            divider_x_r = label_divider_x_r + divider_gap
             text_chain += (
                 f";[{label}]drawbox=x={int(round(divider_x_l))}:y={divider_y:.2f}:"
                 f"w={divider_w}:h={divider_h}:color={TEAM_LABEL_DIVIDER_COLOR}:t=fill[vmdiv1]"
