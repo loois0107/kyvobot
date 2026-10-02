@@ -1608,16 +1608,24 @@ DDRAGON_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/i
 # 🛡️ [아이템 아이콘] item_id=0(빈 슬롯)은 Data Dragon에 애초에 없는 파일이라 요청 자체를
 # 안 보낸다(호출부에서 사전 필터링).
 DDRAGON_ITEM_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/img/item/{item_id}.png"
-# 🛡️ [4단계 - 스펠/룬 아이콘, 재조사로 확인됨] 예전 조사에서 "룬은 Data Dragon에 없을 것"
-# 이라 의심했는데, 이번에 실제 네트워크 호출로 재확인한 결과 둘 다 있었다:
+# 🛡️ [룬/스펠 아이콘 복원 - 실제 LCK 2025 방송 화면에 있음이 재확인됨] 과거엔 "방송에
+# 없다"는 판단으로 패널에서 완전히 제거했는데, 최신 방송 화면을 다시 보니 실제로 있어서
+# 복원한다. URL 패턴은 과거 조사 그대로(이번에 실제 네트워크 호출로 재검증 완료):
 #   - 소환사 스펠: summoner.json에서 숫자 key(예: "4")->파일명("SummonerFlash.png") 역매핑
-#     후 cdn/{version}/img/spell/{파일명} - 다운로드 성공 확인
+#     후 cdn/{version}/img/spell/{파일명} - 다운로드 성공 확인(RGB, 64x64, 불투명 정사각형).
 #   - 룬: runesReforged.json에서 숫자 id(예: 8112)->아이콘 경로 역매핑 후
 #     **cdn/img/{경로}** (다른 아이콘들과 달리 버전 번호가 URL에 안 들어감 - 룬만의
 #     특이사항, 실제 호출로 확인됨) - Match-v5 참가자의 perks.styles[0].selections[0].perk
-#     가 키스톤 룬 id.
+#     가 키스톤 룬 id. 다운로드 파일 자체가 RGBA 원형 투명 PNG라(실측: 모서리 alpha=0,
+#     중앙 alpha=255) 포트레이트와 달리 별도 원형 마스킹이 필요 없다.
+DDRAGON_SUMMONER_SPELL_MAP_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/summoner.json"
+DDRAGON_SPELL_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/img/spell/{filename}"
+DDRAGON_RUNES_REFORGED_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/runesReforged.json"
+DDRAGON_RUNE_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/img/{icon_path}"
 CHAMPION_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "champion_icons_cache")
 ITEM_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "item_icons_cache")
+SPELL_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "spell_icons_cache")
+RUNE_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "rune_icons_cache")
 DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
 
 # 🛡️ [원형 포트레이트 - 10개 전체 적용] 1단계(단일 포트레이트 alphamerge) 검증을
@@ -2724,12 +2732,13 @@ class KyvoHighlight(KyvoBaseCog):
 
         # 🛡️ [4단계 - 포지션 매칭 5행용 아이콘 입력] roster_pairs = [(left_or_None,
         # right_or_None), ...] - 한쪽이 없는 행(인원 부족)도 있을 수 있어 None 체크.
-        # 챔피언/아이템 아이콘 전부 fetch 실패 시 None이 이미 들어와 있으므로 입력을 안
-        # 넣으면 필터그래프도 그만큼 가벼워진다. (스펠/룬 아이콘은 패널에서 완전히
-        # 제거되면서 이 입력 등록 자체도 삭제됨.)
+        # 챔피언/아이템/스펠/룬 아이콘 전부 fetch 실패 시 None이 이미 들어와 있으므로
+        # 입력을 안 넣으면 필터그래프도 그만큼 가벼워진다.
         roster_pairs = schedule.get("roster_pairs") or []
         roster_icon_idx: dict[int, int] = {}
         roster_item_idx: dict[int, list[int | None]] = {}
+        roster_spell_idx: dict[int, list[int | None]] = {}
+        roster_rune_idx: dict[int, int] = {}
         for left, right in roster_pairs:
             for r in (left, right):
                 if r is None:
@@ -2747,6 +2756,19 @@ class KyvoHighlight(KyvoBaseCog):
                     else:
                         item_indices.append(None)
                 roster_item_idx[r["participant_id"]] = item_indices
+                spell_indices = []
+                for spell_icon_path in r.get("spell_icon_paths", []):
+                    if spell_icon_path:
+                        inputs += ["-i", spell_icon_path]
+                        spell_indices.append(next_input_idx)
+                        next_input_idx += 1
+                    else:
+                        spell_indices.append(None)
+                roster_spell_idx[r["participant_id"]] = spell_indices
+                if r.get("rune_icon_path"):
+                    inputs += ["-i", r["rune_icon_path"]]
+                    roster_rune_idx[r["participant_id"]] = next_input_idx
+                    next_input_idx += 1
 
         # 🛡️ [원형 포트레이트 마스크 입력 - 1개만] 10개 포트레이트 전부가 이 입력 1개를
         # 공유한다(위 PORTRAIT_CIRCLE_MASK_PATH 주석 참고) - 마스크 파일이 없으면
@@ -3425,6 +3447,21 @@ class KyvoHighlight(KyvoBaseCog):
             # 실제 프레임으로 확인해서 보고한다] 억지로 축소하면 아이콘/텍스트가 너무
             # 작아져서 오히려 안 보이는 쪽보다 나쁠 수 있다고 판단.
 
+            # 🛡️ [룬/스펠 아이콘 복원 - 아이템 구역 바깥쪽(패널 가장자리 쪽)에 배치]
+            # 과거 설계 주석("바깥→안쪽: 스펠/룬, 아이템, KDA, CS, 포트레이트")대로 아이템
+            # 구역보다 더 바깥쪽에 둔다 - 단, 옛 레이아웃을 그대로 복사하지 않고 지금
+            # 레이아웃(아이템 23px, panel_x0~items_zone_x0 사이 실측 여유 ~42px @1920
+            # 기준)에 맞춰 새로 계산했다. 룬(키스톤, 다운로드 PNG 자체가 이미 원형
+            # 투명이라 별도 마스킹 불요)은 조금 크게, 스펠 2개는 세로로 쌓아서 룬 옆에
+            # 붙인다 - 실측 결과 42px 여유 안에 30px 클러스터가 10px 마진을 두고 들어가고,
+            # 세로로도 row_h_raw(~26.8px) 안에 스택된 스펠(~22px)이 들어간다(계산+실제
+            # 렌더 스크린샷으로 재확인함).
+            rune_size = max(6, int(round(item_size * 0.8)))
+            spell_size = max(4, int(round(item_size * 0.42)))
+            spell_gap_v = max(1, int(round(item_size * 0.08)))
+            spell_rune_gap = max(1, int(round(item_size * 0.08)))
+            spell_rune_cluster_w = spell_size + spell_rune_gap + rune_size
+
             # 🛡️ [라인전 골드 격차 배지용 데이터] schedule에 없거나(구버전 호출부) 길이가
             # 안 맞으면 그냥 None 취급 - 배지를 안 그리는 쪽으로 안전하게 처리한다.
             laning_gold_gaps = schedule.get("laning_gold_gaps")
@@ -3462,6 +3499,18 @@ class KyvoHighlight(KyvoBaseCog):
                         items_zone_x1 = kda_zone_x1 - kda_zone_w
                         items_zone_x0 = items_zone_x1 - items_zone_w
                         item_xs = [items_zone_x0 + pad + k * (item_size + item_gap) for k in range(6)]
+                        # 🛡️ [룬/스펠 클러스터 - "룬이 스펠의 오른쪽" 원칙으로 통일]
+                        # 처음엔 "룬=바깥쪽/스펠=안쪽"으로 양 팀을 완전 대칭 미러링했는데,
+                        # 그러면 L팀은 룬이 스펠의 왼쪽(바깥쪽=패널 왼쪽이라), R팀은 룬이
+                        # 스펠의 오른쪽(바깥쪽=패널 오른쪽)이 되어 두 팀이 서로 반대로
+                        # 보였다 - 검토 결과 R팀 쪽 배치("룬이 스펠 오른쪽")가 선택돼서,
+                        # 화면상 "룬이 항상 스펠의 오른쪽"이 되도록 L팀은 반대로 뒤집는다
+                        # (룬을 아이템 쪽/안쪽으로, 스펠을 패널 가장자리 쪽/바깥쪽으로) -
+                        # 그 결과 클러스터의 "패널 안에서의 위치"(바깥쪽 가장자리)는 팀마다
+                        # 여전히 미러링되지만, 클러스터 "내부의 룬/스펠 좌우 순서"는 두 팀이
+                        # 화면 기준으로 동일하게 보인다.
+                        rune_x = items_zone_x0 - pad - rune_size
+                        spell_x = rune_x - spell_rune_gap - spell_size
                     else:
                         portrait_x = panel_mid_x + pad + PORTRAIT_GAP_EXTRA_OFFSET
                         cs_zone_x0 = panel_mid_x + portrait_zone_w + PORTRAIT_GAP_EXTRA_OFFSET
@@ -3470,6 +3519,15 @@ class KyvoHighlight(KyvoBaseCog):
                         kda_x_expr = str(int(round(kda_zone_x0 + pad)))
                         items_zone_x0 = kda_zone_x0 + kda_zone_w
                         item_xs = [items_zone_x0 + pad + k * (item_size + item_gap) for k in range(6)]
+                        # 🛡️ [룬/스펠 클러스터 - "룬이 스펠의 오른쪽" 원칙, R팀 기준은
+                        # 원래부터 이 모양이라 그대로] 스펠이 안쪽(아이템 쪽), 룬이
+                        # 바깥쪽(패널 가장자리 쪽) - 위 L팀 쪽 주석 참고.
+                        spell_x = items_zone_x0 + items_zone_w + pad
+                        rune_x = spell_x + spell_size + spell_rune_gap
+
+                    spell1_y = row_y0 + (row_h_raw - (2 * spell_size + spell_gap_v)) / 2
+                    spell2_y = spell1_y + spell_size + spell_gap_v
+                    rune_y = row_y0 + (row_h_raw - rune_size) / 2
 
                     icon_idx = roster_icon_idx.get(pid)
                     if icon_idx is not None:
@@ -3560,6 +3618,30 @@ class KyvoHighlight(KyvoBaseCog):
                                 f"w={item_size}:h={item_size}:color={ITEM_ICON_OUTLINE_COLOR}:t=1:"
                                 f"enable='{grid_enable}'[vr{tag}io{k}]")
                             label = f"vr{tag}io{k}"
+
+                    # 🛡️ [룬/스펠 아이콘 복원] 둘 다 fetch 실패 시 None이 이미 roster_spell_idx/
+                    # roster_rune_idx에 들어와 있으므로(아이템 아이콘과 동일한 안전 패턴) 그냥
+                    # 조용히 스킵한다 - 네트워크 실패가 핵심 렌더 파이프라인을 막지 않는다.
+                    # 스펠 아이콘은 Data Dragon 원본이 불투명 정사각형이라 아이템과 동일하게
+                    # scale+overlay만 하고(테두리는 크기가 너무 작아(~10px) 생략), 룬은 다운로드
+                    # PNG 자체가 이미 원형 투명이라 별도 마스킹 없이 바로 overlay한다.
+                    spell_idx_list = roster_spell_idx.get(pid, [None, None])
+                    for k, (spell_x_k, spell_y_k) in enumerate(((spell_x, spell1_y), (spell_x, spell2_y))):
+                        spell_idx = spell_idx_list[k] if k < len(spell_idx_list) else None
+                        if spell_idx is not None:
+                            grid_parts.append(f";[{spell_idx}:v]scale={spell_size}:{spell_size}[vr{tag}spell{k}]")
+                            grid_parts.append(
+                                f";[{label}][vr{tag}spell{k}]overlay=x={int(round(spell_x_k))}:y={spell_y_k:.2f}:"
+                                f"enable='{grid_enable}'[vr{tag}sp{k}]")
+                            label = f"vr{tag}sp{k}"
+
+                    rune_idx = roster_rune_idx.get(pid)
+                    if rune_idx is not None:
+                        grid_parts.append(f";[{rune_idx}:v]scale={rune_size}:{rune_size}[vr{tag}rune]")
+                        grid_parts.append(
+                            f";[{label}][vr{tag}rune]overlay=x={int(round(rune_x))}:y={rune_y:.2f}:"
+                            f"enable='{grid_enable}'[vr{tag}rn]")
+                        label = f"vr{tag}rn"
 
                     if j > 0:
                         divider_x0 = panel_x0 if side == "L" else int(round(panel_mid_x))
@@ -3976,6 +4058,95 @@ class KyvoHighlight(KyvoBaseCog):
                   f"{type(e).__name__}: {e} - continuing without icon", flush=True)
             return None
 
+    async def _fetch_summoner_spell_map(self) -> dict[str, str] | None:
+        """소환사 스펠 숫자 key(예: "4")->파일명("SummonerFlash.png") 역매핑을 받아온다.
+        참가자별로 매번 다시 받을 필요 없이 로스터 전체에서 한 번만 호출해 공유한다 -
+        실패하면 None을 반환하고, 호출부는 맵이 없으면 그 어떤 참가자의 스펠 아이콘도
+        시도하지 않고 전부 조용히 건너뛴다(맵 없이는 역매핑 자체가 불가능하므로)."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                version = await self._fetch_ddragon_version(session)
+                url = DDRAGON_SUMMONER_SPELL_MAP_URL_TEMPLATE.format(version=version)
+                timeout = aiohttp.ClientTimeout(total=DDRAGON_HTTP_TIMEOUT_SECONDS)
+                async with session.get(url, timeout=timeout) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json(content_type=None)
+            return {v["key"]: v["image"]["full"] for v in data["data"].values()}
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Summoner spell map fetch failed: "
+                  f"{type(e).__name__}: {e} - skipping spell icons for this render", flush=True)
+            return None
+
+    async def _fetch_rune_map(self) -> dict[int, str] | None:
+        """룬 숫자 id(예: 8112)->아이콘 경로("perk-images/Styles/.../Electrocute.png")
+        역매핑 - 모든 트리/슬롯을 평탄화해서 키스톤이든 아니든 어떤 perk id든 조회
+        가능하게 한다(지금은 키스톤만 쓰지만 평탄화 자체는 전체 트리 기준이 더 안전함).
+        실패하면 None - 스펠 맵과 동일한 안전 원칙."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                version = await self._fetch_ddragon_version(session)
+                url = DDRAGON_RUNES_REFORGED_URL_TEMPLATE.format(version=version)
+                timeout = aiohttp.ClientTimeout(total=DDRAGON_HTTP_TIMEOUT_SECONDS)
+                async with session.get(url, timeout=timeout) as resp:
+                    resp.raise_for_status()
+                    trees = await resp.json(content_type=None)
+            mapping: dict[int, str] = {}
+            for tree in trees:
+                for slot in tree.get("slots", []):
+                    for rune in slot.get("runes", []):
+                        mapping[rune["id"]] = rune["icon"]
+            return mapping
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Rune map fetch failed: "
+                  f"{type(e).__name__}: {e} - skipping rune icons for this render", flush=True)
+            return None
+
+    async def _fetch_summoner_spell_icon(self, spell_id: int | None,
+                                          spell_map: dict[str, str] | None) -> str | None:
+        """spell_map이 None(맵 자체 fetch 실패)이거나 spell_id가 없으면 바로 None -
+        아이템 아이콘의 item_id=0 사전 필터링과 동일한 패턴."""
+        if not spell_id or not spell_map:
+            return None
+        filename = spell_map.get(str(spell_id))
+        if not filename:
+            return None
+        try:
+            cached = glob.glob(os.path.join(SPELL_ICON_CACHE_DIR, f"*_{filename}"))
+            if cached:
+                return cached[0]
+            async with aiohttp.ClientSession() as session:
+                version = await self._fetch_ddragon_version(session)
+                icon_url = DDRAGON_SPELL_ICON_URL_TEMPLATE.format(version=version, filename=filename)
+                return await self._download_and_cache_icon(
+                    session, icon_url, SPELL_ICON_CACHE_DIR, f"{version}_{filename}")
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Summoner spell icon fetch failed (spell_id={spell_id}): "
+                  f"{type(e).__name__}: {e} - continuing without icon", flush=True)
+            return None
+
+    async def _fetch_rune_icon(self, perk_id: int | None, rune_map: dict[int, str] | None) -> str | None:
+        """룬 아이콘 URL은 다른 Data Dragon 아이콘들과 달리 버전 번호가 안 들어간다
+        (cdn/img/{경로} - 위 DDRAGON_RUNE_ICON_URL_TEMPLATE 주석 참고) - 그래서
+        _fetch_static_icon과 같은 "버전 불필요" 패턴을 쓰되, 캐시 디렉토리는 룬 전용으로
+        분리한다(아이콘 경로의 '/'를 '_'로 바꿔 파일명 충돌 없이 캐싱)."""
+        if not perk_id or not rune_map:
+            return None
+        icon_path = rune_map.get(perk_id)
+        if not icon_path:
+            return None
+        cache_name = icon_path.replace("/", "_")
+        try:
+            cached_path = os.path.join(RUNE_ICON_CACHE_DIR, cache_name)
+            if os.path.exists(cached_path):
+                return cached_path
+            async with aiohttp.ClientSession() as session:
+                icon_url = DDRAGON_RUNE_ICON_URL_TEMPLATE.format(icon_path=icon_path)
+                return await self._download_and_cache_icon(session, icon_url, RUNE_ICON_CACHE_DIR, cache_name)
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Rune icon fetch failed (perk_id={perk_id}): "
+                  f"{type(e).__name__}: {e} - continuing without icon", flush=True)
+            return None
+
     # ══════════════════════════════════════════════════════════
     #  Riot API (rate limit/재시도는 tier_verify 코그의 공유 리미터+로직을 그대로 재사용)
     # ══════════════════════════════════════════════════════════
@@ -4355,6 +4526,14 @@ class KyvoHighlight(KyvoBaseCog):
         roster = []
         for p in chosen["info"]["participants"]:
             items = [p.get(f"item{i}", 0) for i in range(6)]
+            # 🛡️ [룬/스펠 복원 - 키스톤 id 추출] Match-v5 스키마: perks.styles[0]이
+            # primaryStyle(첫 슬롯이 항상 키스톤), 그 안의 selections[0].perk가 키스톤
+            # 룬 id - 실제 응답으로 재확인함(위 DDRAGON_RUNE_ICON_URL_TEMPLATE 주석
+            # 참고). perks/styles/selections 중 하나라도 비어있으면(이론상 거의 없지만
+            # 방어적으로) None으로 안전하게 처리.
+            styles = (p.get("perks") or {}).get("styles") or []
+            primary_selections = styles[0].get("selections") if styles else None
+            keystone_id = primary_selections[0].get("perk") if primary_selections else None
             roster.append({
                 "participant_id": p["participantId"],
                 "team_id": p.get("teamId"),
@@ -4365,6 +4544,9 @@ class KyvoHighlight(KyvoBaseCog):
                 "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
                 "level": participant_levels.get(p["participantId"], p.get("champLevel", 1)),
                 "items": items,
+                "spell1_id": p.get("summoner1Id"),
+                "spell2_id": p.get("summoner2Id"),
+                "keystone_id": keystone_id,
             })
         team100_roster = [r for r in roster if r["team_id"] == 100]
         team200_roster = [r for r in roster if r["team_id"] == 200]
@@ -4375,15 +4557,27 @@ class KyvoHighlight(KyvoBaseCog):
         # 맞춰 쓰면 되게 한다.
         laning_gold_gaps = _compute_laning_gold_gaps(timeline, roster_pairs)
 
+        # 🛡️ [룬/스펠 복원 - 역매핑용 맵을 먼저 받는다] 참가자별 스펠/룬 아이콘 fetch는
+        # 이 맵이 있어야 숫자 id->실제 파일명/경로로 바꿀 수 있어서, 아래 "아이콘 전부
+        # 병렬 fetch" 단계보다 먼저 awiat한다 - 로스터 10명이 각자 따로 summoner.json/
+        # runesReforged.json을 받으면 낭비이므로 한 번만 받아서 공유. 실패하면 둘 다
+        # None이 되고, 아래 _fetch_summoner_spell_icon/_fetch_rune_icon이 맵이 None이면
+        # 바로 None을 반환하므로 패널 렌더링 자체엔 영향 없다(해당 아이콘만 조용히 생략).
+        spell_map, rune_map = await asyncio.gather(
+            self._fetch_summoner_spell_map(), self._fetch_rune_map())
+
         # 🛡️ [아이콘 전부 병렬 fetch] Data Dragon/Community Dragon 둘 다 Riot API 키/rate
         # limiter와 무관한 별개 CDN이라 전부 동시에 요청해도 안전하다 - asyncio.gather로
         # 한 번에 병렬화. item_id=0(빈 슬롯)은 _fetch_item_icon이 요청 자체를 안 보내고
-        # 즉시 None을 반환하므로 안전하게 그대로 넘겨도 된다. (스펠/룬 아이콘은 패널에서
-        # 제거되면서 이 fetch 자체도 삭제됨 - 더 이상 Data Dragon summoner.json/
-        # runesReforged.json 요청이 나가지 않는다.)
+        # 즉시 None을 반환하므로 안전하게 그대로 넘겨도 된다.
         champion_task = asyncio.gather(*(self._fetch_champion_icon(r["champion"]) for r in roster))
         item_tasks = [asyncio.gather(*(self._fetch_item_icon(item_id) for item_id in r["items"]))
                       for r in roster]
+        spell_tasks = [asyncio.gather(
+            self._fetch_summoner_spell_icon(r.get("spell1_id"), spell_map),
+            self._fetch_summoner_spell_icon(r.get("spell2_id"), spell_map),
+        ) for r in roster]
+        rune_tasks = [self._fetch_rune_icon(r.get("keystone_id"), rune_map) for r in roster]
         tower_task = self._fetch_static_icon(CDRAGON_TOWER_ICON_URL, "tower.png")
         dragon_task = self._fetch_static_icon(CDRAGON_DRAGON_ICON_URL, "dragon.png")
         riftherald_task = self._fetch_static_icon(CDRAGON_RIFTHERALD_ICON_URL, "riftherald.png")
@@ -4405,13 +4599,18 @@ class KyvoHighlight(KyvoBaseCog):
         (champion_icons, tower_icon_path, dragon_icon_path, riftherald_icon_path, baron_icon_path,
          horde_icon_path, *rest) = await asyncio.gather(
             champion_task, tower_task, dragon_task, riftherald_task, baron_task, horde_task,
-            *item_tasks, *dragon_variant_tasks)
+            *item_tasks, *dragon_variant_tasks, *spell_tasks, *rune_tasks)
         n = len(roster)
         item_icon_lists = rest[:n]
         dragon_variant_icon_paths = rest[n:n + len(dragon_variant_tasks)]
-        for r, icon_path, item_icon_paths in zip(roster, champion_icons, item_icon_lists):
+        spell_icon_lists = rest[n + len(dragon_variant_tasks):n + len(dragon_variant_tasks) + n]
+        rune_icon_paths = rest[n + len(dragon_variant_tasks) + n:]
+        for r, icon_path, item_icon_paths, spell_icon_paths, rune_icon_path in zip(
+                roster, champion_icons, item_icon_lists, spell_icon_lists, rune_icon_paths):
             r["icon_path"] = icon_path
             r["item_icon_paths"] = item_icon_paths
+            r["spell_icon_paths"] = spell_icon_paths
+            r["rune_icon_path"] = rune_icon_path
         scoreboard["tower_icon_path"] = tower_icon_path
         scoreboard["dragon_icon_path"] = dragon_icon_path
         scoreboard["riftherald_icon_path"] = riftherald_icon_path
