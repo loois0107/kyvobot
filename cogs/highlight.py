@@ -1620,15 +1620,18 @@ CHAMPION_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "champion_icons_cache")
 ITEM_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "item_icons_cache")
 DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
 
-# 🛡️ [원형 포트레이트 1단계 검증 - 실험용, 기본 비활성] 10개 전체 통합 전에 1개만으로
-# alphamerge 합성/성능을 검증하는 단계. PORTRAIT_CIRCLE_TEST_TAG가 None이면(기본값)
-# 기존 사각형 경로만 타서 운영 동작에 전혀 영향 없다 - 검증 스크립트에서만 특정
-# tag(예: "L0")로 몽키패치해 그 포트레이트 1개만 원형 경로를 타게 한다. 마스크는
-# PIL로 미리 그레이스케일(L 모드, 원 안쪽=255백색/바깥쪽=0검정)로 구워둔 정적
-# 에셋이다 - alphamerge는 두 번째 입력의 "밝기(luma)"를 알파로 복사하므로(그 입력
-# 자체의 알파 채널은 무시됨), 마스크는 RGBA가 아니라 그레이스케일이어야 한다.
+# 🛡️ [원형 포트레이트 - 10개 전체 적용] 1단계(단일 포트레이트 alphamerge) 검증을
+# 거쳐 10개(5행×2열) 전부에 통합했다. 마스크는 PIL로 미리 그레이스케일(L 모드, 원
+# 안쪽=255백색/바깥쪽=0검정)로 구워둔 정적 에셋이다 - alphamerge는 두 번째 입력의
+# "밝기(luma)"를 알파로 복사하므로(그 입력 자체의 알파 채널은 무시됨), 마스크는
+# RGBA가 아니라 그레이스케일이어야 한다.
+# 🛡️ [입력은 10개가 아니라 1개만 - 인덱스 꼬임 위험 최소화] 포트레이트마다 별도
+# "-i"를 또 추가하면 입력이 10개 늘어나 인덱스 꼬일 위험이 커진다(1단계 검증 때도
+# 실제로 디버깅에 시간을 썼음) - 대신 마스크 입력은 "-i" 한 번만 추가하고, 그
+# 입력 스트림 인덱스([{portrait_circle_mask_idx}:v])를 10번 재사용해 포트레이트마다
+# 독립적으로 scale한다(ffmpeg는 같은 입력 인덱스를 여러 필터에서 재사용하는 게
+# 표준 동작 - split 필터 없이도 안전하다, 라벨 재사용과 달리 애매함이 없음).
 PORTRAIT_CIRCLE_MASK_PATH = os.path.join(OVERLAY_DIR, "portrait_circle_mask.png")
-PORTRAIT_CIRCLE_TEST_TAG: str | None = None
 
 # 🛡️ [오브젝트 아이콘 - Community Dragon, 비공식 미러] Riot 공식 Data Dragon엔 없지만
 # raw.communitydragon.org의 실제 게임 에셋 덤프에 있다(실제 200 응답+PNG 바이트 확인함) -
@@ -1768,16 +1771,11 @@ ITEM_SLOT_BORDER_COLOR = "#2D274D"
 # 밝든 어둡든 거의 항상 대비가 생겨서 훨씬 뚜렷하게 개별 식별됨(실측 스크린샷으로 확인) -
 # 과하게 튀지도 않아서(옅은 은색 라인 정도) white@0.3을 최종 채택.
 ITEM_ICON_OUTLINE_COLOR = "white@0.3"
-# 🛡️ [Worlds/LCK 참고 이미지 재조정 - 금색 -> 채도 낮은 흰색] 위 "보라 vs 금색"
-# 비교는 과거 자체 판단이었는데, 실제 Worlds 2025 방송 화면을 직접 대조해보니
-# 참고 이미지의 테두리는 금색이 아니라 아주 얇고 채도 낮은 흰색/회색 계열이었다 -
-# 참고 이미지와 가장 가깝게 맞춘다(반투명 흰색, color@alpha 문법은 이미 다른 곳의
-# "black@0.6" 등에서 쓰던 방식 그대로).
-CHAMPION_FRAME_COLOR = "white@0.4"
-# 🛡️ [고정 픽셀 - 1080p 기준 헤어라인] 1px은 ffmpeg drawbox 안티앨리어싱 처리 방식상
-# 거의 안 보일 위험이 있어(실측 필요), 2px을 기본값으로 택했다 - MAX_OUTPUT_WIDTH=1920
-# 기준 렌더에서 "얇은 헤어라인"으로 보이는지 실제 렌더로 확인한다.
-CHAMPION_FRAME_BORDER_W_PX = 2
+# 🛡️ [금색 사각형 테두리 -> 완전 제거] 보라 vs 금색 비교, 이후 금색 -> 흰색 헤어라인
+# 재조정을 거쳤지만, 원형 포트레이트 전환과 함께 사각형 drawbox 테두리 자체를 없앴다
+# (원형 마스크 가장자리가 경계 역할을 대신함) - CHAMPION_FRAME_COLOR/
+# CHAMPION_FRAME_BORDER_W_PX 상수는 더 이상 쓰이지 않아 삭제, 필요하면 git 이력에서
+# 복구 가능.
 GRID_TEXT_BORDER_COLOR = "black"
 # 🛡️ [테두리 완전 제거 - 0px] 2px->4px로 키웠다가, 실제 매치 데이터로 0px/1px/4px를
 # 나란히 비교 렌더해서 직접 판단한 결과 0px(테두리 없음)가 실제 LCK 느낌에 가장
@@ -1808,9 +1806,15 @@ PORTRAIT_GAP_EXTRA_OFFSET = 36
 # 늘리면 같은 색 배경 위에 같은 색 텍스트라 안 보이게 됨 - 그래서 숫자는 박스 밖).
 GOLD_GAP_ARROW_BADGE_W = 16
 GOLD_GAP_ARROW_FONT_SIZE = 10
-# 🛡️ [레벨 배지 크기] 포트레이트 전체를 덮지 않도록 포트레이트 변의 42%로 제한 -
-# 좌상단 모서리에 작게 겹치는 정도(요청 스펙: "작은 레벨 배지").
-LEVEL_BADGE_SIZE_RATIO = 0.42
+# 🛡️ [레벨 텍스트 - 작은 배지 -> 큰 볼드+그림자 텍스트] Worlds 참고 이미지 스타일로
+# 재조정 - 배경 박스로 가두는 대신, 포트레이트(원형) 자체보다 훨씬 큰 볼드 텍스트에
+# drawtext 네이티브 그림자(shadowcolor/x/y)만으로 가독성을 확보한다. 폰트 크기는
+# 포트레이트 변 길이의 55%로, 기존 작은 배지(42% 중에서도 그 안의 숫자만 68%)보다
+# 훨씬 크다.
+LEVEL_TEXT_FONT_SIZE_RATIO = 0.55
+# 🛡️ [그림자 오프셋] 폰트 크기에 비례(6%)해 해상도가 달라져도 그림자가 과하거나
+# 너무 얇아지지 않도록 - 최소 1px 보장.
+LEVEL_TEXT_SHADOW_OFFSET_RATIO = 0.06
 # 🛡️ [숫자 텍스트 - 화살표와 별개 크기] 화살표 글리프(10px)와 완전히 같을 필요 없다는
 # 요청대로 12px로 분리.
 GOLD_GAP_NUMBER_FONT_SIZE = 12
@@ -2744,11 +2748,12 @@ class KyvoHighlight(KyvoBaseCog):
                         item_indices.append(None)
                 roster_item_idx[r["participant_id"]] = item_indices
 
-        # 🛡️ [원형 포트레이트 1단계 검증용 마스크 입력] PORTRAIT_CIRCLE_TEST_TAG가
-        # None이면(기본값) 아예 입력을 추가하지 않는다 - 운영 경로에 입력 1개도
-        # 늘리지 않음. 테스트 1개 포트레이트만 쓰므로 마스크 입력도 1개만 추가한다.
+        # 🛡️ [원형 포트레이트 마스크 입력 - 1개만] 10개 포트레이트 전부가 이 입력 1개를
+        # 공유한다(위 PORTRAIT_CIRCLE_MASK_PATH 주석 참고) - 마스크 파일이 없으면
+        # None으로 남아 아래 포트레이트 렌더링에서 안전하게 원형 마스킹을 건너뛴다
+        # (기존 사각형 scale 경로로 폴백).
         portrait_circle_mask_idx: int | None = None
-        if PORTRAIT_CIRCLE_TEST_TAG is not None and os.path.exists(PORTRAIT_CIRCLE_MASK_PATH):
+        if os.path.exists(PORTRAIT_CIRCLE_MASK_PATH):
             inputs += ["-i", PORTRAIT_CIRCLE_MASK_PATH]
             portrait_circle_mask_idx = next_input_idx
             next_input_idx += 1
@@ -3380,12 +3385,10 @@ class KyvoHighlight(KyvoBaseCog):
             # ~26%)은 패널 좌우에 빈 공간을 남겼다(조사로 확인됨) - 포트레이트를 침범하지
             # 않는 상한인 portrait_size와 완전히 동일한 크기까지 올려서 그 공간을 채운다.
             item_size = portrait_size
-            # 🛡️ [비율 기반 -> 고정 픽셀 - Worlds 참고 이미지 재조정] portrait_size의 4%
-            # 비율 방식은 실제 운영 해상도(1920 기준, MAX_OUTPUT_WIDTH)에서 테스트
-            # 해상도보다 훨씬 두꺼워진다는 게 지적됨 - 참고 이미지는 해상도가 올라가도
-            # 거의 안 변하는 "헤어라인" 느낌이라, 비율 대신 고정 픽셀(CHAMPION_FRAME_
-            # BORDER_W_PX)로 바꿔 해상도와 무관하게 항상 얇게 유지한다.
-            champion_frame_border_w = CHAMPION_FRAME_BORDER_W_PX
+            # 🛡️ [사각형 챔피언 프레임 제거 - 원형 마스크로 경계 표현] 참고 이미지가
+            # 뚜렷한 테두리 없이 미니멀한 스타일이라, 원형 마스크 가장자리 자체가
+            # 경계 역할을 하도록 사각형 drawbox 테두리(champion_frame_border_w/
+            # CHAMPION_FRAME_COLOR)를 완전히 제거했다.
             item_slot_border_w = max(1, round(item_size * 0.04))
             pad = max(2, int(round(row_h_raw * 0.06)))
             # 🛡️ [텍스트 가독성 1순위 - 크기 대폭 확대] 기존 0.26 비율은 실측 row_h_raw
@@ -3470,12 +3473,12 @@ class KyvoHighlight(KyvoBaseCog):
 
                     icon_idx = roster_icon_idx.get(pid)
                     if icon_idx is not None:
-                        # 🛡️ [원형 포트레이트 1단계 검증 - tag 1개만] 이 tag가
-                        # PORTRAIT_CIRCLE_TEST_TAG와 일치할 때만 alphamerge로 원형
-                        # 마스킹하고, 나머지 9개는 기존 사각형 scale+overlay 그대로
-                        # (이번 단계는 "통합"이 아니라 "검증"이라 전체 분기를 바꾸지
-                        # 않는다).
-                        if tag == PORTRAIT_CIRCLE_TEST_TAG and portrait_circle_mask_idx is not None:
+                        # 🛡️ [원형 포트레이트 - 10개 전체 적용] 1단계 검증(alphamerge
+                        # 단일 포트레이트)을 거쳐, 이제 10개 포트레이트 전부가 항상 원형
+                        # 마스킹을 거친다 - 조건 분기 없이 공유 마스크 입력
+                        # (portrait_circle_mask_idx)을 그대로 재사용한다. 마스크 파일이
+                        # 없는 경우(에셋 누락 등)에만 기존 사각형 scale 경로로 폴백한다.
+                        if portrait_circle_mask_idx is not None:
                             grid_parts.append(
                                 f";[{portrait_circle_mask_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}mask]")
                             grid_parts.append(
@@ -3489,53 +3492,29 @@ class KyvoHighlight(KyvoBaseCog):
                             f"enable='{grid_enable}'[vr{tag}a]")
                         label = f"vr{tag}a"
 
-                        # 🛡️ [3순위 - 챔피언 프레임] 아이콘과 정확히 같은 사각형을 아이콘 위에
-                        # "나중에" 그려야 1px 테두리가 아이콘 가장자리에 가려지지 않고 그 위에
-                        # 얹힌 채로 보인다(먼저 그리면 오버레이가 그대로 덮어버림).
-                        grid_parts.append(
-                            f";[{label}]drawbox=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
-                            f"w={portrait_size}:h={portrait_size}:color={CHAMPION_FRAME_COLOR}:t={champion_frame_border_w}:"
-                            f"enable='{grid_enable}'[vr{tag}pf]")
-                        label = f"vr{tag}pf"
+                        # 🛡️ [사각형 챔피언 프레임 제거] 원형 마스크 가장자리 자체가 경계
+                        # 역할을 하므로(참고 이미지가 뚜렷한 테두리 없는 미니멀 스타일),
+                        # 기존 drawbox 사각형 테두리는 더 이상 그리지 않는다.
 
-                        # 🛡️ [레벨 배지 - 좌상단 -> 좌하단] Worlds 참고 이미지 재조정 -
-                        # 참고 이미지의 레벨 숫자가 포트레이트 좌상단이 아니라 좌하단
-                        # 모서리에 겹쳐 있었다는 재확인 결과를 반영. 챔피언 프레임과
-                        # 동일한 패턴(나중에 그려서 안 가리게)은 그대로 유지, 반투명 박스
-                        # 위에 숫자만. 포트레이트 전체를 덮지 않도록 LEVEL_BADGE_SIZE_RATIO로
-                        # 작게 제한.
+                        # 🛡️ [레벨 텍스트 - 작은 배지 -> 큰 볼드+그림자 텍스트] 배경 박스를
+                        # 없애고, 포트레이트(이제 원형) 하단 중앙에 큰 볼드 숫자+그림자만
+                        # 겹치도록 배치한다(참고 이미지 비율 기준 - 포트레이트 아래쪽 1/3
+                        # 정도를 텍스트가 덮는다).
                         level_val = r.get("level")
                         if level_val is not None:
-                            # 🛡️ [하한 10px이 portrait_size를 넘지 않게 클램프] 극단적으로
-                            # 작은 해상도(portrait_size<10px)에서 하한(가독성용 최소 크기)이
-                            # 포트레이트 자체보다 커져 테두리를 벗어나는 걸 막는다.
-                            level_badge_size = min(portrait_size, max(10, int(round(portrait_size * LEVEL_BADGE_SIZE_RATIO))))
-                            level_badge_y = portrait_y + portrait_size - level_badge_size
                             level_tf = _write_textfile(f"roster_level_{tag}", str(level_val))
-                            # 🛡️ [가독성 - 불투명도 상향 + 텍스트 외곽선 이중 안전장치] 0.6은
-                            # 밝은 초상화 위에서 포트레이트 색이 비쳐 보여 대비가 부족했다
-                            # (실측: 픽셀 샘플링 결과 순수 검정이 아니라 포트레이트 색과
-                            # 섞인 회갈색/보라색이 나옴) - 0.82로 올려 어떤 밝기의 초상화
-                            # 위에서도 박스 자체가 뚜렷하게 어둡도록 했다. 텍스트에도 CS/KDA와
-                            # 동일한 외곽선(GRID_TEXT_BORDER_COLOR/W)을 추가해 박스만으로
-                            # 부족한 경우에도 숫자 자체가 읽히도록 이중으로 보강했다.
-                            grid_parts.append(
-                                f";[{label}]drawbox=x={int(round(portrait_x))}:y={level_badge_y:.2f}:"
-                                f"w={level_badge_size}:h={level_badge_size}:color=black@0.82:t=fill:"
-                                f"enable='{grid_enable}'[vr{tag}lvlbox]")
-                            label = f"vr{tag}lvlbox"
-                            level_font_size = max(8, int(round(level_badge_size * 0.68)))
-                            # 🛡️ [GRID_TEXT_BORDER_W=0을 그대로 재사용하지 않음] CS/KDA는
-                            # "고정된 어두운 남색 패널 배경" 위라 테두리 없이도 대비가
-                            # 충분하다고 판단해 0으로 뒀지만(위 상수 주석 참고), 레벨 배지는
-                            # 배경이 제각각인 포트레이트 바로 위라 상황이 다르다 - 박스 불투명도
-                            # (0.82)와 별개의 이중 안전장치로 1px 테두리를 직접 지정한다.
+                            level_font_size = max(10, int(round(portrait_size * LEVEL_TEXT_FONT_SIZE_RATIO)))
+                            level_shadow_off = max(1, int(round(level_font_size * LEVEL_TEXT_SHADOW_OFFSET_RATIO)))
+                            # 🛡️ [수직 위치 - 포트레이트 하단 1/3 겹침] 텍스트 중심을
+                            # 포트레이트 하단 가장자리에서 위로 1/6만큼(= 1/3 구간의 중앙)
+                            # 올려서, 텍스트 박스(text_h)가 대략 아래쪽 1/3에 겹치게 한다.
+                            level_text_center_y = portrait_y + portrait_size - (portrait_size / 3.0) / 2.0
                             grid_parts.append(
                                 f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{level_tf}':"
                                 f"fontsize={level_font_size}:fontcolor=white:"
-                                f"bordercolor=black:borderw=1:"
-                                f"x='{int(round(portrait_x))}+({level_badge_size}-text_w)/2':"
-                                f"y='{level_badge_y:.2f}+({level_badge_size}-text_h)/2':"
+                                f"shadowcolor=black@0.9:shadowx={level_shadow_off}:shadowy={level_shadow_off}:"
+                                f"x='{int(round(portrait_x))}+({portrait_size}-text_w)/2':"
+                                f"y='{level_text_center_y:.2f}-text_h/2':"
                                 f"enable='{grid_enable}'[vr{tag}lvl]")
                             label = f"vr{tag}lvl"
 
