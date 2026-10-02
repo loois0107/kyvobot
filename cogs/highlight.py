@@ -1160,31 +1160,40 @@ ATLEE_SUB_QUESTION_TEXT = {
 # 자리를 그냥 스킵하도록 짜여 있어서(한국어의 CRITICAL 하드-fail과 다름), 실제 파일이
 # 채워지기 전까지는 영어 렌더가 0단계/리드인 없이 hype_nickname/main_fact(실시간 TTS라
 # 언어와 무관하게 이미 동작)만으로 돌아가는 게 정상이다.
+# 🛡️ [0단계 환호 풀 - LCK 스타일 전면 재녹음] 기존 4개(차분한 진행 멘트/짧은 감탄사)는
+# 실제 들어보면 톤이 차분해서 "빠르고 몰아치는" LCK 느낌이 안 났다 - KO main_explode/
+# hype_explode/sub_explode의 "순수 모음 반복"(우와+아*N+!!) 패턴을 영어로 그대로
+# 이식해서(WOOO+O*N+!! 류) 3보이스 전부 5개씩 재작성/재녹음했다. eleven_v4 +
+# [excited][shouts] 태그 + stability=0.45(KO urgent 풀과 동일 레시피) + atempo=1.2
+# 후처리까지 적용(27개 전부 무음 게이트 0건 재검증 완료).
 STERLING_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sterling_*.wav")))
 STERLING_TEXT = {
-    "sterling_a.wav": "Here it comes—",
-    "sterling_b.wav": "Watch this—",
-    "sterling_c.wav": "This is it—",
-    "sterling_d.wav": "Right here—",
+    "sterling_a.wav": "WOOOOOOOOOO!!",
+    "sterling_b.wav": "WHOAAAAAAAAAAH!!",
+    "sterling_c.wav": "YEAHHHHHH!!",
+    "sterling_d.wav": "OHHHHHHHHHH!!",
+    "sterling_e.wav": "WOAHAAAAAAA!!",
 }
 CARTER_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "carter_*.wav")))
 CARTER_TEXT = {
-    "carter_a.wav": "OHHHHHH!!",
-    "carter_b.wav": "WHOOOOAAA!!",
-    "carter_c.wav": "YEEEAAAHHH!!",
-    "carter_d.wav": "OHHHHH MY!!",
+    "carter_a.wav": "OHHHHHHHHH!!",
+    "carter_b.wav": "WHOOOOOOOOOOAAH!!",
+    "carter_c.wav": "YEAAAAAAAAAAH!!",
+    "carter_d.wav": "WOOOOOOOOO!!",
+    "carter_e.wav": "AHHHHHHHHHHHHHH!!",
 }
 # 🛡️ [glob 충돌 버그 수정 - 실제 렌더 테스트로 발견] "atlee_*.wav"는 나중에 추가된
 # "atlee_sub_question_*.wav"(2단계용, ATLEE_SUB_QUESTION_POOL)까지 그대로 삼켜서, 0단계
 # 캐스케이드에 sub_question 파일이 섞여 뽑히면 ATLEE_TEXT에 없는 키라 KeyError가 났다(이번
-# 세션 내내 경계했던 바로 그 glob 충돌 패턴). "atlee_" 뒤에 글자 하나만 오는 파일(a/b/c/d)만
+# 세션 내내 경계했던 바로 그 glob 충돌 패턴). "atlee_" 뒤에 글자 하나만 오는 파일(a~e)만
 # 정확히 잡도록 패턴을 좁혀서 sub_question 파일과 겹치지 않게 한다.
 ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "atlee_[a-z].wav")))
 ATLEE_TEXT = {
-    "atlee_a.wav": "Oh my!!",
-    "atlee_b.wav": "No way!!",
-    "atlee_c.wav": "Unreal!!",
-    "atlee_d.wav": "Wow!!",
+    "atlee_a.wav": "WHOAAAAAA!!",
+    "atlee_b.wav": "OHHHHH!!",
+    "atlee_c.wav": "YEAHHH!!",
+    "atlee_d.wav": "WOOOOOO!!",
+    "atlee_e.wav": "AAAAHHH!!",
 }
 
 # ── 영어 리드인 필러(한국어 pre_buildup(N개, 유동)+EOEO(마지막 1개) 구조에 대응, 1~4개 유동 배치) ──
@@ -1193,17 +1202,23 @@ ATLEE_TEXT = {
 # 문장만 사용(게임 시각/스코어처럼 렌더 시점에 실제로 확정된 정보라도, 이 필러는 실시간
 # TTS가 아닌 정적 풀이라 값을 문구에 끼워 넣지 못한다 - 동적으로 하려면 실시간 TTS 전환이
 # 필요하며 이번 라운드 범위 밖).
+# 🛡️ [LCK 스타일 전면 재작성 - 짧은 감탄사 -> 완결 문장] 기존 6개는 톤이 차분해서
+# "빠르고 극적인 빌드업" 느낌이 안 났다 - KO에서 확인된 원칙("짧은 감탄사보다 완결 문장이
+# 오히려 더 안정적으로 무음 게이트를 통과한다")을 그대로 따라 9개 전부 완결 문장으로
+# 재작성했다. 전부 챔피언/위치/행동을 특정하지 않는 중립 문구(환각 위험 차단 원칙은
+# 아래 그대로 유지) - Sterling 보이스, eleven_v4, stability=0.55, atempo=1.2 후처리
+# 적용(9개 전부 1회 시도로 무음 게이트 0건 통과).
 EN_LEADIN_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "en_leadin_*.wav")))
 EN_LEADIN_TEXT = {
-    "en_leadin_a.wav": "Nice setup here.",
-    "en_leadin_b.wav": "Feels tense right now.",
-    # 🛡️ [텍스트 교체] 원래 "Something's brewing."였는데 Sterling 보이스에서 축약형->
-    # "brewing" 전환부에 매번 같은 미세 무음 갭이 남아(16회 전부 실패) 같은 의미 계열 안에서
-    # 문구를 바꿨다(1회 시도로 통과) - 이전 라운드의 "허"/"어" 음소 문제와 동일한 유형.
-    "en_leadin_c.wav": "Tension is rising.",
-    "en_leadin_d.wav": "Keep an eye on this.",
-    "en_leadin_e.wav": "This could go either way.",
-    "en_leadin_f.wav": "Here we go.",
+    "en_leadin_a.wav": "Tension is building here!",
+    "en_leadin_b.wav": "This could go either way!",
+    "en_leadin_c.wav": "Someone's about to make a move!",
+    "en_leadin_d.wav": "The air feels electric right now!",
+    "en_leadin_e.wav": "Anything could happen here!",
+    "en_leadin_f.wav": "This is heating up fast!",
+    "en_leadin_g.wav": "Eyes are locked in on this moment!",
+    "en_leadin_h.wav": "It's all coming down to this!",
+    "en_leadin_i.wav": "The pressure is real right now!",
 }
 EN_LEADIN_MIN_COUNT = 1  # 목표치(코드로 강제하진 않음 - 자리가 없으면 0개까지 줄어들 수 있음)
 EN_LEADIN_MAX_COUNT = 4
@@ -1213,6 +1228,13 @@ EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 �
 # 분리 시점의 PRE_BUILDUP_GAP_SEC(0.2)과 동일하게 유지 - 영어는 그대로 0.2.
 EN_LEADIN_GAP_SEC = 0.2
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
+# 🛡️ [EN 실시간 합성물 속도 압축 - "쉬지 않고 빠르게 몰아친다"는 LCK 톤의 핵심 요소]
+# voice_settings.speed가 이 TTS 엔드포인트(/v1/text-to-speech, eleven_v4)에서 무시된다는
+# 게 조사로 확인됐다 - 대신 KO battle_main/lck/sub 정적 풀 생성 때 검증된 그대로, 합성
+# 후 ffmpeg atempo로 재생 속도만 압축한다(피치 보존). hype_nickname/main_fact(실시간
+# TTS) + 새로 녹음한 0단계 환호/리드인 정적 풀(생성 시점에 이미 베이크됨) 전부 동일
+# 비율로 맞춘다. KO에 전혀 영향 없음(이 상수는 lang=="en" 분기에서만 참조됨).
+EN_REALTIME_ATEMPO_RATIO = 1.2
 # 🛡️ [한국어 리드인도 N슬롯으로 확장] 상황멘트(PRE_BUILDUP) 자리 수를 EN_LEADIN과 같은 상한으로
 # 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치된다(자리가 없으면 더 적게). EOEO
 # 제거 이후로는 이 뒤에 고정으로 오는 요소가 없고, kill_t - EOEO_GAP_SEC까지가 그대로
@@ -1340,6 +1362,40 @@ def _stage0_duration(starts: tuple[float, float, float], durations: tuple[float,
 
 
 BATTLE_LEADIN_CHAIN_GAP_SEC = 0.15
+
+# 🛡️ [EN 다중 리액션 체인 - Carter+Atlee] KO의 BATTLE_MAIN_POOL/BATTLE_SUB_POOL과
+# 동일한 역할을 하는 EN 전용 풀. Sterling은 이미 en_leadin 보이스로 쓰여서 제외했다
+# (KO가 lck_caster_dynamic을 pre_buildup과 겹친다고 제외한 것과 동일한 논리) -
+# Carter+Atlee 둘만 반복형 긴 문구 5개("Get him! Get him!!" 류) + 짧은 끼어들기
+# 4개(f~i, BATTLE_SHORT_INTERJECTION_LETTERS와 동일한 글자 규칙)를 쓴다. KO와 똑같은
+# 구조적 문제(긴 반복형이 특정 보이스에서 중간 무음으로 15회 전부 실패)가 실제로
+# 재현됐다 - Carter는 a/c/d가 전부 실패해 반복 제거한 단문으로 교체했고(아래 TEXT의
+# 실제 값 참고), Atlee는 c만 실패했다. eleven_v4 + [excited][shouts] + stability=0.45
+# (KO urgent 레시피 재사용) + atempo=1.2(나머지 EN 신규 콘텐츠와 톤 일관성 유지).
+EN_BATTLE_CARTER_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_carter_*.wav")))
+EN_BATTLE_ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_atlee_*.wav")))
+EN_BATTLE_CARTER_TEXT = {
+    "battle_carter_a.wav": "Get him!!",  # 반복형("Get him! Get him!!")이 15/15 무음 실패 -> 단문 교체
+    "battle_carter_b.wav": "Don't let him go! Don't let him go!!",
+    "battle_carter_c.wav": "Push!!",  # 반복형이 15/15 실패 -> 단문 교체
+    "battle_carter_d.wav": "Take it!!",  # 반복형이 15/15 실패 -> 단문 교체
+    "battle_carter_e.wav": "Go now!!",  # 반복형이 15/15 실패 -> 단문 교체
+    "battle_carter_f.wav": "Oh!?",
+    "battle_carter_g.wav": "Whoa!",
+    "battle_carter_h.wav": "Come on!",
+    "battle_carter_i.wav": "Yes!!",
+}
+EN_BATTLE_ATLEE_TEXT = {
+    "battle_atlee_a.wav": "Get him! Get him!!",
+    "battle_atlee_b.wav": "Don't let him go! Don't let him go!!",
+    "battle_atlee_c.wav": "Push!!",  # 반복형이 15/15 실패 -> 단문 교체(Carter와 달리 이 문구만 실패)
+    "battle_atlee_d.wav": "Take it! Take it!!",
+    "battle_atlee_e.wav": "Go now! Go now!!",
+    "battle_atlee_f.wav": "Oh!?",
+    "battle_atlee_g.wav": "Whoa!",
+    "battle_atlee_h.wav": "Come on!",
+    "battle_atlee_i.wav": "Yes!!",
+}
 
 
 def _arrangable_without_adjacent_repeat(combo: tuple[str, ...]) -> bool:
@@ -2460,8 +2516,25 @@ EN_SYSTEM_PROMPT = (
     "- Use exclamation points and keep the tension high throughout. Flat, exclamation-free "
     "statements of fact (e.g. 'X killed Y.') are forbidden.\n\n"
     "Structure rules:\n"
-    "- Make one sentence that clearly states who killed whom (e.g. '{killer} absolutely ends "
-    "{victim}!!').\n"
+    "- Make one sentence that clearly states who killed whom. Style can vary (these are examples "
+    "showing the range of styles, don't copy them verbatim - come up with a fresh phrasing every "
+    "time):\n"
+    "  1) Plain impact: '{killer} takes down {victim}!!'\n"
+    "  2) Exclamation: 'Unreal, {killer} just erases {victim}!!'\n"
+    "  3) Disbelief: 'Did {killer} really just do that to {victim}?!'\n"
+    "  4) Brutal: '{victim} never stood a chance against {killer}!!'\n"
+    "  5) Death-sentence metaphor: 'That's a death sentence for {victim}, signed by {killer}!!'\n"
+    "  6) No-escape metaphor: 'No escape for {victim} - {killer} closes the door!!'\n"
+    "  7) Cooked metaphor (slang for 'finished/doomed'): '{victim} is cooked, and {killer} is "
+    "the one serving it!!'\n"
+    "  8) Result-first, victim name optional: '{killer} with the execution - clean, brutal, "
+    "done!!'\n"
+    "- Pick one of the 8 styles above each call, and cycle through them as evenly as possible - "
+    "don't lean on the same style (especially #1) over and over. If there are multiple kill "
+    "events (multiple lines), vary the style across those lines too.\n"
+    "- These are stylistic flourishes only (metaphor, exaggeration, slang) - never let the "
+    "metaphor imply a specific cause, ability, or location that isn't in the facts list (e.g. "
+    "'cooked'/'no escape'/'death sentence' describe the outcome, not an invented method).\n"
     "- Assist rule: if a kill event's facts include an assist (e.g. 'assists: X'), you must "
     "mention that assist in the sentence too - never drop it. Vary the phrasing each time though "
     "(these are examples only, don't copy them verbatim):\n"
@@ -2483,6 +2556,65 @@ EN_SYSTEM_PROMPT = (
     "Respond ONLY in the following JSON schema, no other text: "
     '{"lines": [{"event_index": int, "text": "one caption line"}]}'
 )
+# 🛡️ [스타일 균등 순환 지시만으로는 부족 - 실측 확인] "고르게 순환해라" 지시문(위
+# Structure rules의 "cycle through them as evenly as possible")만으로는 베이스라인
+# 10회 호출 중 10회 전부 1번(Plain impact)로 수렴했다(실험 라운드 실측, KO의 유사
+# 지시문과 강도가 거의 동일했는데도 KO보다 훨씬 심하게 쏠림). 실험 결과 "이번엔 반드시
+# 스타일 N을 써라"처럼 매 호출마다 스타일을 직접 지정하는 방식이 압도적으로 효과적이었다
+# (30% vs temperature 상향 80%, few-shot 순서 셔플 70%) - 아래 EN_STYLE_NAMES를
+# _generate_commentary가 호출 시점에 무작위로 골라 프롬프트에 추가 지시로 꽂는다.
+# 번호/이름은 위 Structure rules의 1~8번 목록과 정확히 같은 순서로 맞춰야 한다.
+EN_STYLE_NAMES = [
+    "Plain impact", "Exclamation", "Disbelief", "Brutal", "Death-sentence metaphor",
+    "No-escape metaphor", "Cooked metaphor", "Result-first",
+]
+# 🛡️ [어시스트 있는 킬 - 스타일 후보 제한] 스타일 강제가 어시스트 규칙을 뭉개는 회귀가
+# 실측으로 확인됐다(어시스트 있는 킬 5회 중 4회가 어시스트 누락 - no-escape/result-first
+# 등 어시스트를 자연스럽게 끼워 넣을 자리가 없는 템플릿으로 강제됐을 때 특히 심함).
+# 어시스트가 있을 때는 원래 어시스트 예시(a/b/c)가 자연스럽게 들어맞는 스타일만 후보로
+# 좁힌다(1=Plain impact, 2=Exclamation, 3=Disbelief, 8=Result-first - 전부 "{killer}
+# [동사] {victim}" 뒤에 어시스트 절을 덧붙이기 쉬운 구조). 어시스트 없는 킬은 8개 전부.
+EN_ASSIST_FRIENDLY_STYLE_INDICES = (1, 2, 3, 8)
+
+# 🛡️ [EN 리드인 재설계 - "여러 보이스가 짧게 겹쳐 떠드는 체인"은 완전히 잘못된 방향이었다]
+# 실제 LCK/LCS 구조는 해설자 한 명이 빌드업~킬 순간까지 끊김 없이 혼자 이어서 말하고,
+# 환호는 목소리가 아니라 배경 관중 SFX(crowd_cheer_4.wav/ambient_crowd_low.wav, 이미
+# 존재함)의 몫이다 - 이 프롬프트는 그 "한 사람이 쭉 이어가는 빌드업" 역할만 맡는다.
+# 킬러/피해자/구체적 결과는 절대 다루지 않는다 - 그건 main_fact(_generate_commentary,
+# EN_SYSTEM_PROMPT)가 이미 따로 담당하므로 여기서 또 언급하면 내용 중복/상충 위험이
+# 있다. {target_words}/{target_sec}는 호출부가 kill_t로부터 역산한 가용 시간을 바로
+# 넘겨서, 사전 길이 못박기 없이도 GPT가 대략적인 분량 감을 잡게 한다.
+EN_NARRATION_SYSTEM_PROMPT = (
+    "You are a high-energy esports caster calling the lead-up to a kill in a League of Legends "
+    "highlight clip. Write ONE continuous paragraph of building-tension commentary - a single "
+    "flowing narration, not separate lines, not a list.\n\n"
+    "Rules (never violate):\n"
+    "- Do not mention any champion name, ability, specific location, or state who kills whom - "
+    "that is handled by a separate line elsewhere. This paragraph is pure atmosphere/tension "
+    "build-up only, and every sentence must stay true no matter what actually happens in the "
+    "clip (no guesses about which side wins the fight).\n"
+    "- End the paragraph with a vague, abstract sense that the moment has arrived or someone "
+    "couldn't hold on (e.g. '...and there's no way out now!', '...and it's already over!') - "
+    "still no specific names, champions, or details, just a dramatic capstone line.\n"
+    "- High energy, present tense, exclamatory - like a live broadcast build-up.\n"
+    "- Target length: approximately {target_words} words (about {target_sec:.1f} seconds at a "
+    "caster's speaking pace). A little under is fine; do not go noticeably over - being too long "
+    "is worse than being a bit short.\n\n"
+    "Respond ONLY in the following JSON schema, no other text: "
+    '{{"narration": "the full paragraph text"}}'
+)
+# 🛡️ [평균 발화 속도 추정치 - 검증 라운드에서 실측 비교 후 조정 가능] 흥분한 캐스터 톤의
+# 대략적인 초당 단어 수. 이 값으로 GPT에게 목표 단어 수를 미리 알려주지만, 실제 TTS
+# 길이는 합성 후에만 정확히 알 수 있다 - 그래서 atempo 보정(아래)이 최종 안전장치다.
+EN_NARRATION_WORDS_PER_SEC = 2.5
+# 🛡️ [atempo 보정 상한 - "자르기보다 약한 속도 보정"] 내레이션이 가용 시간보다 길면
+# 최대 이 비율까지만 압축한다 - 그 이상 압축해야 하는 경우(가용 시간이 너무 짧음)는
+# 그냥 가용 시간 하한(EN_LEADIN_START_OFFSET_SEC)에서 시작하게 두고 약간의 침범을
+# 감내한다(완전히 잘라내는 것보다 자연스러움 손실이 적다고 판단).
+EN_NARRATION_MAX_ATEMPO_RATIO = 1.3
+# 🛡️ [최소 가용 시간 - 너무 짧으면 내레이션 자체를 스킵] 1~2단어짜리 내레이션은 어색하고
+# 의미가 없다 - 기존 리드인/체인 기능들의 "자리가 없으면 그냥 스킵" 원칙을 그대로 따른다.
+EN_NARRATION_MIN_AVAILABLE_SEC = 2.0
 
 
 class KyvoHighlight(KyvoBaseCog):
@@ -2559,6 +2691,39 @@ class KyvoHighlight(KyvoBaseCog):
             raise ValueError(f"ffmpeg가 오디오 길이를 읽지 못함: {path}")
         h, mi, s = m.groups()
         return int(h) * 3600 + int(mi) * 60 + float(s)
+
+    @staticmethod
+    def _apply_atempo(src_path: str, out_path: str, ratio: float) -> float:
+        """ffmpeg atempo로 재생 속도만 압축하고(피치 보존) 새 길이를 반환한다. KO
+        battle_main/lck/sub 정적 풀 생성 때 검증된 것과 동일한 후처리 - voice_settings.
+        speed가 이 TTS 엔드포인트에서 무시된다는 게 확인됐으므로(EN_SYSTEM_PROMPT 주석
+        근처 "발화 속도" 조사 참고), 합성 후 ffmpeg로 압축하는 게 유일한 실제 작동 방법."""
+        subprocess.run([FFMPEG_EXE, "-y", "-i", src_path, "-filter:a", f"atempo={ratio}", out_path],
+                        capture_output=True, check=True)
+        r = subprocess.run([FFMPEG_EXE, "-i", out_path], capture_output=True, text=True)
+        m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
+        if not m:
+            raise ValueError(f"ffmpeg가 atempo 처리 후 길이를 읽지 못함: {out_path}")
+        h, mi, s = m.groups()
+        return int(h) * 3600 + int(mi) * 60 + float(s)
+
+    @staticmethod
+    def _count_long_silences(wav_path: str, noise_db: float = -35.0,
+                              max_breath_sec: float = 0.4) -> int:
+        """🛡️ [긴 내레이션 전용 무음 판정 - 기존 짧은 발화 게이트와 완전히 분리]
+        기존 게이트(예: _trim_trailing_silence)는 d=0.15로 "0.15초 이상 무음이면 전부
+        실패"였다 - 짧은 한두 문장짜리 정적 풀에는 맞지만, 여러 문장이 이어지는 긴
+        내레이션은 문장 사이 자연스러운 숨쉬기 무음이 당연히 여러 번 생긴다. d 값을
+        max_breath_sec(기본 0.4초)로 올리면 ffmpeg silencedetect 자체가 그보다 짧은
+        구간은 아예 리포트하지 않으므로(동작 자체는 동일, 임계값만 다름), "짧은
+        숨쉬기는 허용, 비정상적으로 긴 무음(TTS 글리치)만 걸러낸다"는 요구를 기존
+        함수를 전혀 건드리지 않고 새 함수로 달성한다."""
+        r = subprocess.run(
+            [FFMPEG_EXE, "-i", wav_path, "-af",
+             f"silencedetect=noise={noise_db}dB:d={max_breath_sec}", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        return len(re.findall(r"silence_start:\s*([\d.]+)", r.stderr))
 
     @staticmethod
     def _convert_to_wav(src_path: str, out_wav: str) -> None:
@@ -2731,7 +2896,8 @@ class KyvoHighlight(KyvoBaseCog):
                     "main_explode", "hype_explode", "sub_explode",
                     "battle_main", "battle_lck_caster_dynamic", "battle_sub",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
-                    "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
+                    "sterling", "carter", "atlee",
+                    "en_narration", "en_reaction_carter", "en_reaction_atlee"):
             entry = schedule.get(key)
             if entry is None:
                 continue
@@ -4061,6 +4227,28 @@ class KyvoHighlight(KyvoBaseCog):
         await self._to_executor(self._convert_to_wav, mp3_path, wav_path)
         return wav_path
 
+    async def _generate_leadin_narration(self, available_sec: float) -> str:
+        """🛡️ [EN 리드인 재설계 - 단일 긴 내레이션] 빌드업~킬 임박 직전까지를 다루는
+        한 문단짜리 내레이션을 GPT로 생성한다 - 킬러/피해자/스킬/위치는 전혀 다루지
+        않는다(main_fact가 그 역할을 따로 맡음, 중복/상충 방지). available_sec(렌더
+        시점에 이미 확정된 kill_t로부터 역산한 가용 시간)을 바탕으로 목표 단어 수를
+        프롬프트에 직접 넘겨서 분량을 사전에 유도한다 - 그래도 실제 TTS 길이는 합성
+        후에만 알 수 있으므로, 호출부가 atempo 보정으로 최종 안전장치를 건다."""
+        target_words = max(5, int(round(available_sec * EN_NARRATION_WORDS_PER_SEC)))
+        prompt = EN_NARRATION_SYSTEM_PROMPT.format(target_words=target_words, target_sec=available_sec)
+        resp = await self.ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            temperature=0.8,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"Write the narration now (target ~{target_words} words)."},
+            ],
+        )
+        import json
+        data = json.loads(resp.choices[0].message.content)
+        return data["narration"]
+
     async def _generate_commentary(self, kills_with_names: list[dict], lang: str,
                                     roster_pairs: list[tuple[dict | None, dict | None]] | None = None,
                                     laning_gold_gaps: list[int | None] | None = None,
@@ -4100,12 +4288,38 @@ class KyvoHighlight(KyvoBaseCog):
         else:
             user_content = f"{context_block}확정된 사실 목록 (총 {len(kills_with_names)}건, 전부 다뤄야 함):\n{kill_facts_block}"
 
+        # 🛡️ [EN 전용 - 스타일 직접 지정] 호출마다 스타일 번호를 무작위로 골라 "이번엔
+        # 반드시 이 스타일을 써라"는 지시를 시스템 프롬프트에 덧붙인다(실험으로 확인된
+        # 가장 효과적인 쏠림 완화 방법, EN_STYLE_NAMES 선언부 주석 참고). 어시스트가 있는
+        # 킬이 하나라도 있으면 EN_ASSIST_FRIENDLY_STYLE_INDICES로 후보를 좁혀서, 어시스트를
+        # 자연스럽게 못 넣는 템플릿이 강제돼 어시스트 규칙이 뭉개지는 회귀를 막는다 - 그
+        # 경우엔 "어시스트가 있으면 이 스타일로 강제하더라도 어시스트 규칙이 항상 우선"
+        # 이라는 문구도 같이 넣어 이중으로 보강한다(실험에서 단순히 "어시스트 친화적"
+        # 스타일로 좁히기만 해도 가끔 빠지는 사례가 있었음).
+        system_prompt = EN_SYSTEM_PROMPT if is_en else SYSTEM_PROMPT
+        if is_en:
+            has_assist = any(k["assists"] for k in kills_with_names)
+            style_pool = EN_ASSIST_FRIENDLY_STYLE_INDICES if has_assist else tuple(range(1, 9))
+            style_idx = random.choice(style_pool)
+            style_name = EN_STYLE_NAMES[style_idx - 1]
+            style_instruction = (
+                f"\n\nFor THIS call specifically, you MUST use style #{style_idx} ({style_name}) "
+                "from the list above for every line - no other style is acceptable this time."
+            )
+            if has_assist:
+                style_instruction += (
+                    " This still does not override the assist rule above: if a kill event has an "
+                    "assist, you must still naturally work that assist into the sentence even while "
+                    "using this style (e.g. adding a short clause naming the assist) - never drop it."
+                )
+            system_prompt = system_prompt + style_instruction
+
         resp = await self.ai_client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
             temperature=0.8,
             messages=[
-                {"role": "system", "content": EN_SYSTEM_PROMPT if is_en else SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
         )
@@ -4910,12 +5124,18 @@ class KyvoHighlight(KyvoBaseCog):
         # 볼륨 스웰 자체의 시작 지점도 이름이 짧으면 뒤로 밀어야 한다("넥스" 실측 문제) -
         # 이건 스트레치 대상 여부(위 nickname_atempo_ratio)와 무관하게 항상 적용한다.
         nickname_start_ratio = _nickname_swell_start_ratio(shout_name)
-        # 🛡️ [3보이스 동시 콜] 하이프 혼자 닉네임을 외치던 것에서, 세 캐스터(KO: Main+
-        # lck_caster_dynamic+Sub / EN: Sterling+Carter+Atlee)가 동시에 닉네임을 외치는
-        # 것으로 바꿔 임팩트를 키운다. main_fact도 서로 의존관계가 없는 독립 호출이라
-        # asyncio.gather로 4콜을 한 번에 병렬 처리해, 콜 수가 1->4로 늘어나도 순차 대기
-        # 시간이 그만큼 늘어나지 않게 한다(네트워크 latency가 동시에 겹친다).
-        nickname_voice_keys = ("sterling", "carter", "atlee") if lang == "en" else ("main", "lck_caster_dynamic", "sub")
+        # 🛡️ [3보이스 동시 콜 - KO만 유지, EN은 1보이스로 축소] 하이프 혼자 닉네임을
+        # 외치던 것에서 세 캐스터(Main+lck_caster_dynamic+Sub)가 동시에 외치는 것으로
+        # 바꿔 임팩트를 키운 건 KO만 그대로 둔다. EN은 Sterling/Carter/Atlee 중 매 렌더
+        # 하나만 무작위로 골라 외치게 한다 - 3보이스 동시 콜은 "닉네임을 못 알아듣는다"는
+        # 피드백으로 이어질 위험이 있고(특히 아직 서로 다른 세 목소리에 익숙하지 않은
+        # 영어 콘텐츠에서), 한 보이스가 또렷하게 외치는 쪽이 지금 단계엔 더 안전하다는
+        # 판단. main_fact는 서로 의존관계가 없는 독립 호출이라 그대로 asyncio.gather에
+        # 묶는다(콜 수만 4->2로 줄어듦, 로직 변경 없음).
+        nickname_voice_keys = (
+            (random.choice(("sterling", "carter", "atlee")),) if lang == "en"
+            else ("main", "lck_caster_dynamic", "sub")
+        )
         try:
             *hype_nickname_wavs_raw, main_fact_wav = await asyncio.gather(
                 *(self._synthesize_voice_line(hype_nickname_text_by_voice[vk], vk, work_dir, f"hype_nickname_raw_{i + 1}")
@@ -4956,6 +5176,16 @@ class KyvoHighlight(KyvoBaseCog):
                     await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
                 ]
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
+                # 🛡️ [EN 실시간 합성물 전부 atempo - "쉬지 않고 빠르게 말한다" 핵심 요소]
+                # voice_settings.speed는 이 TTS 엔드포인트에서 무시되는 게 확인됐으므로
+                # (조사 라운드 결론), KO battle_main/lck/sub 정적 풀과 동일하게 합성 후
+                # ffmpeg atempo로 압축한다. main_fact는 스웰 후처리 대상이 아니라 여기서
+                # 바로 적용한다.
+                if lang == "en":
+                    main_fact_atempo_path = os.path.join(work_dir, "main_fact_atempo.wav")
+                    main_fact_duration = await self._to_executor(
+                        self._apply_atempo, main_fact_wav, main_fact_atempo_path, EN_REALTIME_ATEMPO_RATIO)
+                    main_fact_wav = main_fact_atempo_path
                 # 닉네임 샤우팅 뒷부분에 볼륨 스웰+타임스트레치 후처리(3개 파일 각각 적용) -
                 # tail이 실제로 늘어나므로 hype_nickname_durations를 반환된 새 길이로 갱신한다
                 # (이 리스트를 그대로 쓰는 아래 plan_kill_sequence/end_times가 늘어난 길이를
@@ -4968,6 +5198,16 @@ class KyvoHighlight(KyvoBaseCog):
                         nickname_atempo_ratio, nickname_start_ratio)
                     hype_nickname_durations[i] = new_dur
                     hype_nickname_wavs.append(swelled)
+                # 🛡️ [닉네임도 EN이면 추가 atempo] 스웰 후처리가 끝난 결과물 위에 한 번 더
+                # 압축한다 - 스웰의 볼륨 램프/타임스트레치 가정(시작 비율 등)은 이미 끝난
+                # 뒤라 서로 간섭하지 않는다(단순 전체 길이 압축만 추가).
+                if lang == "en":
+                    for i, (swelled, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
+                        atempo_path = os.path.join(work_dir, f"hype_nickname_{i + 1}_atempo.wav")
+                        new_dur = await self._to_executor(
+                            self._apply_atempo, swelled, atempo_path, EN_REALTIME_ATEMPO_RATIO)
+                        hype_nickname_wavs[i] = atempo_path
+                        hype_nickname_durations[i] = new_dur
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
@@ -5019,18 +5259,75 @@ class KyvoHighlight(KyvoBaseCog):
             schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
                                       "start": main_fact_start, "duration": main_fact_duration}
 
-            # 리드인 필러: 한국어와 마찬가지로(plan_lead_in_forward_eoeo) 1~4개를 유동적으로
-            # 채운다(plan_leadin_fillers_en, 순수 함수) - 자리가 없으면 0개까지 줄어들 수 있다.
+            # 🛡️ [EN 리드인 재설계 - 단일 긴 내레이션, "여러 보이스 체인"은 폐기]
+            # 지난 라운드의 "여러 보이스가 짧게 겹쳐 떠드는 체인"(KO BATTLE_MAIN_POOL류
+            # 재사용)은 완전히 잘못된 방향이었다는 피드백으로 전면 재설계 - 실제 LCK/LCS는
+            # 해설자 한 명이 빌드업~킬 임박 직전까지 끊김 없이 이어서 말한다. 기존
+            # EN_LEADIN_POOL(정적 풀, 1~4개 유동 배치)과 en_battle_carter/atlee 체인
+            # 스케줄링을 이 블록으로 완전히 대체한다 - 둘 다 Sterling 보이스와 겹쳐 쓰면
+            # (EN_LEADIN_POOL도 Sterling 목소리) 같은 목소리가 서로 다른 말을 동시에 하는
+            # 꼴이 되어 반드시 제거해야 했다. EN_LEADIN_POOL/EN_BATTLE_*_POOL 상수/에셋
+            # 자체는 지우지 않았다(재사용 가능성 남김) - 단지 이 경로에서 더 이상 호출하지
+            # 않는다.
+            # 🛡️ [Sterling의 기존 "끝점=kill_t 고정" 공식을 그대로 확장] 끝점은
+            # kill_t - EN_LEADIN_END_GAP_SEC(기존 상수 재사용)로 고정하고, 시작점은 실측
+            # 길이로 역산한다 - 사전에 길이를 못박지 않고도 "항상 kill_t 근처에서 끝난다"를
+            # 보장하는 이 코드베이스의 기존 철학 그대로.
             leadin_end_times = []
-            if EN_LEADIN_POOL:
-                leadin_candidates = random.sample(EN_LEADIN_POOL, min(len(EN_LEADIN_POOL), EN_LEADIN_MAX_COUNT))
-                leadin_durations = [await self._to_executor(self._probe_audio_duration, f) for f in leadin_candidates]
-                leadin_starts = plan_leadin_fillers_en(kill_t, leadin_durations)
-                for i, start in enumerate(leadin_starts):
-                    f = leadin_candidates[i]
-                    schedule[f"en_leadin_{i + 1}"] = {"wav": f, "text": EN_LEADIN_TEXT[os.path.basename(f)],
-                                                       "start": start, "duration": leadin_durations[i]}
-                    leadin_end_times.append(start + leadin_durations[i])
+            en_narration_end = kill_t - EN_LEADIN_END_GAP_SEC
+            en_narration_available = en_narration_end - EN_LEADIN_START_OFFSET_SEC
+            if en_narration_available >= EN_NARRATION_MIN_AVAILABLE_SEC:
+                narration_text = await self._generate_leadin_narration(en_narration_available)
+                narration_wav = await self._synthesize_voice_line(
+                    narration_text, "sterling", work_dir, "en_narration_raw")
+                narration_duration = await self._to_executor(self._probe_audio_duration, narration_wav)
+                # 🛡️ [가용 시간보다 길면 - 자르기 대신 약한 atempo 보정] 필요한 압축
+                # 비율만큼만 적용하되 EN_NARRATION_MAX_ATEMPO_RATIO(1.3)를 상한으로 clamp -
+                # 그래도 못 맞으면(가용 시간이 지나치게 짧음) 자연스러움을 해치는 과한
+                # 압축 대신 시작점을 EN_LEADIN_START_OFFSET_SEC에서 고정하고 약간의
+                # 침범을 감내한다(완전히 잘라내는 것보다 낫다고 판단).
+                if narration_duration > en_narration_available:
+                    needed_ratio = narration_duration / en_narration_available
+                    atempo_ratio = min(EN_NARRATION_MAX_ATEMPO_RATIO, needed_ratio)
+                    atempo_path = os.path.join(work_dir, "en_narration_atempo.wav")
+                    narration_duration = await self._to_executor(
+                        self._apply_atempo, narration_wav, atempo_path, atempo_ratio)
+                    narration_wav = atempo_path
+                narration_start = max(EN_LEADIN_START_OFFSET_SEC, en_narration_end - narration_duration)
+                # 🛡️ [새 긴 내레이션 전용 무음 판정] 기존 짧은 발화 게이트(d=0.15)는 안
+                # 쓴다 - 문장 사이 자연스러운 숨쉬기 무음이 당연히 여러 번 생기므로, 그보다
+                # 긴(d=0.4 이상) 구간만 "비정상 무음"으로 집계해 경고 로그만 남긴다(렌더
+                # 자체를 막지는 않음 - 재시도해도 같은 문제가 반복될 수 있고, 실시간
+                # 경로라 재합성 비용도 있어 "일단 쓰고 로그로 남긴다"는 기존 하이픈
+                # 스트레치 트림 실패 처리와 같은 원칙).
+                n_long_silences = await self._to_executor(self._count_long_silences, narration_wav)
+                if n_long_silences > 0:
+                    print(f"[HIGHLIGHT][WARN] EN narration has {n_long_silences} long silence(s) "
+                          f"(guild={guild_id}, >0.4s) - using as-is. text={narration_text!r}", flush=True)
+                schedule["en_narration"] = {
+                    "wav": narration_wav, "text": narration_text,
+                    "start": narration_start, "duration": narration_duration,
+                }
+                leadin_end_times.append(narration_start + narration_duration)
+
+                # 🛡️ [제3자 짧은 리액션 유지 - 지난 라운드 녹음 재활용] "Oh!?"/"Whoa!"/
+                # "Come on!"/"Yes!!"(f~i, Carter/Atlee 양쪽에 다 있음) 중 보이스 하나를
+                # 무작위로 골라, 내레이션이 끝나는 시점 바로 직전에 살짝 겹쳐서 한 번만
+                # 넣는다 - "제3의 해설자가 짧게 리액션만 얹는다"는 새 설계 그대로.
+                reaction_voice = random.choice(("carter", "atlee"))
+                reaction_pool = EN_BATTLE_CARTER_POOL if reaction_voice == "carter" else EN_BATTLE_ATLEE_POOL
+                reaction_text_map = EN_BATTLE_CARTER_TEXT if reaction_voice == "carter" else EN_BATTLE_ATLEE_TEXT
+                short_files = _filter_short_interjection_pool(reaction_pool)
+                if short_files:
+                    reaction_file = random.choice(short_files)
+                    reaction_duration = await self._to_executor(self._probe_audio_duration, reaction_file)
+                    reaction_start = max(0.0, narration_start + narration_duration - 0.3)
+                    schedule[f"en_reaction_{reaction_voice}"] = {
+                        "wav": reaction_file,
+                        "text": reaction_text_map[os.path.basename(reaction_file)],
+                        "start": reaction_start, "duration": reaction_duration,
+                    }
+                    leadin_end_times.append(reaction_start + reaction_duration)
 
             end_times = stage0_end_times + leadin_end_times + [
                 hype_nickname_start + dur for dur in hype_nickname_durations
