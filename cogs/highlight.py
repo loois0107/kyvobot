@@ -9,12 +9,14 @@ cogs.tier_verify를 import하는 순간 그쪽에서 이미 검증되므로 여�
 import asyncio
 import datetime
 import glob
+import itertools
 import os
 import random
 import re
 import shutil
 import subprocess
 import tempfile
+import wave
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
@@ -305,6 +307,21 @@ VOICE_MIX_GAIN_DB_OVERRIDE = {
 VOICE_MIX_GAIN_DB_FILE_OVERRIDE = {
     "main_explode_d.wav": VOICE_MIX_GAIN_DB + 7.0,
     "sub_shout_c.wav": VOICE_MIX_GAIN_DB + 7.0,
+    # 🛡️ [v4 비중 확대로 추가된 두 파일 - 기존 v4와 동일 보정] main_explode_e/sub_shout_f도
+    # v4라 main_explode_d/sub_shout_c와 같은 마스킹 문제를 겪을 것으로 보여 동일하게
+    # +7.0dB를 적용한다 - 별도로 스윕 재검증하진 않았다(기존 두 파일과 같은 풀/믹스
+    # 구조를 공유하므로 같은 보정값이 합리적인 출발점).
+    "main_explode_e.wav": VOICE_MIX_GAIN_DB + 7.0,
+    "sub_shout_f.wav": VOICE_MIX_GAIN_DB + 7.0,
+    # 🛡️ [sub_explode v3 그룹 보정 - main/hype 대비 raw 음량 약 2dB 낮음] sub_shout_c(v4)를
+    # 제외한 v3 4개(a/b/d/e)의 raw 평균 음량이 main_explode/hype_explode보다 약 2dB
+    # 체계적으로 낮게 실측됐다(v3/v4 문제가 아니라 sub_explode 녹음 자체와 main/hype
+    # 녹음 사이의 원본 음량 격차) - 역할 단위(+0.0dB)가 아니라 이 4개 파일에만 +2.0dB를
+    # 더해 main/hype 수준에 맞춘다. sub_shout_c는 이미 더 큰 상태라 대상에서 제외.
+    "sub_shout_a.wav": VOICE_MIX_GAIN_DB + 2.0,
+    "sub_shout_b.wav": VOICE_MIX_GAIN_DB + 2.0,
+    "sub_shout_d.wav": VOICE_MIX_GAIN_DB + 2.0,
+    "sub_shout_e.wav": VOICE_MIX_GAIN_DB + 2.0,
 }
 
 # ══════════════════════════════════════════════════════════
@@ -578,22 +595,14 @@ LEADIN_OVERLAY_TEXT = {
     "sub_leadin_c.wav": "허어",  # 0.74s(트림), v4
 }
 LEADIN_OVERLAY_CHANCE = 0.4
-# 🛡️ ["어어??" 신규] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣는 "이상 감지" 반응 - 옛날
-# buildup1_*.wav("어어?!" 계열, Main 목소리) 정적 풀이 이 구조 재설계 전에 만들어져 있던 걸
-# 그대로 재사용한다(새 TTS 없음). 파일이 이미 짧아서(0.8~1.5초) "짧게"라는 요구사항도 그대로
-# 충족.
-# 🛡️ [풀 재확장 - "어어?!" 계열 안에서만] 예전엔 "어?! 뭔가...?!" 계열(구 buildup1_b.wav)
-# 대신 "어어?!" 계열만 쓰라는 요청으로 buildup1_a.wav 하나로 좁혔었다 - 그 구 buildup1_b.wav
-# 파일은 이름 충돌을 피해 legacy_unused_buildup1_b.wav로 옮겨두고(내용은 그대로 보관,
-# "buildup1_"로 시작하지 않아서 아래 와일드카드에 다시 안 잡힘) buildup1_b.wav/
-# buildup1_c.wav 자리에 "어어?!" 계열(모음 개수만 변주) 신규 녹음을 채웠다. 이제 다시
-# buildup1_*.wav로 넓혀서 3개(a/b/c) 전부 잡는다.
-EOEO_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "buildup1_*.wav")))
-EOEO_TEXT = {
-    "buildup1_a.wav": "어어?!",  # 0.72s, v4(트림 없이 직접 통과)
-    "buildup1_b.wav": "어" * 3 + "?!",  # 0.88s, v4(트림 없이 직접 통과)
-    "buildup1_c.wav": "어" * 4 + "?!",  # 0.96s, v4(트림 없이 직접 통과)
-}
+# 🛡️ [EOEO("어어??") 완전 제거] 상황 멘트와 0단계 폭발 사이에 짧게 끼워 넣던 "이상 감지"
+# 반응(buildup1_*.wav, Main 목소리 정적 풀)이었는데, 다중 리액션(_pack_reaction_chain)이
+# 리드인 전체를 킬 직전까지 끊김 없이 채우는 지금 구조에서는 "킬 직전에 고정으로 한 번
+# 끼어드는 짧은 멘트"라는 역할이 다중 리액션과 겹치면서 더 설 자리가 없어져 제거했다.
+# EOEO_POOL/EOEO_TEXT와 그 전신 와일드카드(buildup1_*.wav) 정의는 모두 지웠다 - 실제 wav
+# 파일 자체(assets/highlight_voice/buildup1_*.wav)는 건드리지 않았으니 되돌릴 일이 생기면
+# git 이력에서 이 블록만 복구하면 된다. EOEO_GAP_SEC은 이름은 그대로 남기되 "다중 리액션
+# 종료~킬 시점" 등 범용 안전 여백으로 재사용한다(아래 정의 참고).
 # 🛡️ [앵커링 기준 = 클립 시작(t=0), kill_t 역산 아님] 처음엔 "0단계(킬) 직전에 끝나도록"
 # kill_t에서 거꾸로 역산했는데, 실제로 들어보니 "영상 시작하자마자" 나와야 한다는 요구와
 # 다른 결과가 나왔다(kill_t가 클립 중간쯤이면 리드인도 자동으로 중간쯤에 옴 - 클립 길이
@@ -605,7 +614,7 @@ PRE_BUILDUP_START_OFFSET_SEC = 0.4  # 상황 멘트: 클립 시작 후 이만큼
 # 🛡️ [텀 확보 - 0.2 -> 0.6] 상황 멘트들 사이 간격을 늘려서 "다다다닥" 몰아치는 느낌 대신
 # 숨 쉴 틈을 만든다. EN_LEADIN_GAP_SEC은 이 상수에서 분리된 독립 상수라 이 변경이 영어
 # 리드인 간격에는 영향을 주지 않는다.
-PRE_BUILDUP_GAP_SEC = 0.6  # 상황 멘트 종료 ~ "어어??" 시작 사이 간격
+PRE_BUILDUP_GAP_SEC = 0.6  # 상황 멘트 슬롯 사이(및 마지막 슬롯 뒤) 간격
 # 🛡️ [여백 소폭 확대 - 0.2 -> 0.6] "어어??"가 킬과 너무 바짝 붙어서 나온다는 체감을
 # 개선하려 늘렸다. 시뮬레이션 결과 kill_t=6s 근방 클립은 0.2->0.4 사이에서 이미 상황
 # 멘트 슬롯이 2개->1개로 줄어들고(available 공간이 "평균 문장 길이+gap" 단위 2개를
@@ -613,7 +622,22 @@ PRE_BUILDUP_GAP_SEC = 0.6  # 상황 멘트 종료 ~ "어어??" 시작 사이 간
 # kill_t=5/6/7/10/17.86s 전부 동일 슬롯 개수 유지) 범위 내에서 손해가 가장 적은 하단
 # 값(0.6)을 택했다. EN_LEADIN_END_GAP_SEC이 이 상수를 그대로 재사용하므로 영어 리드인의
 # 마지막 필러~킬 여백도 같이 0.6으로 늘어난다(의도된 재사용 - 분리 대상이 아님).
-EOEO_GAP_SEC = 0.6         # "어어??" 종료 ~ 0단계(킬 시점) 시작 사이 최소 안전 여백(충돌 검사용)
+# 🛡️ [EOEO 제거 후 범용 안전 여백으로 재사용] 원래 "어어??" 종료~킬 시점 사이 여백이었는데,
+# EOEO 자체가 없어지면서 이제 pre_buildup_available(plan_lead_in_forward_eoeo)과 다중
+# 리액션 종료 한계(_pack_reaction_chain의 kill_t - EOEO_GAP_SEC) 둘 다에 쓰이는 "킬 직전
+# 범용 안전 여백"이 됐다. 이름은 호출부를 더 안 건드리려고 그대로 남겼다.
+# 🛡️ [0.6 -> 0.3 재축소 - 환호 지연 체감 개선] 리딩 무음 트림(main/hype/sub_explode)
+# 이후에도 "다중 리액션 종료~환호 시작" 간격이 여전히 ~0.63초였는데, 그 대부분이 파일
+# 리딩 무음이 아니라 이 상수(구조적 안전 여백) 자체에서 온다는 게 실측으로 확인돼
+# 다시 줄였다. 위 "0.2->0.6" 결정 당시엔 PRE_BUILDUP_POOL이 지금과 다른 구성(평균 길이가
+# 더 짧음)이라 kill_t=6s 근방에서 손해가 있었지만, 지금의 PRE_BUILDUP_POOL(문장형 교체
+# 이후 평균 3.06s)로 재시뮬레이션한 결과 kill_t=5/6/7/10/15/17.86/30s 전부 0.6->0.2
+# 범위에서 pre_buildup 슬롯 개수(N)가 전혀 안 줄었다(available만 소폭 늘어남) - 지금은
+# 손해 없이 줄일 수 있는 상태로 확인돼 0.3으로 내렸다. 다중 리액션 쪽은 end_limit이
+# kill_t-EOEO_GAP_SEC으로 정의돼 있어 이 값이 작아질수록 오히려 채울 수 있는 여백이
+# 늘어난다(손해 아님 - _pack_reaction_chain이 end_limit을 절대 넘지 않으므로 킬 시점
+# 침범 위험도 없음, EOEO_GAP_SEC>0인 한 항상 보장).
+EOEO_GAP_SEC = 0.3
 
 # 🛡️ ["진입 멘트" 도입 후 제거 - 타이밍 맞출 방법 없음] kill_t 역산 고정 위치("자, 들어갔
 # 습니다"를 EOEO 앞에 배치)로 한때 시도했으나, 실측 결과(kill_t=17.86s 클립에서 진입 멘트가
@@ -707,11 +731,21 @@ SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
 # 조용해지는 부작용은 없다. "악" 제거 버전은 raw 상태로는 무음 게이트 실패율이 높아짔다
 # (10회 전부 실패, 원인은 항상 파일 끝 트레일링 감쇠 - main_explode/sub_explode v4 재생성
 # 때와 같은 패턴) - 트림 후처리로 해결.
+# 🛡️ [main_explode_e 추가 - v4(고텐션) 비중 확대] "환호가 다양성 때문에 가끔 약하게
+# 느껴진다"는 피드백 이후 v4 비중을 늘리는 작업 - main_explode_d와 달리 일부러 "악!!"
+# 종결을 유지했다(바로 위 주석대로 "악!!"이 attack_rise를 높인다는 게 실측으로 확인돼
+# 있었기 때문 - no_ak 스타일을 추가하면 오히려 완만한 쪽이 하나 더 느는 역효과가 난다).
+# 실측 attack_rise=0.231dB/ms로 main_explode_d의 no_ak 버전(0.112~0.163)보다 확실히
+# 높고 기존 "악!!" 버전(main a/b/c, v3) 수준과 비슷하다. 다만 main_explode_d를 "악" 없는
+# 버전으로 바꾼 원래 이유가 "v4+악!! 조합이 겁에 질린 느낌"이라는 피드백이었던 점은
+# 그대로 남아있는 리스크다 - 실제 렌더로 직접 들어보고 판단 필요. 무음 게이트 1회 통과,
+# 길이 가중 선택 비중은 MAIN_EXPLODE_POOL 전체 5개 기준 아래 시뮬레이션 참고.
 MAIN_EXPLODE_TEXT = {
     "main_explode_a.wav": "우와" + "아" * 10 + "악!!",  # 1.28s, v3(원복)
     "main_explode_b.wav": "우와" + "아" * 8 + "악!!",  # 1.52s, v3(원복)
     "main_explode_c.wav": "우와" + "아" * 12 + "악!!",  # 1.36s, v3(원복)
     "main_explode_d.wav": "우와" + "아" * 12 + "!!",  # 2.23s(트림), v4, "악" 제거 버전(no_ak_a)
+    "main_explode_e.wav": "와" + "아" * 9 + "악!!",  # 1.27s(리딩 트림), v4, attack_rise=0.231dB/ms
 }
 # 🛡️ [v4 -> v3 원복, 0단계 3보이스 음색 분리 문제] main/hype/sub_explode를 전부 v4로
 # 옮긴 뒤 "0단계 3보이스가 다 같은 목소리처럼 들린다"는 피드백이 나와 실측했더니, 자기상관
@@ -736,13 +770,21 @@ MAIN_EXPLODE_TEXT = {
 # 쓴다 - 파일 단위 오버라이드(VOICE_MIX_GAIN_DB_FILE_OVERRIDE)는 추가하지 않았다(이미
 # main/sub와 동일한 6.0dB 기반이라 새로운 마스킹 구조를 만들지 않음). 기존 v3 원본은
 # assets/highlight_voice/_backup_hype_explode_v3_20261001/ 에 백업.
+# 🛡️ [b/c/e 교체 - 텐션 편차 문제] 6개 전부 실측한 attack_rise가 a=0.295/b=0.041/
+# c=0.029/d=0.102/e=0.037/f=0.256로 절반(b/c/e)이 0.1 미만으로 유독 낮았다 - "환호가
+# 전반적으로 약하다"가 아니라 이 낮은 쪽이 뽑힐 때 약하게 느껴지는 문제였다. 다양성은
+# 유지하되(텍스트/길이 계속 다름) 극단적으로 낮은 세 개만 새 텍스트로 재생성해 교체
+# 했다 - 전부 1~4회 시도 안에 기준(attack_rise>=0.15) 통과, 무음 게이트도 통과. 기존
+# b/c/e는 _backup_stage0_low_tension_hype_20261002/ 에 백업. 재측정 결과 새 b=0.249/
+# c=0.257/e=0.186로 풀 전체 최솟값이 0.102(d)까지 올라갔다(기존 최솟값 0.029 대비
+# 큰 폭 개선).
 HYPE_EXPLODE_TEXT = {
-    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 1.67s(트림), lck_caster_dynamic
-    "hype_b.wav": "우와" + "아" * 8 + "!!",  # 1.58s(트림), lck_caster_dynamic
-    "hype_c.wav": "으" + "아" * 6 + "악!",  # 1.49s(트림), lck_caster_dynamic
-    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.67s(트림), lck_caster_dynamic
-    "hype_e.wav": "우와" + "아" * 10 + "악!!",  # 1.86s(트림), lck_caster_dynamic
-    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.67s(트림), lck_caster_dynamic
+    "hype_a.wav": "와" + "아" * 10 + "악!!",  # 1.67s(트림), lck_caster_dynamic, attack_rise=0.295
+    "hype_b.wav": "으" + "아" * 8 + "악!!",  # 1.46s(리딩 트림), lck_caster_dynamic, attack_rise=0.249
+    "hype_c.wav": "와" + "아" * 6 + "악!!",  # 1.37s(리딩 트림), lck_caster_dynamic, attack_rise=0.257
+    "hype_d.wav": "와" + "아" * 8 + "!!",  # 1.67s(트림), lck_caster_dynamic, attack_rise=0.102
+    "hype_e.wav": "으" + "아" * 12 + "악!!",  # 1.56s(리딩 트림), lck_caster_dynamic, attack_rise=0.186
+    "hype_f.wav": "으" + "아" * 8 + "악!!",  # 1.67s(트림), lck_caster_dynamic, attack_rise=0.256
 }
 # 🛡️ [sub_shout도 main_explode와 같은 패턴 - 일부만 v3 원복] main_explode와 동일하게
 # "v4 톤이 얇고 꽥꽥거림" 피드백으로 5개 중 1개만 v4로 남기고 나머지는 v3 원본으로
@@ -766,6 +808,11 @@ SUB_EXPLODE_TEXT = {
     "sub_shout_c.wav": "우아" + "아" * 10 + "!!",  # 1.49s(트림), v4, "악" 제거 버전(sub_no_ak_a)
     "sub_shout_d.wav": "우와" + "아" * 6 + "!!",  # 1.76s, v3(원복)
     "sub_shout_e.wav": "우와" + "아" * 4 + "악!!",  # 1.36s, v3(원복)
+    # 🛡️ [sub_shout_f 추가 - v4(고텐션) 비중 확대] main_explode_e와 동일한 이유 -
+    # "악!!" 종결 유지(no_ak 스타일 추가는 오히려 완만한 쪽을 늘리는 역효과). TTS 변동폭이
+    # 커서(같은 텍스트로 1~4회 시도가 전부 0.045~0.048dB/ms로 낮게 나오다가 6회째에
+    # 0.170으로 기준 통과) 6회 재시도 끝에 attack_rise=0.170dB/ms인 결과를 채택했다.
+    "sub_shout_f.wav": "우와" + "아" * 7 + "악!!",  # 1.27s(리딩 트림), v4, attack_rise=0.170dB/ms
 }
 
 # ══════════════════════════════════════════════════════════
@@ -797,14 +844,39 @@ BATTLE_REACTION_ENABLED = False
 BATTLE_REACTION_MIN_PRE_BUILDUP_SLOTS = 2
 # 🛡️ [문구 5개, 서로 다른 포인트] "팩트를 지어내지 않는" 원칙 그대로 - 챔피언/행동을
 # 지목하지 않는 순수 격앙 반응만. 매 렌더 3개를 겹치지 않게(중복 없이) 뽑아 세 보이스가
-# 각자 다른 문구를 동시에 외치게 한다(아래 _run_pipeline 참고) - "계속 때려주고!" 3번
-# 반복처럼 안 들리게 하기 위함.
+# 각자 다른 문구를 동시에 외치게 한다(아래 _run_pipeline 참고). LCK 캐스터 특유의
+# "같은 말을 반복하며 흥분을 쌓는" 스타일로 재작성("계속 때려주고!" 단발성 →
+# "때려야 돼요, 때려야 돼요!!" 반복형) - c/e는 짧은 "안전장치" 문구로 설계해, 리드인
+# 여백이 타이트한 케이스(kill_t=10s, 여백 1.95s)에서도 자동 스킵 없이 들어갈 수 있게 함.
 BATTLE_REACTION_PHRASES = {
-    "a": "계속 때려주고!",
-    "b": "안 끝났어요, 이거!",
-    "c": "밀어붙이는데요!",
-    "d": "기회 왔어요, 지금!",
-    "e": "놓치지 마요, 이거!",
+    "a": "때려야 돼요, 때려야 돼요!!",
+    "b": "돌아가고, 돌아가고!!",
+    "c": "다시, 다시!!",
+    "d": "밀어붙여요, 밀어붙여요!!",
+    "e": "지금이에요, 지금!!",
+}
+# 🛡️ [f~i: 짧은 끼어들기 추임새 - 놀람/기대 계열만] 처음 제안했던 "흠" 등 차분/숙고
+# 계열은 "싸움이 막 시작된 순간"이라는 지금 자리의 톤과 안 맞아 전부 뺐다 - 해설자가
+# "어? 뭔가 시작된 건가?" 하며 놀라고 기대하는 느낌만 남겼다(차분한 톤 없음). 받침
+# 없는 모음 종결 또는 비(非)비음 받침만 썼다 - LEADIN_OVERLAY_POOL 쪽 "음?/흠?"가 sub
+# 보이스에서 20회 전부 무음 게이트 실패(비음 받침 감쇠 문제)했던 전례를 피하기 위함.
+# a~e(반복형 긴 문구)와 같은 BATTLE_MAIN_POOL/BATTLE_SUB_POOL에 섞여 들어가므로,
+# _pack_reaction_chain이 가끔 이 짧은 추임새를 긴 문구 사이에 자연스럽게 섞어 고른다.
+BATTLE_REACTION_PHRASES.update({
+    "f": "오!",
+    "g": "어?!",
+    "h": "엇!",
+    "i": "와!?",
+})
+# 🛡️ [sub 전용 단문 대체] "X, X!!" 대칭 반복 구조가 sub 보이스에서는 발화 길이가
+# ~1.5초를 넘기면 구조적으로 무음 게이트를 통과하지 못했다(a/b/d 각각 15/15 전부
+# 실패 - 반복 단어를 더 짧게 바꿔도 동일하게 전부 실패해 랜덤 변동이 아닌 구조적
+# 한계로 확인됨). c/e는 원래 짧아 반복형 그대로 1회 통과했으므로 그대로 두고,
+# a/b/d만 반복 없는 단문으로 대체(의미 계열은 동일 유지).
+BATTLE_SUB_PHRASES = {
+    "a": "계속 때려요!!",
+    "b": "돌아가요!!",
+    "d": "밀어붙여요!!",
 }
 BATTLE_MAIN_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_main_*.wav")))
 BATTLE_LCK_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_lck_*.wav")))
@@ -813,9 +885,32 @@ BATTLE_SUB_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_sub_*.wav")))
 # "짧고 격앙된 문구"(urgent 풀) 레시피를 main/lck_caster_dynamic/sub 공통으로 그대로
 # 적용했다. 전부 정적 풀(사전 녹음)이라 실시간 경로의 트림 함수가 필요 없고, 생성
 # 시점에 이미 트레일링 무음을 트림해둔다(정적 풀 생성 관례 그대로).
+# 🛡️ [발화 속도 - voice_settings.speed는 효과 없음, ffmpeg atempo로 후처리] "더 급박하게
+# 들리게" 하려고 voice_settings에 speed(0.25~4.0, 기본 1.0)를 0.7~2.0으로 바꿔가며
+# 실측했는데 길이가 전혀 안 변했다(노이즈 수준 변동만) - 이 TTS 엔드포인트(eleven_v4,
+# /v1/text-to-speech)에서는 해당 필드가 무시되는 것으로 보임(ElevenLabs의 "speed
+# control" 문서는 Conversational AI 에이전트 플랫폼 전용으로 보이고, 이 배치 합성
+# 엔드포인트에는 적용 안 됨). 대신 무음 게이트를 통과한 결과물에 ffmpeg
+# atempo=1.2를 적용해(피치 보존, 길이만 ~17% 단축) 최종 파일로 저장했다 - atempo는
+# 단순 시간 압축이라 기존에 0이던 무음 개수가 늘어날 리 없고, 15개 전부 재검증해서
+# 무음 0건 확인됨.
+# 🛡️ [BATTLE_SUB_POOL만 eleven_v3 원복 - main/hype 수렴 문제와 동일 처방] 자기상관
+# 기반 median pitch 실측 결과 main(v4)-sub(v4) 평균 pairwise 차이가 21.4Hz까지 좁혀져
+# 있었다(0단계 main-hype 수렴 실패 사례의 50.9Hz보다도 더 심함) - stability를 보이스별로
+# 다르게 주는 시도는 그 사건에서 이미 효과 없음이 확인됐으므로(79.4Hz->77.8Hz, 거의
+# 개선 없음) 다시 시도하지 않고, hype를 v3로 되돌려 해결했던 것과 동일하게 sub만
+# eleven_v3로 재생성했다(stability=0.45는 그대로, 여기도 바꾸지 않음). 재측정 결과
+# main-sub 평균 pairwise가 40.4Hz로 늘긴 했으나 v3 기준 참고치(107.8Hz)에는 못 미쳤고,
+# sub 자체의 문구 간 피치 변동폭(234.6~355.6Hz, 121Hz)이 main의 변동폭(38Hz)보다 훨씬
+# 커서 "같은 보이스인데 문구마다 톤이 들쭉날쭉하다"는 새로운 변수도 생겼다 - 수치만으로는
+# "뚜렷이 구분된다"고 단정할 수 없어 실제 렌더로 직접 들어봐야 하는 상태. atempo=1.2는
+# v3 재생성본에도 동일 적용(5개 전부 무음 0건 재확인).
 BATTLE_MAIN_TEXT = {f"battle_main_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
 BATTLE_LCK_TEXT = {f"battle_lck_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
-BATTLE_SUB_TEXT = {f"battle_sub_{k}.wav": v for k, v in BATTLE_REACTION_PHRASES.items()}
+BATTLE_SUB_TEXT = {
+    f"battle_sub_{k}.wav": BATTLE_SUB_PHRASES.get(k, v)
+    for k, v in BATTLE_REACTION_PHRASES.items()
+}
 
 
 def _pick_battle_reaction_files() -> dict[str, str] | None:
@@ -838,6 +933,96 @@ def _pick_battle_reaction_files() -> dict[str, str] | None:
             return None  # 풀에 해당 글자 파일이 없으면(생성 누락 등) 안전하게 스킵
         result[vk] = match
     return result
+
+
+# 🛡️ [리드인 재앵커링 - 올바른 위치] 위 BATTLE_REACTION_ENABLED 기능은 "0단계->1단계
+# 사이"(킬 난 직후)에 앵커링돼 있었는데, 실제로 원했던 건 "리드인(킬 나기 전, 싸우는
+# 도중)" 안에서 여러 명이 겹쳐 떠드는 효과였다 - 완전히 다른 자리라 새 트리거로
+# 재구현한다. LEADIN_OVERLAY_CHANCE(보이스 1개, 확률적 원-오프)와는 다르게, 이미
+# 배치된 상황 멘트(pre_buildup) 슬롯 하나의 시작 시점에 맞춰 2보이스(main+sub)가
+# _stage0_track_starts와 동일한 패턴(0~150ms 각자 랜덤 오프셋)으로 겹쳐 들어간다 -
+# "새 구간을 만들어 뒤로 미는" 0단계 방식이 아니라, 기존 리드인 타임라인을 그대로 두고
+# 그 위에 겹쳐 재생만 하는 방식이라 pre_buildup_starts 등 기존 스케줄링은 전혀 안
+# 바뀐다(회귀 위험 없음).
+# 🛡️ [lck_caster_dynamic 제외] pre_buildup 자체가 이미 lck_caster_dynamic 혼자 말하고
+# 있는 자리라, 같은 보이스가 자기 자신과 겹쳐 두 문장을 동시에 말하는 것처럼 들리는 걸
+# 피하려고 "나머지" 보이스인 main+sub만 쓴다(BATTLE_MAIN_POOL/BATTLE_SUB_POOL에서 각자
+# 독립적으로 문구를 이어 붙인다 - _pick_battle_reaction_files는 더 쓰지 않음, 비활성화된
+# 구버전 전투 리액션 쪽에서만 계속 쓰인다).
+BATTLE_LEADIN_OVERLAY_ENABLED = True
+
+
+def pick_leadin_battle_anchor(pre_buildup_starts: list[float], pre_buildup_durations: list[float],
+                               last_slot_is_urgent: bool = False) -> float | None:
+    """리드인 전투 리액션(main+sub 2보이스)이 겹쳐 들어갈 앵커 시각을 고르는 순수 함수
+    (테스트 가능).
+    🛡️ [urgent 종료 이후 여백 활용 - 설계 검토 결론] urgent 슬롯 자체와 겹치면
+    3보이스(urgent+main+sub)가 한 순간에 몰려 또 "난리" 위험이 있다는 게 설계 검토에서
+    확인됐다 - 대신 urgent 문구가 끝난 시점부터 kill_t - EOEO_GAP_SEC까지 남는 여백
+    (실측 1.9~3.1초+, _spread_fixed_n이 urgent보다 긴 "차분 풀 평균 길이" 기준으로
+    세그먼트를 배정해서 항상 남는 자투리 - EOEO 제거 후로는 그 뒤로 kill_t 직전까지
+    전부 포함)을 쓴다 - urgent 발화 자체는 전혀 안 건드리고, 그 "종료 시점"(urgent_
+    start + urgent_duration)을 앵커로 반환해 main/sub가 거기서부터 겹쳐 채우기
+    시작한다.
+    urgent 슬롯이 없으면(PRE_BUILDUP_URGENT_POOL이 비어 있거나 last_slot_is_urgent=
+    False) 예전처럼 "가장 늦은 calm 슬롯"의 시작 시점으로 폴백한다(urgent 자체가
+    없으니 그 종료 시점이라는 개념도 없음).
+    슬롯이 아예 없으면(N=0) None. 실제로 이 여백에 몇 개가 들어갈지는(각 보이스
+    duration을 probe해야 알 수 있어 이 함수 밖에서) 호출부가 kill_t - EOEO_GAP_SEC과
+    비교해 _pack_reaction_chain으로 따로 채운다."""
+    if not pre_buildup_starts:
+        return None
+    idx = len(pre_buildup_starts) - 1
+    if last_slot_is_urgent:
+        return pre_buildup_starts[idx] + pre_buildup_durations[idx]
+    return pre_buildup_starts[idx]
+
+
+BATTLE_LEADIN_JOIN_MIN_DELAY_SEC = 0.3
+BATTLE_LEADIN_JOIN_MAX_DELAY_SEC = 0.6
+
+
+BATTLE_PREOVERLAP_MIN_SEC = 0.3
+BATTLE_PREOVERLAP_MAX_SEC = 0.5
+BATTLE_SHORT_INTERJECTION_LETTERS = {"f", "g", "h", "i"}
+
+
+def _filter_short_interjection_pool(pool: list[str]) -> list[str]:
+    """BATTLE_MAIN_POOL/BATTLE_SUB_POOL에서 짧은 끼어들기 추임새(f~i: "오!"/"어?!"/
+    "엇!"/"와!?")만 골라내는 순수 함수(테스트 가능) - urgent 종료 직전 겹침에는
+    긴 반복형 문구(a~e)가 아니라 이 짧은 추임새만 써야 urgent 본문을 가리지 않는다.
+    파일명 규칙(battle_{voice}_{letter}.wav)의 마지막 글자로 판별한다."""
+    return [p for p in pool
+            if os.path.splitext(os.path.basename(p))[0].rsplit("_", 1)[-1] in BATTLE_SHORT_INTERJECTION_LETTERS]
+
+
+def pick_urgent_preoverlap_starts(anchor: float,
+                                   preoverlap_min: float = BATTLE_PREOVERLAP_MIN_SEC,
+                                   preoverlap_max: float = BATTLE_PREOVERLAP_MAX_SEC,
+                                   second_min: float = BATTLE_LEADIN_JOIN_MIN_DELAY_SEC,
+                                   second_max: float = BATTLE_LEADIN_JOIN_MAX_DELAY_SEC,
+                                   rng: random.Random | None = None) -> dict:
+    """pick_staggered_join_starts를 대체 - "urgent 혼자 조용히 끝남 -> 갑자기 2인
+    합창 시작"으로 뚝 끊기던 전환을, urgent가 끝나기(anchor) 0.3~0.5초 전부터 main/
+    sub 중 하나(랜덤)가 짧은 추임새로 먼저 겹쳐 들어오게 해서 자연스럽게 잇는다.
+    먼저 끼어드는 쪽(preoverlap_voice)이 그대로 다중 리액션의 "첫 합류자"를 겸하므로
+    (anchor 이전에 시작), 같은 목소리가 끊김 없이 계속 말하는 느낌을 노린다. 나머지
+    하나는 기존과 동일하게 anchor + U(second_min, second_max)에 합류한다.
+    반환값: {"starts": {"main": ..., "sub": ...}, "preoverlap_voice": "main"|"sub"} -
+    starts는 그대로 _pack_reaction_chain의 start_time으로 쓰인다(음수 방지로 0.0
+    하한 clamp)."""
+    _rng = rng if rng is not None else random
+    preoverlap_voice = _rng.choice(["main", "sub"])
+    other_voice = "sub" if preoverlap_voice == "main" else "main"
+    preoverlap_delay = _rng.uniform(preoverlap_min, preoverlap_max)
+    second_delay = _rng.uniform(second_min, second_max)
+    return {
+        "starts": {
+            preoverlap_voice: max(0.0, anchor - preoverlap_delay),
+            other_voice: anchor + second_delay,
+        },
+        "preoverlap_voice": preoverlap_voice,
+    }
 
 
 # ── 1단계(Hype 닉네임 샤우팅, 실시간 TTS) ──
@@ -1029,8 +1214,9 @@ EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 �
 EN_LEADIN_GAP_SEC = 0.2
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
 # 🛡️ [한국어 리드인도 N슬롯으로 확장] 상황멘트(PRE_BUILDUP) 자리 수를 EN_LEADIN과 같은 상한으로
-# 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치되고(자리가 없으면 더 적게), 그 뒤에
-# "어어??"(EOEO) 하나가 마지막에 온다는 관례는 그대로 유지한다(plan_lead_in_forward_eoeo 참고).
+# 맞춘다 - 렌더당 최대 이만큼 "상황멘트류"가 순차 배치된다(자리가 없으면 더 적게). EOEO
+# 제거 이후로는 이 뒤에 고정으로 오는 요소가 없고, kill_t - EOEO_GAP_SEC까지가 그대로
+# 가용 구간의 끝이다(plan_lead_in_forward_eoeo 참고).
 # 🛡️ [4 -> 3으로 하향 - 문장형 교체에 따른 재조정] PRE_BUILDUP_POOL이 1어절 추임새에서
 # "긴장 국면" 서술 문장(2~4어절, 1.3~2.3s)으로 바뀌면서, 긴 클립(kill_t=15s 시뮬레이션)에서
 # 실제로 4개가 전부 배치되는 경우가 나왔다 - 4개 전부 "긴장하고 있다" 계열 문장이라 연속
@@ -1153,6 +1339,121 @@ def _stage0_duration(starts: tuple[float, float, float], durations: tuple[float,
     return max(s + d for s, d in zip(starts, durations)) - kill_t
 
 
+BATTLE_LEADIN_CHAIN_GAP_SEC = 0.15
+
+
+def _arrangable_without_adjacent_repeat(combo: tuple[str, ...]) -> bool:
+    """combo(멀티셋)를 같은 항목이 연속되지 않게 한 줄로 배열할 수 있는지 판정하는
+    순수 함수 - 가장 많이 나온 항목의 개수가 (전체 개수+1)//2를 넘으면 수학적으로
+    반드시 어딘가에서 연속될 수밖에 없다(고전적인 "항목 재배열" 조건)."""
+    if not combo:
+        return True
+    max_count = max(combo.count(k) for k in set(combo))
+    return max_count <= (len(combo) + 1) // 2
+
+
+def _best_fill_combo(pool_durations: dict[str, float], available: float, gap_sec: float,
+                      max_items: int = 6) -> list[str]:
+    """available(초) 안에 pool_durations(중복 허용)에서 고른 문구들을 gap_sec
+    간격으로 채웠을 때, 빈틈(= available - (문구 길이 합 + gap_sec*(개수-1)))이
+    가장 작아지는 조합을 완전탐색으로 찾는 순수 함수(테스트 가능) - 매 단계 가장
+    긴 것부터 그리디로 고르면 "긴 것 하나를 먼저 써버려서 그 뒤로 아무것도 못
+    들어가는" 경우가 실측 시뮬레이션(여백 3.1s)에서 빈틈 1.15s로 나타났는데, 짧은
+    문구 2개(합 2.60s)를 쓰면 빈틈 0.35s로 더 작다 - 문구가 5개 내외뿐이라
+    (조합 개수가 작아) 완전탐색이 충분히 싸다. 순서 없는 키 리스트(멀티셋)를
+    반환하고, 실제 배치 순서는 호출부(_pack_reaction_chain)가 정한다.
+    🛡️ [같은 문구 연속 반복 금지 - 빈틈보다 다양성 우선] 빈틈 최소화만 보면 같은
+    문구 2~3개를 그대로 반복하는 조합이 뽑혀 "매크로 돌린 느낌"이 난다는 피드백을
+    받았다 - _arrangable_without_adjacent_repeat로 애초에 "연속 없이 배열 불가능한"
+    조합(예: 셋 다 동일 문구)은 아무리 빈틈이 작아도 후보에서 제외한다. 빈틈이 좀
+    늘어나더라도 다양성이 있는 조합만 고른다."""
+    keys = list(pool_durations.keys())
+    best_combo: list[str] = []
+    best_sum = 0.0
+    for n in range(1, max_items + 1):
+        if n * min(pool_durations.values()) + gap_sec * (n - 1) > available:
+            break  # 문구가 가장 짧아도 n개는 더 이상 못 들어감 - 그 이상 n은 볼 필요 없음
+        for combo in itertools.combinations_with_replacement(keys, n):
+            if not _arrangable_without_adjacent_repeat(combo):
+                continue
+            total = sum(pool_durations[k] for k in combo)
+            used = total + gap_sec * (n - 1)
+            if used <= available and total > best_sum:
+                best_sum = total
+                best_combo = list(combo)
+    return best_combo
+
+
+def _shuffle_avoiding_adjacent_repeats(items: list[str], rng: random.Random) -> list[str]:
+    """같은 문구가 바로 이어지지 않게 배열하는 순수 함수(테스트 가능) - 매번 "아직
+    남은 것 중 가장 많이 남은 것(동률이면 무작위)"을 직전과 다르게 고르는 고전
+    그리디(LeetCode "Reorganize String"과 동일한 알고리즘) - 배열 가능한 멀티셋이면
+    반드시 성공한다는 게 증명돼 있다.
+    🛡️ [버그 수정 - 셔플+국소 스왑 방식은 끝부분 중복을 못 고침] 이전 구현(무작위
+    셔플 후 인접 중복을 "뒤쪽에서" 찾아 스왑)은 중복이 배열 맨 끝에 몰리면(예:
+    [a,d,d]) 스왑할 "뒤쪽" 후보가 없어 못 고쳤다 - 실측 시뮬레이션(여백 3.1s)에서
+    배열 가능한 조합인데도 20000회 중 6771회(34%)나 연속 반복이 새어나간 게
+    확인됨. 이 그리디는 그런 경우가 없다."""
+    counts: dict[str, int] = {}
+    for it in items:
+        counts[it] = counts.get(it, 0) + 1
+    result: list[str] = []
+    prev: str | None = None
+    for _ in range(len(items)):
+        candidates = [k for k, c in counts.items() if c > 0 and k != prev]
+        if not candidates:
+            candidates = [k for k, c in counts.items() if c > 0]
+        max_count = max(counts[k] for k in candidates)
+        top = [k for k in candidates if counts[k] == max_count]
+        chosen = rng.choice(top)
+        result.append(chosen)
+        counts[chosen] -= 1
+        prev = chosen
+    return result
+
+
+def _pack_reaction_chain(pool_durations: dict[str, float], start_time: float, end_limit: float,
+                          gap_sec: float = BATTLE_LEADIN_CHAIN_GAP_SEC,
+                          rng: random.Random | None = None) -> list[tuple[str, float]]:
+    """pool_durations(파일명 -> 길이)에서 start_time부터 end_limit까지의 구간을
+    빈틈이 최소가 되도록 채운 (파일명, 시작시각) 리스트를 반환하는 순수 함수(테스트
+    가능, rng 주입하면 결정적) - "urgent 종료~EOEO 시작" 여백을 문구 하나만 넣고
+    비워두지 않기 위해 _best_fill_combo로 최적 조합을 찾은 뒤, 같은 문구가 바로
+    이어지는 건 가능하면 피하도록 순서를 섞어 gap_sec 간격으로 배치한다."""
+    _rng = rng if rng is not None else random
+    available = end_limit - start_time
+    if available <= 0 or not pool_durations:
+        return []
+    combo = _best_fill_combo(pool_durations, available, gap_sec)
+    if not combo:
+        return []
+    ordered = _shuffle_avoiding_adjacent_repeats(combo, _rng)
+    result: list[tuple[str, float]] = []
+    cursor = start_time
+    for key in ordered:
+        result.append((key, cursor))
+        cursor += pool_durations[key] + gap_sec
+    return result
+
+
+def _concat_wav_chain(paths: list[str], gap_sec: float, out_path: str) -> None:
+    """정적 풀 wav들(전부 동일 포맷 - 생성 스크립트 관례상 44.1kHz mono)을 gap_sec
+    무음으로 이어 붙여 out_path에 하나의 파일로 합친다. ffmpeg filter_complex 없이
+    stdlib wave만 사용(입력이 전부 PCM wav라 안전)."""
+    with wave.open(paths[0], "rb") as w0:
+        params = w0.getparams()
+    chunks = []
+    for i, p in enumerate(paths):
+        with wave.open(p, "rb") as w:
+            chunks.append(w.readframes(w.getnframes()))
+        if i < len(paths) - 1:
+            n_frames = int(round(gap_sec * params.framerate))
+            chunks.append(b"\x00" * (n_frames * params.sampwidth * params.nchannels))
+    with wave.open(out_path, "wb") as out:
+        out.setparams(params)
+        out.writeframes(b"".join(chunks))
+
+
 def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_count: int) -> list[float]:
     """0부터 시작하는 available 구간 안에 durs(순서대로) 최대 max_count개를 "평균 길이+gap"
     기준으로 자연스럽게 들어갈 개수 N을 정한 뒤, 그 구간을 N등분해 각 조각 앞쪽에 필러
@@ -1170,31 +1471,26 @@ def _spread_fillers_evenly(available: float, durs: list[float], gap: float, max_
     return [i * segment_width for i in range(n)]
 
 
-def plan_lead_in_forward_eoeo(kill_t: float, eoeo_dur: float,
+def plan_lead_in_forward_eoeo(kill_t: float,
                                start_offset: float = PRE_BUILDUP_START_OFFSET_SEC,
-                               end_gap: float = EOEO_GAP_SEC) -> tuple[float | None, float]:
-    """"어어??"(EOEO)를 kill_t 직전(kill_t - end_gap - eoeo_dur)에 고정 배치하고, 그 앞에
-    상황 멘트가 쓸 수 있는 시간(available)을 계산하는 순수 함수(테스트 가능) - EOEO 자체가
-    들어갈 자리조차 없으면(비정상적으로 짧은 클립/이른 킬) (None, 0.0)을 반환한다(기존과
-    동일한 안전장치). 반환된 available은 _estimate_pre_buildup_count -> _pick_pre_buildup_
-    slots -> _spread_fixed_n 순서로 이어지는 호출부가 사용한다.
-    🛡️ [N-먼저-추정 재구성으로 분리] 예전 plan_lead_in_forward는 이 EOEO 앵커링과 상황
-    멘트 오프셋 계산(_spread_fillers_evenly)을 한 함수에서 같이 했는데, 상황 멘트 쪽이
-    "먼저 파일을 뽑고 나중에 개수(N) 계산"에서 "먼저 N을 추정하고 그 수만큼만 뽑기"로
-    바뀌면서 두 책임이 더 이상 한 호출로 묶이지 않는다(N 추정 자체가 available을 필요로
-    하므로, 파일을 뽑기 전에 이 함수가 먼저 실행돼야 함) - EOEO 앵커링만 여기 남기고,
-    상황 멘트 오프셋 계산은 _spread_fixed_n으로 분리했다.
-    🛡️ [재설계 - "몰림" 문제 수정, 이전 라운드] 예전엔 상황 멘트를 앞에서부터 순서대로
-    빽빽하게 채우고 남는 자리에 EOEO를 붙이는 방식이라, 클립이 길수록 상황 멘트가 전부
-    초반에 몰리고 EOEO~킬 사이에 의미 없이 긴 침묵이 생기는 문제가 실측으로 확인됐다.
-    "킬 직전"이라는 고정 역할에 EOEO를 항상 앵커링하는 이 방식은 그대로 유지한다.
-    🛡️ [진입 멘트("entry_line") 실험 - 도입 후 제거됨] kill_t 역산 고정 위치로 EOEO 앞에
-    "자, 들어갔습니다" 류의 진입 선언을 넣어봤으나, 실제 전투 시작 시점을 모른 채 추측
-    배치하는 것뿐이라 체감 타이밍과 안 맞는 근본적 한계가 실측으로 확인돼 제거했다."""
-    eoeo_start = kill_t - end_gap - eoeo_dur
-    if eoeo_start < start_offset:
-        return None, 0.0
-    return eoeo_start, eoeo_start - start_offset
+                               end_gap: float = EOEO_GAP_SEC) -> float:
+    """상황 멘트(pre_buildup)가 쓸 수 있는 시간(available)을 계산하는 순수 함수(테스트
+    가능) - start_offset부터 kill_t - end_gap까지 전체가 사용 가능한 시간이다. 반환된
+    available은 _estimate_pre_buildup_count -> _pick_pre_buildup_slots -> _spread_fixed_n
+    순서로 이어지는 호출부가 사용한다.
+    🛡️ [EOEO 제거 - EN 리드인과 동일 패턴으로 통일] 원래 "어어??"(EOEO)를 kill_t 직전에
+    고정 배치하고 그 앞의 남는 시간만 상황 멘트에 줬었는데(eoeo_dur만큼 available이 줄어듦),
+    다중 리액션이 리드인 전체를 끊김 없이 채우는 지금 구조에서는 EOEO가 "항상 한 번
+    끼어드는 고정 멘트"로서 더 역할이 없어져 완전히 제거했다 - 영어 리드인(plan_leadin_
+    fillers_en)이 애초에 EOEO 같은 고정 앵커 없이 "start_offset부터 kill_t - end_gap까지
+    전체"를 available로 쓰던 것과 정확히 동일한 패턴으로 통일한다. 함수 이름(forward_eoeo)은
+    호출부를 더 안 건드리려고 그대로 남겼다(과거엔 실제로 "EOEO 쪽으로 forward 배치"하는
+    함수였던 이름의 흔적).
+    available이 음수가 될 수 있는 경우(비정상적으로 짧은 클립/이른 킬)는 0.0으로 clamp -
+    하위 호출부(_estimate_pre_buildup_count 등)가 이미 available<=0을 "자리 없음"으로
+    안전하게 처리하므로 별도 None 분기가 필요 없어졌다(기존엔 EOEO 자체가 안 들어가는
+    경우를 구분해야 해서 None을 반환했었음)."""
+    return max(0.0, kill_t - end_gap - start_offset)
 
 
 def plan_leadin_fillers_en(kill_t: float, durations: list[float],
@@ -2290,13 +2586,15 @@ class KyvoHighlight(KyvoBaseCog):
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
-        pre_buildup(상황 멘트)/eoeo("어어??")/leadin_overlay(리드인 2보이스 겹침, 확률적,
-        Hype 또는 Sub) (셋 다 킬 이전 리드인, 자리 없으면 없을 수도 있음)/main_explode/
-        hype_explode/sub_explode(0단계)/battle_main·battle_lck_caster_dynamic·battle_sub
-        (전투 지속 리액션, 0단계~1단계 사이, pre_buildup_slot_count>=2일 때만 있을 수
-        있음)/hype_nickname_1~3(1단계, 3보이스 동시 콜)/sub_question(2단계)/main_fact
-        (3단계) 중 실제로 쓰인 것만 있고, 각 엔트리는
-        {"wav","text","start","duration"}. 타이밍 자체는
+        pre_buildup(상황 멘트)/leadin_overlay(리드인 2보이스 겹침, 확률적,
+        Hype 또는 Sub)/leadin_battle_main·leadin_battle_sub(리드인 전투 리액션, 상황
+        멘트 슬롯 하나에 겹쳐 재생, pre_buildup_slot_count>=2일 때만, 이제 킬 직전
+        kill_t-EOEO_GAP_SEC까지 끊김 없이 채운다) (셋 다 킬 이전 리드인, 자리 없으면
+        없을 수도 있음)/main_explode/hype_explode/sub_explode(0단계)/
+        battle_main·battle_lck_caster_dynamic·battle_sub(비활성화된 구버전 전투 리액션 -
+        BATTLE_REACTION_ENABLED=False라 현재는 항상 없음)/hype_nickname_1~3(1단계,
+        3보이스 동시 콜)/sub_question(2단계)/main_fact(3단계) 중 실제로 쓰인 것만 있고,
+        각 엔트리는 {"wav","text","start","duration"}. 타이밍 자체는
         호출부에서 이미 다 계산돼서 넘어오므로, 여기선 그 계획대로 ffmpeg 인풋/필터그래프를
         조립하기만 한다."""
         total_duration = schedule["total_duration"]
@@ -2355,7 +2653,8 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [3보이스 동시 콜] "hype_nickname" 단일 키가 3보이스 동시 콜에 맞춰
         # hype_nickname_1/2/3(KO: main+hype+sub, EN: sterling+carter+atlee)로 늘어났다.
         for key in ("pre_buildup_1", "pre_buildup_2", "pre_buildup_3", "pre_buildup_4",
-                    "eoeo", "leadin_overlay", "main_explode", "hype_explode", "sub_explode",
+                    "leadin_overlay", "leadin_battle_main", "leadin_battle_sub",
+                    "main_explode", "hype_explode", "sub_explode",
                     "battle_main", "battle_lck_caster_dynamic", "battle_sub",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee", "en_leadin_1", "en_leadin_2", "en_leadin_3", "en_leadin_4"):
@@ -4308,10 +4607,10 @@ class KyvoHighlight(KyvoBaseCog):
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
             schedule["total_duration"] = total_duration
         else:
-            if not (PRE_BUILDUP_POOL and EOEO_POOL and MAIN_EXPLODE_POOL
+            if not (PRE_BUILDUP_POOL and MAIN_EXPLODE_POOL
                     and HYPE_EXPLODE_POOL and SUB_EXPLODE_POOL and SUB_QUESTION_POOL):
                 print(f"[HIGHLIGHT][CRITICAL] Static voice pool missing files (guild={guild_id}): "
-                      f"pre_buildup={len(PRE_BUILDUP_POOL)} eoeo={len(EOEO_POOL)} "
+                      f"pre_buildup={len(PRE_BUILDUP_POOL)} "
                       f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
                       f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
                 await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
@@ -4329,12 +4628,10 @@ class KyvoHighlight(KyvoBaseCog):
             # 뽑는다(_pick_pre_buildup_slots, 추임새 중복 방지는 그 안에서 그대로 유지) -
             # 대표 길이와 실제 뽑힐 파일 길이가 달라 N이 ±1 오차 날 수 있음은 감내 가능한
             # 수준으로 판단, 별도 보정 없음.
-            eoeo_file = random.choice(EOEO_POOL)
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
-                eoeo_duration = await self._to_executor(self._probe_audio_duration, eoeo_file)
-                eoeo_start_est, pre_buildup_available = plan_lead_in_forward_eoeo(kill_t, eoeo_duration)
+                pre_buildup_available = plan_lead_in_forward_eoeo(kill_t)
                 pre_buildup_pool_durations = [
                     await self._to_executor(self._probe_audio_duration, f) for f in PRE_BUILDUP_POOL
                 ]
@@ -4459,12 +4756,11 @@ class KyvoHighlight(KyvoBaseCog):
             main_fact_start = kill_t + seq["t3"]
 
             # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
-            # 자리가 허락하는 만큼) -> "어어??"(마지막 1개) 순서로 배치한다. EOEO 앵커링/
-            # available 계산은 위에서 plan_lead_in_forward_eoeo로 이미 끝냈으므로, 여기서는
-            # 그 결과(eoeo_start_est/pre_buildup_available)와 이미 확정된 자리 개수
-            # (len(pre_buildup_candidates))로 오프셋만 펼친다(_spread_fixed_n) - 실제 파일
-            # 길이로 자리 개수를 다시 계산하지 않는다(마지막 슬롯이 조용히 잘리는 걸 막기 위함).
-            eoeo_start = eoeo_start_est
+            # 자리가 허락하는 만큼)를 배치한다. available 계산은 위에서
+            # plan_lead_in_forward_eoeo로 이미 끝냈으므로, 여기서는 그 결과
+            # (pre_buildup_available)와 이미 확정된 자리 개수(len(pre_buildup_candidates))로
+            # 오프셋만 펼친다(_spread_fixed_n) - 실제 파일 길이로 자리 개수를 다시 계산하지
+            # 않는다(마지막 슬롯이 조용히 잘리는 걸 막기 위함).
             pre_buildup_starts = _spread_fixed_n(
                 PRE_BUILDUP_START_OFFSET_SEC, pre_buildup_available, len(pre_buildup_candidates))
 
@@ -4477,11 +4773,107 @@ class KyvoHighlight(KyvoBaseCog):
             if LEADIN_OVERLAY_POOL and random.random() < LEADIN_OVERLAY_CHANCE:
                 leadin_overlay_file = random.choice(LEADIN_OVERLAY_POOL)
                 leadin_overlay_duration = await self._to_executor(self._probe_audio_duration, leadin_overlay_file)
+                # 🛡️ [EOEO 제거 후 - 항상 pre_buildup 폴백 경로] eoeo_start=None을 넘기면
+                # pick_leadin_overlay_start가 원래 갖고 있던 "EOEO 없을 때" 폴백 분기(마지막
+                # pre_buildup 슬롯 중간 지점)를 그대로 타게 된다 - 그 분기는 EOEO 유무와
+                # 무관하게 이미 안전하게 동작하던 경로라 함수 자체는 손대지 않았다.
                 leadin_overlay_start = pick_leadin_overlay_start(
-                    pre_buildup_starts, pre_buildup_durations, eoeo_start, eoeo_duration,
+                    pre_buildup_starts, pre_buildup_durations, None, 0.0,
                     leadin_overlay_duration, kill_t)
                 if leadin_overlay_start is None:
                     leadin_overlay_file = None
+
+            # 🛡️ [리드인 전투 리액션 - 올바른 자리] pre_buildup_slot_count(N)>=2일 때만,
+            # 이미 배치된 상황 멘트 슬롯 하나의 시작 시점에 main+sub 2보이스를 겹쳐
+            # 넣는다. 기존 pre_buildup_starts는 전혀 안 바꾸고(새 구간을 만들어 뒤로
+            # 미는 0단계 방식이 아니다), kill_t - EOEO_GAP_SEC을 넘기면 조용히
+            # 스킵한다(억지로 자르지 않는다는 기존 리드인 원칙 그대로).
+            leadin_battle_files: dict[str, str] = {}
+            leadin_battle_starts: dict[str, float] = {}
+            leadin_battle_durations: dict[str, float] = {}
+            leadin_battle_texts: dict[str, str] = {}
+            if (BATTLE_LEADIN_OVERLAY_ENABLED
+                    and pre_buildup_slot_count >= BATTLE_REACTION_MIN_PRE_BUILDUP_SLOTS):
+                last_slot_is_urgent = bool(pre_buildup_candidates) and pre_buildup_candidates[-1] in PRE_BUILDUP_URGENT_POOL
+                anchor_time = pick_leadin_battle_anchor(
+                    pre_buildup_starts, pre_buildup_durations, last_slot_is_urgent)
+                if anchor_time is not None and BATTLE_MAIN_POOL and BATTLE_SUB_POOL:
+                    # 🛡️ [여백을 끊김 없이 채우는 연속 재생] 문구 하나만 겹쳐 넣고 나머지
+                    # 여백을 비워두던 방식(재뽑기로 "맞으면 넣고 안 맞으면 스킵") 대신,
+                    # main/sub 각자 자기 몫의 시작 시점부터 킬 직전(kill_t - EOEO_GAP_SEC)
+                    # 까지 짧은 문구를 gap_sec(0.1~0.2s) 간격으로 계속 이어 붙인다
+                    # (_pack_reaction_chain). 🛡️ [EOEO 제거로 종료 한계 변경] 예전엔 EOEO가
+                    # 고정으로 킬 직전을 차지해서 그 시작 시점(eoeo_start)까지만 채웠는데,
+                    # EOEO를 아예 없앴으므로 이제 리액션이 kill_t - EOEO_GAP_SEC(기존 "EOEO
+                    # 종료~킬 안전 여백" 0.6초를 범용 안전 여백으로 재사용)까지 직접 이어진다
+                    # - 리액션이 끊김 없이 킬 순간 직전까지 쭉 이어지는 그림이 된다. 이어 붙인
+                    # 결과는 wave 모듈로 미리 하나의 파일로 합쳐(_concat_wav_chain) 기존
+                    # schedule 구조(보이스당 파일 1개)를 그대로 재사용한다.
+                    # 🛡️ [urgent 겹침 전환 - "뚝 끊김" 완화] "urgent 혼자 조용히 끝남 ->
+                    # 갑자기 2인 합창 시작"으로 전환이 뚝 끊기던 문제를, urgent가 끝나기
+                    # 0.3~0.5초 전부터 main/sub 중 하나(랜덤)가 짧은 추임새(f~i)로 먼저
+                    # 겹쳐 들어오게 해서 완화한다(pick_urgent_preoverlap_starts) - 이
+                    # 함수가 한 명씩 합류(이전 라운드) 로직을 대체한다. 먼저 끼어드는 쪽이
+                    # 그대로 체인의 "첫 합류자"를 겸해서 같은 목소리가 끊김 없이 계속 말하는
+                    # 느낌을 노리고, 나머지 하나는 기존처럼 anchor+0.3~0.6초 뒤에 합류한다.
+                    # 늦게 합류하는 쪽은 그만큼 채울 시간이 줄어들지만, 그 처리는
+                    # _pack_reaction_chain의 available(=end_limit-start_time) 계산에 이미
+                    # 들어있어 여기서 추가로 신경 쓸 게 없다.
+                    preoverlap_result = pick_urgent_preoverlap_starts(anchor_time)
+                    preoverlap_voice = preoverlap_result["preoverlap_voice"]
+                    main_jitter_start = preoverlap_result["starts"]["main"]
+                    sub_jitter_start = preoverlap_result["starts"]["sub"]
+                    main_pool_durations = {
+                        os.path.basename(p): await self._to_executor(self._probe_audio_duration, p)
+                        for p in BATTLE_MAIN_POOL
+                    }
+                    sub_pool_durations = {
+                        os.path.basename(p): await self._to_executor(self._probe_audio_duration, p)
+                        for p in BATTLE_SUB_POOL
+                    }
+                    reaction_end_limit = kill_t - EOEO_GAP_SEC
+
+                    # 🛡️ [끼어드는 쪽은 짧은 추임새로 체인을 시작] preoverlap_voice만 첫
+                    # 항목을 짧은 끼어들기 추임새(f~i)로 강제하고, 그 뒤 남는 시간은 기존
+                    # _pack_reaction_chain으로 그대로 채운다 - 긴 반복형 문구(a~e)로
+                    # 시작하면 urgent 본문을 가릴 만큼 커질 수 있어 피한다.
+                    pool_durations_by_voice = {"main": main_pool_durations, "sub": sub_pool_durations}
+                    starts_by_voice = {"main": main_jitter_start, "sub": sub_jitter_start}
+                    short_main = {os.path.basename(p) for p in _filter_short_interjection_pool(BATTLE_MAIN_POOL)}
+                    short_sub = {os.path.basename(p) for p in _filter_short_interjection_pool(BATTLE_SUB_POOL)}
+                    short_by_voice = {"main": short_main, "sub": short_sub}
+
+                    plans = {}
+                    for vk in ("main", "sub"):
+                        pool_durations = pool_durations_by_voice[vk]
+                        start = starts_by_voice[vk]
+                        short_pool = short_by_voice[vk]
+                        if vk == preoverlap_voice and short_pool:
+                            interject_basename = random.choice(list(short_pool))
+                            interject_dur = pool_durations[interject_basename]
+                            rest_start = start + interject_dur + BATTLE_LEADIN_CHAIN_GAP_SEC
+                            rest_plan = _pack_reaction_chain(pool_durations, rest_start, reaction_end_limit)
+                            plans[vk] = [(interject_basename, start)] + rest_plan
+                        else:
+                            plans[vk] = _pack_reaction_chain(pool_durations, start, reaction_end_limit)
+                    main_plan = plans["main"]
+                    sub_plan = plans["sub"]
+                    text_by_voice = {"main": BATTLE_MAIN_TEXT, "sub": BATTLE_SUB_TEXT}
+                    for vk, plan, pool_durations in (("main", main_plan, main_pool_durations),
+                                                       ("sub", sub_plan, sub_pool_durations)):
+                        if not plan:
+                            continue
+                        chain_paths = [os.path.join(VOICE_DIR, basename) for basename, _ in plan]
+                        combined_path = os.path.join(work_dir, f"leadin_battle_{vk}_chain.wav")
+                        await self._to_executor(
+                            _concat_wav_chain, chain_paths, BATTLE_LEADIN_CHAIN_GAP_SEC, combined_path)
+                        chain_start = plan[0][1]
+                        last_basename, last_start = plan[-1]
+                        leadin_battle_files[vk] = combined_path
+                        leadin_battle_starts[vk] = chain_start
+                        leadin_battle_durations[vk] = (last_start + pool_durations[last_basename]) - chain_start
+                        leadin_battle_texts[vk] = " / ".join(
+                            text_by_voice[vk].get(basename, basename) for basename, _ in plan)
 
             end_times = [
                 main_explode_start + main_explode_duration,
@@ -4496,6 +4888,10 @@ class KyvoHighlight(KyvoBaseCog):
             if battle_reaction_files:
                 end_times.extend(
                     battle_reaction_starts[vk] + battle_reaction_durations[vk] for vk in battle_reaction_files
+                )
+            if leadin_battle_files:
+                end_times.extend(
+                    leadin_battle_starts[vk] + leadin_battle_durations[vk] for vk in leadin_battle_files
                 )
             total_duration = max(duration, max(end_times) + RENDER_TAIL_BUFFER_SEC)
 
@@ -4516,9 +4912,6 @@ class KyvoHighlight(KyvoBaseCog):
             for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
                 schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
                                                        "start": hype_nickname_start, "duration": dur}
-            if eoeo_start is not None:
-                schedule["eoeo"] = {"wav": eoeo_file, "text": EOEO_TEXT[os.path.basename(eoeo_file)],
-                                     "start": eoeo_start, "duration": eoeo_duration}
             for i, start in enumerate(pre_buildup_starts):
                 f = pre_buildup_candidates[i]
                 basename = os.path.basename(f)
@@ -4538,6 +4931,11 @@ class KyvoHighlight(KyvoBaseCog):
                 schedule[f"battle_{vk}"] = {
                     "wav": path, "text": text,
                     "start": battle_reaction_starts[vk], "duration": battle_reaction_durations[vk],
+                }
+            for vk, path in leadin_battle_files.items():
+                schedule[f"leadin_battle_{vk}"] = {
+                    "wav": path, "text": leadin_battle_texts.get(vk),
+                    "start": leadin_battle_starts[vk], "duration": leadin_battle_durations[vk],
                 }
         # 🛡️ [오버레이 HUD 타이밍] 명세서의 고정값이 아니라 이 렌더의 실제 schedule 타이밍을
         # 그대로 재사용한다 - kill_t(0단계, 킬 순간)에 등장해서 3단계(사실 전달)가 끝날 때
