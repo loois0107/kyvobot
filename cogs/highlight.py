@@ -1620,6 +1620,16 @@ CHAMPION_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "champion_icons_cache")
 ITEM_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "item_icons_cache")
 DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
 
+# 🛡️ [원형 포트레이트 1단계 검증 - 실험용, 기본 비활성] 10개 전체 통합 전에 1개만으로
+# alphamerge 합성/성능을 검증하는 단계. PORTRAIT_CIRCLE_TEST_TAG가 None이면(기본값)
+# 기존 사각형 경로만 타서 운영 동작에 전혀 영향 없다 - 검증 스크립트에서만 특정
+# tag(예: "L0")로 몽키패치해 그 포트레이트 1개만 원형 경로를 타게 한다. 마스크는
+# PIL로 미리 그레이스케일(L 모드, 원 안쪽=255백색/바깥쪽=0검정)로 구워둔 정적
+# 에셋이다 - alphamerge는 두 번째 입력의 "밝기(luma)"를 알파로 복사하므로(그 입력
+# 자체의 알파 채널은 무시됨), 마스크는 RGBA가 아니라 그레이스케일이어야 한다.
+PORTRAIT_CIRCLE_MASK_PATH = os.path.join(OVERLAY_DIR, "portrait_circle_mask.png")
+PORTRAIT_CIRCLE_TEST_TAG: str | None = None
+
 # 🛡️ [오브젝트 아이콘 - Community Dragon, 비공식 미러] Riot 공식 Data Dragon엔 없지만
 # raw.communitydragon.org의 실제 게임 에셋 덤프에 있다(실제 200 응답+PNG 바이트 확인함) -
 # 타워는 minimap/icons/, 드래곤은 scoreboard/ 아래에 있다는 게 이번에 새로 확인된 경로.
@@ -1758,11 +1768,16 @@ ITEM_SLOT_BORDER_COLOR = "#2D274D"
 # 밝든 어둡든 거의 항상 대비가 생겨서 훨씬 뚜렷하게 개별 식별됨(실측 스크린샷으로 확인) -
 # 과하게 튀지도 않아서(옅은 은색 라인 정도) white@0.3을 최종 채택.
 ITEM_ICON_OUTLINE_COLOR = "white@0.3"
-# 🛡️ [챔피언 프레임 색 - 보라 vs 금색 중 금색 선택] 패널 배경 자체가 블루/네이비 계열이라
-# 보라 테두리는 배경과 명도가 비슷해 묻힌다. LoL 클라이언트가 소환사 아이콘/룬 테두리에
-# 표준으로 쓰는 골드(#C89B3C 계열)가 어두운 배경 위에서 확실히 도드라지고, 롤 유저에게
-# 이미 익숙한 "강조 테두리" 색이라 이걸로 선택.
-CHAMPION_FRAME_COLOR = "#C89B3C"
+# 🛡️ [Worlds/LCK 참고 이미지 재조정 - 금색 -> 채도 낮은 흰색] 위 "보라 vs 금색"
+# 비교는 과거 자체 판단이었는데, 실제 Worlds 2025 방송 화면을 직접 대조해보니
+# 참고 이미지의 테두리는 금색이 아니라 아주 얇고 채도 낮은 흰색/회색 계열이었다 -
+# 참고 이미지와 가장 가깝게 맞춘다(반투명 흰색, color@alpha 문법은 이미 다른 곳의
+# "black@0.6" 등에서 쓰던 방식 그대로).
+CHAMPION_FRAME_COLOR = "white@0.4"
+# 🛡️ [고정 픽셀 - 1080p 기준 헤어라인] 1px은 ffmpeg drawbox 안티앨리어싱 처리 방식상
+# 거의 안 보일 위험이 있어(실측 필요), 2px을 기본값으로 택했다 - MAX_OUTPUT_WIDTH=1920
+# 기준 렌더에서 "얇은 헤어라인"으로 보이는지 실제 렌더로 확인한다.
+CHAMPION_FRAME_BORDER_W_PX = 2
 GRID_TEXT_BORDER_COLOR = "black"
 # 🛡️ [테두리 완전 제거 - 0px] 2px->4px로 키웠다가, 실제 매치 데이터로 0px/1px/4px를
 # 나란히 비교 렌더해서 직접 판단한 결과 0px(테두리 없음)가 실제 LCK 느낌에 가장
@@ -1793,6 +1808,9 @@ PORTRAIT_GAP_EXTRA_OFFSET = 36
 # 늘리면 같은 색 배경 위에 같은 색 텍스트라 안 보이게 됨 - 그래서 숫자는 박스 밖).
 GOLD_GAP_ARROW_BADGE_W = 16
 GOLD_GAP_ARROW_FONT_SIZE = 10
+# 🛡️ [레벨 배지 크기] 포트레이트 전체를 덮지 않도록 포트레이트 변의 42%로 제한 -
+# 좌상단 모서리에 작게 겹치는 정도(요청 스펙: "작은 레벨 배지").
+LEVEL_BADGE_SIZE_RATIO = 0.42
 # 🛡️ [숫자 텍스트 - 화살표와 별개 크기] 화살표 글리프(10px)와 완전히 같을 필요 없다는
 # 요청대로 12px로 분리.
 GOLD_GAP_NUMBER_FONT_SIZE = 12
@@ -2244,6 +2262,19 @@ def _compute_scoreboard_at_time(timeline: dict, participants: list[dict], kill_g
         "team100_barons": barons[100], "team200_barons": barons[200],
         "team100_hordes": hordes[100], "team200_hordes": hordes[200],
         "team100_gold": gold[100], "team200_gold": gold[200],
+    }
+
+
+def _compute_participant_levels_at_time(timeline: dict, kill_game_ms: float) -> dict[int, int]:
+    """킬 시점(kill_game_ms) 기준 각 참가자의 챔피언 레벨을 timeline에서 계산하는
+    순수 함수(테스트 가능) - _compute_scoreboard_at_time의 골드 계산과 정확히 같은
+    "가장 가까운 프레임" 패턴을 재사용한다(participantFrames는 약 60초 간격이라 최대
+    ±30초 오차가 있을 수 있지만, "매치 최종 레벨"을 쓰는 것보다 킬 시점에 훨씬
+    가깝다). ParticipantFrameDto에는 level 필드가 totalGold와 같은 자리에 있다."""
+    closest_frame = min(timeline["info"]["frames"], key=lambda f: abs(f["timestamp"] - kill_game_ms))
+    return {
+        int(pid_str): pframe.get("level", 1)
+        for pid_str, pframe in closest_frame["participantFrames"].items()
     }
 
 
@@ -2712,6 +2743,15 @@ class KyvoHighlight(KyvoBaseCog):
                     else:
                         item_indices.append(None)
                 roster_item_idx[r["participant_id"]] = item_indices
+
+        # 🛡️ [원형 포트레이트 1단계 검증용 마스크 입력] PORTRAIT_CIRCLE_TEST_TAG가
+        # None이면(기본값) 아예 입력을 추가하지 않는다 - 운영 경로에 입력 1개도
+        # 늘리지 않음. 테스트 1개 포트레이트만 쓰므로 마스크 입력도 1개만 추가한다.
+        portrait_circle_mask_idx: int | None = None
+        if PORTRAIT_CIRCLE_TEST_TAG is not None and os.path.exists(PORTRAIT_CIRCLE_MASK_PATH):
+            inputs += ["-i", PORTRAIT_CIRCLE_MASK_PATH]
+            portrait_circle_mask_idx = next_input_idx
+            next_input_idx += 1
 
         # 🛡️ [타워/드래곤 아이콘 입력] Community Dragon 실패 시 None - 동일한 안전 처리.
         scoreboard_for_input = schedule.get("scoreboard") or {}
@@ -3340,11 +3380,12 @@ class KyvoHighlight(KyvoBaseCog):
             # ~26%)은 패널 좌우에 빈 공간을 남겼다(조사로 확인됨) - 포트레이트를 침범하지
             # 않는 상한인 portrait_size와 완전히 동일한 크기까지 올려서 그 공간을 채운다.
             item_size = portrait_size
-            # 🛡️ [테두리 두께 상수화] 기존엔 t=1 리터럴이었다 - portrait_size/item_size에
-            # 비례하는 값으로 바꿔서 해상도가 달라져도 같은 상대적 두께를 유지한다(이번
-            # 테스트 해상도(portrait_size=23)에서는 계산해도 여전히 1px이라 시각적 차이 없음,
-            # 계산으로 확인됨).
-            champion_frame_border_w = max(1, round(portrait_size * 0.04))
+            # 🛡️ [비율 기반 -> 고정 픽셀 - Worlds 참고 이미지 재조정] portrait_size의 4%
+            # 비율 방식은 실제 운영 해상도(1920 기준, MAX_OUTPUT_WIDTH)에서 테스트
+            # 해상도보다 훨씬 두꺼워진다는 게 지적됨 - 참고 이미지는 해상도가 올라가도
+            # 거의 안 변하는 "헤어라인" 느낌이라, 비율 대신 고정 픽셀(CHAMPION_FRAME_
+            # BORDER_W_PX)로 바꿔 해상도와 무관하게 항상 얇게 유지한다.
+            champion_frame_border_w = CHAMPION_FRAME_BORDER_W_PX
             item_slot_border_w = max(1, round(item_size * 0.04))
             pad = max(2, int(round(row_h_raw * 0.06)))
             # 🛡️ [텍스트 가독성 1순위 - 크기 대폭 확대] 기존 0.26 비율은 실측 row_h_raw
@@ -3429,7 +3470,20 @@ class KyvoHighlight(KyvoBaseCog):
 
                     icon_idx = roster_icon_idx.get(pid)
                     if icon_idx is not None:
-                        grid_parts.append(f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}p]")
+                        # 🛡️ [원형 포트레이트 1단계 검증 - tag 1개만] 이 tag가
+                        # PORTRAIT_CIRCLE_TEST_TAG와 일치할 때만 alphamerge로 원형
+                        # 마스킹하고, 나머지 9개는 기존 사각형 scale+overlay 그대로
+                        # (이번 단계는 "통합"이 아니라 "검증"이라 전체 분기를 바꾸지
+                        # 않는다).
+                        if tag == PORTRAIT_CIRCLE_TEST_TAG and portrait_circle_mask_idx is not None:
+                            grid_parts.append(
+                                f";[{portrait_circle_mask_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}mask]")
+                            grid_parts.append(
+                                f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}piconrgb]")
+                            grid_parts.append(
+                                f";[vr{tag}piconrgb][vr{tag}mask]alphamerge[vr{tag}p]")
+                        else:
+                            grid_parts.append(f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}p]")
                         grid_parts.append(
                             f";[{label}][vr{tag}p]overlay=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
                             f"enable='{grid_enable}'[vr{tag}a]")
@@ -3443,6 +3497,47 @@ class KyvoHighlight(KyvoBaseCog):
                             f"w={portrait_size}:h={portrait_size}:color={CHAMPION_FRAME_COLOR}:t={champion_frame_border_w}:"
                             f"enable='{grid_enable}'[vr{tag}pf]")
                         label = f"vr{tag}pf"
+
+                        # 🛡️ [레벨 배지 - 좌상단 -> 좌하단] Worlds 참고 이미지 재조정 -
+                        # 참고 이미지의 레벨 숫자가 포트레이트 좌상단이 아니라 좌하단
+                        # 모서리에 겹쳐 있었다는 재확인 결과를 반영. 챔피언 프레임과
+                        # 동일한 패턴(나중에 그려서 안 가리게)은 그대로 유지, 반투명 박스
+                        # 위에 숫자만. 포트레이트 전체를 덮지 않도록 LEVEL_BADGE_SIZE_RATIO로
+                        # 작게 제한.
+                        level_val = r.get("level")
+                        if level_val is not None:
+                            # 🛡️ [하한 10px이 portrait_size를 넘지 않게 클램프] 극단적으로
+                            # 작은 해상도(portrait_size<10px)에서 하한(가독성용 최소 크기)이
+                            # 포트레이트 자체보다 커져 테두리를 벗어나는 걸 막는다.
+                            level_badge_size = min(portrait_size, max(10, int(round(portrait_size * LEVEL_BADGE_SIZE_RATIO))))
+                            level_badge_y = portrait_y + portrait_size - level_badge_size
+                            level_tf = _write_textfile(f"roster_level_{tag}", str(level_val))
+                            # 🛡️ [가독성 - 불투명도 상향 + 텍스트 외곽선 이중 안전장치] 0.6은
+                            # 밝은 초상화 위에서 포트레이트 색이 비쳐 보여 대비가 부족했다
+                            # (실측: 픽셀 샘플링 결과 순수 검정이 아니라 포트레이트 색과
+                            # 섞인 회갈색/보라색이 나옴) - 0.82로 올려 어떤 밝기의 초상화
+                            # 위에서도 박스 자체가 뚜렷하게 어둡도록 했다. 텍스트에도 CS/KDA와
+                            # 동일한 외곽선(GRID_TEXT_BORDER_COLOR/W)을 추가해 박스만으로
+                            # 부족한 경우에도 숫자 자체가 읽히도록 이중으로 보강했다.
+                            grid_parts.append(
+                                f";[{label}]drawbox=x={int(round(portrait_x))}:y={level_badge_y:.2f}:"
+                                f"w={level_badge_size}:h={level_badge_size}:color=black@0.82:t=fill:"
+                                f"enable='{grid_enable}'[vr{tag}lvlbox]")
+                            label = f"vr{tag}lvlbox"
+                            level_font_size = max(8, int(round(level_badge_size * 0.68)))
+                            # 🛡️ [GRID_TEXT_BORDER_W=0을 그대로 재사용하지 않음] CS/KDA는
+                            # "고정된 어두운 남색 패널 배경" 위라 테두리 없이도 대비가
+                            # 충분하다고 판단해 0으로 뒀지만(위 상수 주석 참고), 레벨 배지는
+                            # 배경이 제각각인 포트레이트 바로 위라 상황이 다르다 - 박스 불투명도
+                            # (0.82)와 별개의 이중 안전장치로 1px 테두리를 직접 지정한다.
+                            grid_parts.append(
+                                f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{level_tf}':"
+                                f"fontsize={level_font_size}:fontcolor=white:"
+                                f"bordercolor=black:borderw=1:"
+                                f"x='{int(round(portrait_x))}+({level_badge_size}-text_w)/2':"
+                                f"y='{level_badge_y:.2f}+({level_badge_size}-text_h)/2':"
+                                f"enable='{grid_enable}'[vr{tag}lvl]")
+                            label = f"vr{tag}lvl"
 
                     # 🛡️ [1순위 - 하단 텍스트 가독성] "CS " 라벨을 없애 숫자만 남기고(KDA는
                     # 이미 "K/D/A" 형태로 숫자뿐이라 그대로), Black 웨이트 폰트 + 검은 외곽선
@@ -4273,6 +4368,11 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [하단 포지션별 5행 그리드용 데이터] participants 10명 전원은 chosen에 이미 다
         # fetch돼 있다(추가 Riot API 호출 없음). position(teamPosition)까지 같이 뽑아서
         # _pair_roster_by_position()이 팀 간 매칭에 쓴다.
+        # 🛡️ [레벨 - 킬 시점 기준] CS와 달리 레벨은 "매치 최종값"이 아니라 _compute_
+        # scoreboard_at_time과 동일한 패턴(가장 가까운 participantFrames)으로 킬 시점
+        # 기준을 쓴다 - 화면에 찍히는 시간과 레벨이 어긋나는 걸 막기 위함(CS는 이번
+        # 라운드 범위 밖이라 그대로 매치 최종값 유지).
+        participant_levels = _compute_participant_levels_at_time(timeline, game_time_ms)
         roster = []
         for p in chosen["info"]["participants"]:
             items = [p.get(f"item{i}", 0) for i in range(6)]
@@ -4284,6 +4384,7 @@ class KyvoHighlight(KyvoBaseCog):
                 "name": p.get("riotIdGameName") or p.get("summonerName") or "Unknown",
                 "kda": (p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)),
                 "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
+                "level": participant_levels.get(p["participantId"], p.get("champLevel", 1)),
                 "items": items,
             })
         team100_roster = [r for r in roster if r["team_id"] == 100]
