@@ -1628,18 +1628,41 @@ SPELL_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "spell_icons_cache")
 RUNE_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "rune_icons_cache")
 DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
 
-# 🛡️ [원형 포트레이트 - 10개 전체 적용] 1단계(단일 포트레이트 alphamerge) 검증을
-# 거쳐 10개(5행×2열) 전부에 통합했다. 마스크는 PIL로 미리 그레이스케일(L 모드, 원
-# 안쪽=255백색/바깥쪽=0검정)로 구워둔 정적 에셋이다 - alphamerge는 두 번째 입력의
-# "밝기(luma)"를 알파로 복사하므로(그 입력 자체의 알파 채널은 무시됨), 마스크는
-# RGBA가 아니라 그레이스케일이어야 한다.
-# 🛡️ [입력은 10개가 아니라 1개만 - 인덱스 꼬임 위험 최소화] 포트레이트마다 별도
-# "-i"를 또 추가하면 입력이 10개 늘어나 인덱스 꼬일 위험이 커진다(1단계 검증 때도
-# 실제로 디버깅에 시간을 썼음) - 대신 마스크 입력은 "-i" 한 번만 추가하고, 그
-# 입력 스트림 인덱스([{portrait_circle_mask_idx}:v])를 10번 재사용해 포트레이트마다
-# 독립적으로 scale한다(ffmpeg는 같은 입력 인덱스를 여러 필터에서 재사용하는 게
-# 표준 동작 - split 필터 없이도 안전하다, 라벨 재사용과 달리 애매함이 없음).
-PORTRAIT_CIRCLE_MASK_PATH = os.path.join(OVERLAY_DIR, "portrait_circle_mask.png")
+# 🛡️ [원형 포트레이트 시도 -> 사각형으로 최종 복귀] 한때 alphamerge+그레이스케일
+# 마스크로 10개 전체를 원형 마스킹했었는데, Worlds 참고 사진을 다시 확인한 결과
+# 실제 방송은 사각형이었고 원형 전환이 "레벨 숫자가 모서리 밖으로 튀어나옴" +
+# "같은 공간에서 얼굴이 작아 보임" 문제의 원인이었다 - 사각형으로 되돌리면서 마스크
+# 입력 자체를 더 이상 만들지 않는다. 마스크 생성 코드/에셋(portrait_circle_mask.png)은
+# git 이력에 남아있어 필요하면 복구 가능.
+
+# 🛡️ [골드 갭 "꺾쇠(chevron)" 에셋 - 상단바/로스터 그리드 통일] 상단 메인바와
+# 로스터 그리드가 각자 drawtext "◀"/"▶" 글리프로 따로 그려지고 있었는데(실측 결과
+# 상단바도 단순 글리프였음), 두 곳 다 이 PNG 하나로 통일한다. 처음엔 "바+꽉 찬
+# 삼각형"(플래그 모양)으로 만들었는데, 실제 LoL 클라이언트 참고 스크린샷을 보니
+# 꽉 찬 삼각형이 아니라 "두 개의 가는 선이 한 점에서 만나는 꺾쇠"(">"/"‹" 모양,
+# 속이 빈 얇은 윤곽선)였다 - PIL ImageDraw.line(폭=스트로크, joint="curve") +
+# 양 끝/꼭짓점에 작은 원(캡)으로 다시 그렸다. RGBA(도형=흰색 불투명, 배경=투명)로
+# 구워서(4x 슈퍼샘플+LANCZOS 다운스케일 - portrait_circle_mask와 동일한
+# 안티앨리어싱 기법) ffmpeg lutrgb로 팀 컬러를 직접 입힌다(알파는 그대로 유지) -
+# alphamerge처럼 별도 "색상 입력"이 필요 없어서 공유 입력 1개만으로 끝난다. 기본
+# 도형은 "오른쪽을 가리키는" 방향(">") - 왼쪽을 가리켜야 할 때는 ffmpeg hflip
+# 필터로 뒤집는다(에셋을 2벌 만들 필요 없음 - 모양이 바뀌어도 lutrgb/hflip 로직
+# 자체는 손댈 필요 없이 그대로 재사용 가능함을 확인함).
+GOLD_GAP_BAR_MASK_PATH = os.path.join(OVERLAY_DIR, "gold_gap_bar_mask.png")
+
+
+def _hex_to_rgb_ints(hex_color: str) -> tuple[int, int, int]:
+    """TEAM_BLUE_COLOR/TEAM_RED_COLOR 같은 "#RRGGBB" 문자열을 ffmpeg lutrgb가
+    받는 (r, g, b) 정수 3개로 변환한다."""
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+# 🛡️ [에셋 자체의 가로:세로 비율 - 렌더 시점 크기 계산에 재사용] PIL로 24x70(약
+# 0.343:1 - 꺾쇠라 가로보다 세로가 훨씬 긴 비율)로 구웠다. 이전 "바+삼각형"
+# 버전(60x22, 가로가 긴 비율)과 정반대 - 상단바/로스터 각자 다른 목표 크기에 맞춰
+# scale할 때 이 비율로 나머지 변을 같이 계산해서 도형이 찌그러지지 않게 한다.
+GOLD_GAP_BAR_ASSET_ASPECT = 24 / 70
 
 # 🛡️ [오브젝트 아이콘 - Community Dragon, 비공식 미러] Riot 공식 Data Dragon엔 없지만
 # raw.communitydragon.org의 실제 게임 에셋 덤프에 있다(실제 200 응답+PNG 바이트 확인함) -
@@ -1814,15 +1837,17 @@ PORTRAIT_GAP_EXTRA_OFFSET = 36
 # 늘리면 같은 색 배경 위에 같은 색 텍스트라 안 보이게 됨 - 그래서 숫자는 박스 밖).
 GOLD_GAP_ARROW_BADGE_W = 16
 GOLD_GAP_ARROW_FONT_SIZE = 10
-# 🛡️ [레벨 텍스트 - 작은 배지 -> 큰 볼드+그림자 텍스트] Worlds 참고 이미지 스타일로
-# 재조정 - 배경 박스로 가두는 대신, 포트레이트(원형) 자체보다 훨씬 큰 볼드 텍스트에
-# drawtext 네이티브 그림자(shadowcolor/x/y)만으로 가독성을 확보한다. 폰트 크기는
-# 포트레이트 변 길이의 55%로, 기존 작은 배지(42% 중에서도 그 안의 숫자만 68%)보다
-# 훨씬 크다.
-LEVEL_TEXT_FONT_SIZE_RATIO = 0.55
-# 🛡️ [그림자 오프셋] 폰트 크기에 비례(6%)해 해상도가 달라져도 그림자가 과하거나
-# 너무 얇아지지 않도록 - 최소 1px 보장.
-LEVEL_TEXT_SHADOW_OFFSET_RATIO = 0.06
+# 🛡️ [레벨 숫자 배지 - 사각형 포트레이트 좌하단 모서리 안쪽] 원형 포트레이트 라운드
+# 때 썼던 "포트레이트보다 큰 볼드+그림자 텍스트"(사각형 모서리 밖으로 튀어나옴)를
+# 폐기하고, 사각형으로 복귀하며 배지 방식(배경 박스+숫자)으로 되돌아간다 - 포트레이트
+# 변 길이의 42%로 제한해서 좌하단 모서리 안쪽에 완전히 들어가게 한다(모서리 좌표를
+# portrait_x/portrait_y+portrait_size 기준으로 직접 맞춰서 벗어날 수 없는 구조).
+LEVEL_BADGE_SIZE_RATIO = 0.42
+# 🛡️ [반투명 배경 박스 - 가독성 1차 수단] 그림자만으로는 밝은 포트레이트 위에서
+# 대비가 부족했던 전적이 있어(레벨 배지 1차 작업 때 실측 확인됨) 어두운 반투명 박스를
+# 다시 깐다 - 그림자는 보조 수단이라 과하지 않게(아래 drawtext의 shadowcolor=black@0.6,
+# 이전 라운드의 black@0.9보다 옅음).
+LEVEL_BADGE_BG_COLOR = "black@0.6"
 # 🛡️ [숫자 텍스트 - 화살표와 별개 크기] 화살표 글리프(10px)와 완전히 같을 필요 없다는
 # 요청대로 12px로 분리.
 GOLD_GAP_NUMBER_FONT_SIZE = 12
@@ -2770,14 +2795,23 @@ class KyvoHighlight(KyvoBaseCog):
                     roster_rune_idx[r["participant_id"]] = next_input_idx
                     next_input_idx += 1
 
-        # 🛡️ [원형 포트레이트 마스크 입력 - 1개만] 10개 포트레이트 전부가 이 입력 1개를
-        # 공유한다(위 PORTRAIT_CIRCLE_MASK_PATH 주석 참고) - 마스크 파일이 없으면
-        # None으로 남아 아래 포트레이트 렌더링에서 안전하게 원형 마스킹을 건너뛴다
-        # (기존 사각형 scale 경로로 폴백).
-        portrait_circle_mask_idx: int | None = None
-        if os.path.exists(PORTRAIT_CIRCLE_MASK_PATH):
-            inputs += ["-i", PORTRAIT_CIRCLE_MASK_PATH]
-            portrait_circle_mask_idx = next_input_idx
+        # 🛡️ [원형 포트레이트 마스크 입력 - 더 이상 추가 안 함, 사각형으로 복귀] Worlds
+        # 참고 사진을 다시 확인한 결과 실제 방송은 원형이 아니라 사각형 프레임을 쓰고
+        # 있었고, 원형 전환이 "레벨 숫자가 포트레이트 밖으로 튀어나옴 + 얼굴이 작아
+        # 보임" 문제의 근본 원인이었다 - 마스크 입력 자체를 추가하지 않으므로 아래
+        # 포트레이트 렌더링이 항상 사각형 scale 경로를 탄다(마스크 생성 코드/에셋은
+        # git 이력에 남아있어 필요하면 복구 가능).
+
+        # 🛡️ [골드 갭 바+화살표 마스크 입력 - 1개만] 상단 메인바 1곳 + 로스터 그리드
+        # 최대 5행, 총 최대 6곳이 이 입력 1개를 공유한다(원형 포트레이트 마스크와 동일한
+        # "입력 1개, 여러 곳에서 재사용" 패턴) - RGBA(흰색 도형+투명 배경)라 ffmpeg
+        # lutrgb로 팀 컬러를 직접 입히고(알파는 그대로 유지돼 투명한 부분은 안 덮임),
+        # hflip으로 좌우 방향을 뒤집는다 - alphamerge+별도 색상 입력 없이 단일 입력만으로
+        # 색상화+방향 전환이 전부 가능함을 실제 ffmpeg 호출로 미리 확인함.
+        gold_gap_bar_mask_idx: int | None = None
+        if os.path.exists(GOLD_GAP_BAR_MASK_PATH):
+            inputs += ["-i", GOLD_GAP_BAR_MASK_PATH]
+            gold_gap_bar_mask_idx = next_input_idx
             next_input_idx += 1
 
         # 🛡️ [타워/드래곤 아이콘 입력] Community Dragon 실패 시 None - 동일한 안전 처리.
@@ -3186,22 +3220,53 @@ class KyvoHighlight(KyvoBaseCog):
                 gap_diff_y = main_ink_bottom + gap_line_spacing
 
                 gap_badge_tf = _write_textfile("top_gold_gap", gap_badge_text)
-                gap_arrow_tf = _write_textfile("top_gold_gap_arrow", arrow_char)
-
-                if gold_diff > 0:
-                    gap_arrow_x = f"{gap_leader_x:.2f}-{gap_num_half_w:.2f}-{gap_arrow_gap}-text_w"
-                else:
-                    gap_arrow_x = f"{gap_leader_x:.2f}+{gap_num_half_w:.2f}+{gap_arrow_gap}"
 
                 text_chain += (
                     f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{gap_badge_tf}':"
                     f"fontsize={gap_badge_font_size}:fontcolor={gap_badge_color}:"
                     f"x='{gap_leader_x:.2f}-text_w/2':y='{gap_diff_y:.2f}'[vtgaptxt]"
-                    f";[vtgaptxt]drawtext=fontfile='{font_kr_black}':textfile='{gap_arrow_tf}':"
-                    f"fontsize={gap_arrow_font_size}:fontcolor={gap_badge_color}:"
-                    f"x='{gap_arrow_x}':y='{gap_diff_y:.2f}'[vtgaparrow]"
                 )
-                label = "vtgaparrow"
+                label = "vtgaptxt"
+
+                # 🛡️ [화살표 글리프 -> "바+화살표" PNG로 교체] 로스터 그리드와 동일한
+                # 에셋(GOLD_GAP_BAR_MASK_PATH)을 공유 입력으로 재사용 - 위치 계산은
+                # 기존 text_w 기반 ffmpeg 표현식 대신, 이미지 폭(gap_arrow_img_w)이
+                # Python에서 미리 정확히 계산되므로 숫자로 바로 계산한다(ffmpeg 표현식에
+                # 의존할 필요가 없어져서 오히려 더 정확함).
+                gap_arrow_img_h = gap_arrow_font_size
+                # 🛡️ [최소 폭 안전장치] 꺾쇠 에셋은 세로로 긴 비율(GOLD_GAP_BAR_ASSET_ASPECT
+                # ≈0.343)이라, 높이를 상단바의 작은 폰트(gap_arrow_font_size, 실측 7px급)에
+                # 그대로 맞추면 폭이 2px까지 줄어 h264 압축 영상에서 사실상 안 보인다(실측
+                # 확인됨) - 4px 하한을 둬서 작은 해상도에서도 "두 선이 만나는" 형태가 최소한
+                # 살아남게 한다(종횡비가 살짝 틀어지지만, GOLD_GAP_ARROW_FONT_SIZE 등 이미
+                # 코드 전체에서 쓰는 "max(n, ...)" 하한 클램프와 같은 철학).
+                gap_arrow_img_w = max(4, int(round(gap_arrow_img_h * GOLD_GAP_BAR_ASSET_ASPECT)))
+                gap_arrow_img_y = gap_diff_y + (gap_badge_font_size - gap_arrow_img_h) / 2
+                if gold_diff > 0:
+                    gap_arrow_img_x = gap_leader_x - gap_num_half_w - gap_arrow_gap - gap_arrow_img_w
+                else:
+                    gap_arrow_img_x = gap_leader_x + gap_num_half_w + gap_arrow_gap
+
+                if gold_gap_bar_mask_idx is not None:
+                    gap_r, gap_g, gap_b = _hex_to_rgb_ints(gap_badge_color)
+                    # 🛡️ [방향 - 에셋 기본형은 오른쪽을 가리킴] gold_diff>0(왼쪽/블루팀
+                    # 우세)일 때만 hflip으로 왼쪽을 가리키게 뒤집는다.
+                    flip = "hflip," if gold_diff > 0 else ""
+                    text_chain += (
+                        f";[{gold_gap_bar_mask_idx}:v]scale={gap_arrow_img_w}:{gap_arrow_img_h},{flip}"
+                        f"lutrgb=r={gap_r}:g={gap_g}:b={gap_b}[vtgapimg]"
+                        f";[{label}][vtgapimg]overlay=x={gap_arrow_img_x:.2f}:y={gap_arrow_img_y:.2f}[vtgaparrow]"
+                    )
+                    label = "vtgaparrow"
+                else:
+                    # 🛡️ [에셋 누락 시 안전 폴백] 기존 drawtext 글리프 방식 그대로.
+                    gap_arrow_tf = _write_textfile("top_gold_gap_arrow", arrow_char)
+                    text_chain += (
+                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{gap_arrow_tf}':"
+                        f"fontsize={gap_arrow_font_size}:fontcolor={gap_badge_color}:"
+                        f"x='{gap_arrow_img_x:.2f}':y='{gap_diff_y:.2f}'[vtgaparrow]"
+                    )
+                    label = "vtgaparrow"
 
             # ── 상단 서브바: 게임시간 중앙 + 드래곤 스택 좌우(대칭) ──
             # 🛡️ [실측 폭 그대로 - 전체 폭이 아니라 중앙 구간만] 참고 사진 실측 결과
@@ -3531,48 +3596,53 @@ class KyvoHighlight(KyvoBaseCog):
 
                     icon_idx = roster_icon_idx.get(pid)
                     if icon_idx is not None:
-                        # 🛡️ [원형 포트레이트 - 10개 전체 적용] 1단계 검증(alphamerge
-                        # 단일 포트레이트)을 거쳐, 이제 10개 포트레이트 전부가 항상 원형
-                        # 마스킹을 거친다 - 조건 분기 없이 공유 마스크 입력
-                        # (portrait_circle_mask_idx)을 그대로 재사용한다. 마스크 파일이
-                        # 없는 경우(에셋 누락 등)에만 기존 사각형 scale 경로로 폴백한다.
-                        if portrait_circle_mask_idx is not None:
-                            grid_parts.append(
-                                f";[{portrait_circle_mask_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}mask]")
-                            grid_parts.append(
-                                f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}piconrgb]")
-                            grid_parts.append(
-                                f";[vr{tag}piconrgb][vr{tag}mask]alphamerge[vr{tag}p]")
-                        else:
-                            grid_parts.append(f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}p]")
+                        # 🛡️ [사각형 포트레이트로 복귀] Worlds 참고 사진을 다시 확인한
+                        # 결과 실제 방송은 원형이 아니라 사각형이었고, 원형 전환이
+                        # "레벨 숫자가 바깥으로 튀어나옴" + "같은 영역에서 얼굴이 더 작아
+                        # 보임"(사각형이 원보다 같은 변 길이에서 이미지를 더 많이 보여줌)
+                        # 문제의 근본 원인이었다 - alphamerge 원형 마스킹 분기를 완전히
+                        # 제거하고 단순 scale+overlay만 쓴다.
+                        grid_parts.append(f";[{icon_idx}:v]scale={portrait_size}:{portrait_size}[vr{tag}p]")
                         grid_parts.append(
                             f";[{label}][vr{tag}p]overlay=x={int(round(portrait_x))}:y={portrait_y:.2f}:"
                             f"enable='{grid_enable}'[vr{tag}a]")
                         label = f"vr{tag}a"
 
-                        # 🛡️ [사각형 챔피언 프레임 제거] 원형 마스크 가장자리 자체가 경계
-                        # 역할을 하므로(참고 이미지가 뚜렷한 테두리 없는 미니멀 스타일),
-                        # 기존 drawbox 사각형 테두리는 더 이상 그리지 않는다.
+                        # 🛡️ [테두리 - 참고 사진 재확인 결과 없음] Worlds 참고 사진을 픽셀
+                        # 단위로 다시 확인했는데, 포트레이트 가장자리에 금색/흰색/회색 등
+                        # 뚜렷한 프레임 라인이 보이지 않았다(패널 배경에 바로 맞닿아 있음) -
+                        # 오늘 초반의 "흰색 헤어라인" 버전보다 "테두리 없음"이 실제 참고
+                        # 사진에 더 가깝다고 판단해 드로박스 테두리를 복원하지 않는다
+                        # (CHAMPION_FRAME_COLOR 등은 git 이력에서 복구 가능).
 
-                        # 🛡️ [레벨 텍스트 - 작은 배지 -> 큰 볼드+그림자 텍스트] 배경 박스를
-                        # 없애고, 포트레이트(이제 원형) 하단 중앙에 큰 볼드 숫자+그림자만
-                        # 겹치도록 배치한다(참고 이미지 비율 기준 - 포트레이트 아래쪽 1/3
-                        # 정도를 텍스트가 덮는다).
+                        # 🛡️ [레벨 숫자 - 좌하단 모서리 안쪽, 반투명 박스+옅은 그림자]
+                        # 포트레이트 전체를 덮는 큰 텍스트(원형 라운드 때 썼던 방식)는
+                        # 사각형에서는 모서리 밖으로 튀어나오는 문제가 있었다 - 배지 크기를
+                        # portrait_size 이하로 명시적으로 clamp하고, 박스 좌표를
+                        # 포트레이트의 왼쪽/아래쪽 가장자리에 정확히 맞춰서(level_badge_x=
+                        # portrait_x, level_badge_y=portrait_y+portrait_size-level_badge_size)
+                        # 어떤 경우에도 포트레이트 경계를 벗어나지 않는다. 그림자는
+                        # black@0.9의 진한 그림자 대신 black@0.6의 옅은 그림자로 낮추고,
+                        # 반투명 배경 박스를 가독성의 1차 수단으로 삼는다(그림자는 보조).
                         level_val = r.get("level")
                         if level_val is not None:
+                            level_badge_size = min(portrait_size, max(10, int(round(portrait_size * LEVEL_BADGE_SIZE_RATIO))))
+                            level_badge_x = portrait_x
+                            level_badge_y = portrait_y + portrait_size - level_badge_size
                             level_tf = _write_textfile(f"roster_level_{tag}", str(level_val))
-                            level_font_size = max(10, int(round(portrait_size * LEVEL_TEXT_FONT_SIZE_RATIO)))
-                            level_shadow_off = max(1, int(round(level_font_size * LEVEL_TEXT_SHADOW_OFFSET_RATIO)))
-                            # 🛡️ [수직 위치 - 포트레이트 하단 1/3 겹침] 텍스트 중심을
-                            # 포트레이트 하단 가장자리에서 위로 1/6만큼(= 1/3 구간의 중앙)
-                            # 올려서, 텍스트 박스(text_h)가 대략 아래쪽 1/3에 겹치게 한다.
-                            level_text_center_y = portrait_y + portrait_size - (portrait_size / 3.0) / 2.0
+                            grid_parts.append(
+                                f";[{label}]drawbox=x={int(round(level_badge_x))}:y={level_badge_y:.2f}:"
+                                f"w={level_badge_size}:h={level_badge_size}:color={LEVEL_BADGE_BG_COLOR}:t=fill:"
+                                f"enable='{grid_enable}'[vr{tag}lvlbox]")
+                            label = f"vr{tag}lvlbox"
+                            level_font_size = max(8, int(round(level_badge_size * 0.62)))
+                            level_shadow_off = max(1, int(round(level_font_size * 0.06)))
                             grid_parts.append(
                                 f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{level_tf}':"
                                 f"fontsize={level_font_size}:fontcolor=white:"
-                                f"shadowcolor=black@0.9:shadowx={level_shadow_off}:shadowy={level_shadow_off}:"
-                                f"x='{int(round(portrait_x))}+({portrait_size}-text_w)/2':"
-                                f"y='{level_text_center_y:.2f}-text_h/2':"
+                                f"shadowcolor=black@0.6:shadowx={level_shadow_off}:shadowy={level_shadow_off}:"
+                                f"x='{int(round(level_badge_x))}+({level_badge_size}-text_w)/2':"
+                                f"y='{level_badge_y:.2f}+({level_badge_size}-text_h)/2':"
                                 f"enable='{grid_enable}'[vr{tag}lvl]")
                             label = f"vr{tag}lvl"
 
@@ -3678,7 +3748,6 @@ class KyvoHighlight(KyvoBaseCog):
                     else:
                         arrow_box_x = right_inner_edge - min_margin - gap_badge_w
 
-                    arrow_tf = _write_textfile(f"roster_gap_arrow_{j}", arrow_char)
                     num_tf = _write_textfile(f"roster_gap_num_{j}", gap_num_text)
 
                     # 🛡️ [좌우 여백 확보 - 은은한 배경 박스] 텍스트/화살표가 배경과 바로
@@ -3700,15 +3769,48 @@ class KyvoHighlight(KyvoBaseCog):
                         f"enable='{grid_enable}'[vgap{j}box2]")
                     label = f"vgap{j}box2"
 
-                    # 🛡️ [화살표] 색상화된 글리프를 방금 깐 박스 위에 얹는다 - 좌표 계산은
-                    # 기존과 동일(gap_badge_w/arrow_box_x).
-                    grid_parts.append(
-                        f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{arrow_tf}':"
-                        f"fontsize={GOLD_GAP_ARROW_FONT_SIZE}:fontcolor={gap_color}:"
-                        f"x='{arrow_box_x:.2f}+({gap_badge_w}-text_w)/2':"
-                        f"y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2':"
-                        f"enable='{grid_enable}'[vgap{j}arrow]")
-                    label = f"vgap{j}arrow"
+                    # 🛡️ [화살표 글리프 -> "바+화살표" PNG로 교체 - 상단바와 동일 에셋/방식]
+                    # 기존 박스(gap_badge_w x gap_badge_h) 안에 종횡비를 유지한 채
+                    # letterbox로 맞춘다(박스를 넓히면 숫자 박스/포트레이트와의 기존
+                    # 간격 예산이 깨질 위험이 있어 박스 크기 자체는 건드리지 않음) -
+                    # GOLD_GAP_BAR_ASSET_ASPECT(약 2.73:1)가 박스보다 옆으로 길어서 실제론
+                    # 폭 기준으로 맞춰지고, 결과적으로 "가로로 긴 얇은 바" 그대로의 비율이
+                    # 작게 축소되어 들어간다(의도한 모양 그대로 유지, 억지로 안 찌그러짐).
+                    _img_pad = 2
+                    _avail_w = max(1, gap_badge_w - _img_pad)
+                    _avail_h = max(1, gap_badge_h - _img_pad)
+                    # 🛡️ [최소 폭 안전장치 - 상단바와 동일 이유] 극단적으로 작은 portrait_size
+                    # (다른 해상도 등)에서 꺾쇠 폭이 압축 영상에 묻힐 만큼 얇아지는 걸 방지.
+                    if _avail_w / _avail_h > GOLD_GAP_BAR_ASSET_ASPECT:
+                        gap_arrow_img_h = _avail_h
+                        gap_arrow_img_w = max(4, int(round(_avail_h * GOLD_GAP_BAR_ASSET_ASPECT)))
+                    else:
+                        gap_arrow_img_w = _avail_w
+                        gap_arrow_img_h = max(4, int(round(_avail_w / GOLD_GAP_BAR_ASSET_ASPECT)))
+                    gap_arrow_img_x = arrow_box_x + (gap_badge_w - gap_arrow_img_w) / 2
+                    gap_arrow_img_y = gap_badge_y + (gap_badge_h - gap_arrow_img_h) / 2
+
+                    if gold_gap_bar_mask_idx is not None:
+                        gap_r, gap_g, gap_b = _hex_to_rgb_ints(gap_color)
+                        # 🛡️ [방향 - 상단바와 동일한 규칙] gap>0(왼쪽 팀 우세)일 때만 hflip.
+                        flip = "hflip," if gap > 0 else ""
+                        grid_parts.append(
+                            f";[{gold_gap_bar_mask_idx}:v]scale={gap_arrow_img_w}:{gap_arrow_img_h},{flip}"
+                            f"lutrgb=r={gap_r}:g={gap_g}:b={gap_b}[vgap{j}img]")
+                        grid_parts.append(
+                            f";[{label}][vgap{j}img]overlay=x={gap_arrow_img_x:.2f}:y={gap_arrow_img_y:.2f}:"
+                            f"enable='{grid_enable}'[vgap{j}arrow]")
+                        label = f"vgap{j}arrow"
+                    else:
+                        # 🛡️ [에셋 누락 시 안전 폴백] 기존 drawtext 글리프 방식 그대로.
+                        arrow_tf = _write_textfile(f"roster_gap_arrow_{j}", arrow_char)
+                        grid_parts.append(
+                            f";[{label}]drawtext=fontfile='{font_kr_black}':textfile='{arrow_tf}':"
+                            f"fontsize={GOLD_GAP_ARROW_FONT_SIZE}:fontcolor={gap_color}:"
+                            f"x='{arrow_box_x:.2f}+({gap_badge_w}-text_w)/2':"
+                            f"y='{gap_badge_y:.2f}+({gap_badge_h}-text_h)/2':"
+                            f"enable='{grid_enable}'[vgap{j}arrow]")
+                        label = f"vgap{j}arrow"
 
                     # 🛡️ [숫자 - 갭 정중앙 고정] 화살표가 이제 포트레이트 쪽에 붙어서
                     # 화살표 기준 상대 위치로는 더 이상 안 맞다 - panel_mid_x에 항상 고정하고
