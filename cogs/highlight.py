@@ -3793,10 +3793,32 @@ class KyvoHighlight(KyvoBaseCog):
             _timer_badge_w_for_offset = int(round(sub_font_size * 3.0)) + 2 * _timer_badge_pad_x_for_offset
             dragon_offset = _timer_badge_w_for_offset / 2 + 4
 
-            gm = scoreboard["game_time_ms"] // 1000
-            # 🛡️ 콜론(:)은 필터 옵션 구분자와 충돌해서 홑따옴표로 감싸도 그대로 두면
-            # 깨진다(fontfile의 드라이브 콜론과 같은 문제) - _escape_drawtext_text로 이스케이프.
-            time_text = _escape_drawtext_text(f"{gm // 60:02d}:{gm % 60:02d}")
+            # 🛡️ [서브바 타이머 - 실제 재생 시간에 맞춰 흐르게] 예전엔 킬 시점 스냅샷
+            # 하나(gm)로 고정해서 클립 전체에서 "12:43"처럼 안 움직였다(조사 라운드에서
+            # 확인됨) - 타워/골드/킬스코어/KDA/CS/아이템은 여전히 그 스냅샷 고정을
+            # 유지하되, 타이머만 재생 시간(t)에 맞춰 1초씩 흐르게 바꾼다. 실제 drawtext
+            # 체인은 타이머 배지 geometry(timer_border_w 등)가 계산되는 아래 지점에서
+            # 만든다 - 여기선 틱별 텍스트 파일만 미리 써둔다.
+            # 🛡️ [클립 시작 시점 게임 시간 역산] kill_t(킬이 클립의 몇 초 지점인지)와
+            # scoreboard["game_time_ms"](킬 시점의 절대 게임 시간, kill_game_ms)가 이미
+            # 둘 다 이 함수 안에 있어 새 데이터 없이 바로 역산 가능 - 클립 t=0 시점의
+            # 게임 시간 = kill_game_ms - kill_t*1000(게임 시계는 ±15% 슬로프 게이트로
+            # 이미 실시간 1배속임이 보장됨, 조사 라운드 결론).
+            clip_start_game_ms = scoreboard["game_time_ms"] - schedule["kill_t"] * 1000
+            # 🛡️ [textfile + enable 체인 - text_expr(%{eif:...}) 대신 선택] 조사 라운드
+            # 판단 그대로: ffmpeg text= 안에 %{eif:...} 식을 직접 넣는 방식은 이 코드베이스가
+            # 이미 콜론 충돌 때문에 피해온 패턴(위 과거 주석 "콜론은 필터 옵션 구분자와
+            # 충돌" 참고)을 식 안에서 더 크게 재현할 위험이 있다 - 대신 1초 단위로 MM:SS
+            # 텍스트 파일을 미리 만들어두고(_write_textfile 재사용) FIRST BLOOD/SOLO KILL
+            # 배너 전환에 이미 쓰는 enable='between(t,X,Y)' 패턴을 그대로 재사용한다.
+            # 클립 길이(MAX_CLIP_DURATION_SECONDS=45 상한)만큼만 생성하므로 파일 수가
+            # 적어(최대 46개) 렌더 시간에 체감되는 영향이 없다(아래 검증 라운드에서 실측).
+            num_timer_ticks = int(video_duration) + 1
+            timer_tick_textfiles = []
+            for i in range(num_timer_ticks):
+                tick_gm_sec = max(0, int((clip_start_game_ms + i * 1000) // 1000))
+                tick_text = f"{tick_gm_sec // 60:02d}:{tick_gm_sec % 60:02d}"
+                timer_tick_textfiles.append(_write_textfile(f"timer_tick_{i}", tick_text))
 
             # 🛡️ [드래곤 - 누적 숫자 대신 시간순 속성 아이콘 나열] 드래곤이 이제 "메인"
             # 요소라 아이콘 크기(sub_icon_size)는 그대로 유지한다. 팀별 리스트(이미 최근
@@ -3915,11 +3937,27 @@ class KyvoHighlight(KyvoBaseCog):
             text_chain += (
                 f";[{label}]drawbox=x={timer_badge_x:.2f}:y={timer_badge_y:.2f}:"
                 f"w={timer_badge_w}:h={timer_badge_h}:color={TIMER_BADGE_COLOR}:t=fill[vtimerbadge]"
-                f";[vtimerbadge]drawtext=fontfile='{font_kr}':text='{time_text}':fontsize={sub_font_size}:"
-                f"fontcolor=white:bordercolor=black:borderw={timer_border_w}:"
-                f"x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}'[vs3]"
             )
-            label = "vs3"
+            label = "vtimerbadge"
+            # 🛡️ [타이머 틱 체인 - FIRST BLOOD/SOLO KILL 배너와 동일한 enable 패턴]
+            # timer_tick_textfiles(위에서 미리 써둔 1초 단위 MM:SS 파일들)를 각자
+            # between(t,i,i+1) 구간에만 보이게 체인으로 쌓는다 - grid_enable/
+            # hud_visible_window가 이미 증명한 patter 그대로, 콤마도 그대로(홑따옴표
+            # 안이라 이스케이프 불필요, 기존 관례와 동일). 마지막 틱만 다음 정수 초가
+            # 아니라 total_duration까지 연장해서, video_duration 이후 게임 영상이
+            # tpad로 마지막 프레임에 고정되는 구간(위 [vgame])에서도 시계가 그 마지막
+            # 값에 멈춘 채로 같이 정지한다(끝까지 뭔가 보이도록 - 빈 구간 없음).
+            for i, tick_tf in enumerate(timer_tick_textfiles):
+                window_end = total_duration if i == num_timer_ticks - 1 else i + 1
+                tick_enable = f"between(t,{i},{window_end:.3f})"
+                next_label = f"vtimer{i}"
+                text_chain += (
+                    f";[{label}]drawtext=fontfile='{font_kr}':textfile='{tick_tf}':fontsize={sub_font_size}:"
+                    f"fontcolor=white:bordercolor=black:borderw={timer_border_w}:"
+                    f"x='{int(round(mid_x))}-text_w/2':y='{sub_text_y_expr}':"
+                    f"enable='{tick_enable}'[{next_label}]"
+                )
+                label = next_label
 
             current_label = label
 
