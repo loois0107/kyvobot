@@ -392,6 +392,8 @@
   "tier_verify_success": "✅ Verified `{gameName}#{tagLine}` — **{tier} {rank}** ({lp} LP). You've been given the **{role}** role.",
   "tier_verify_success_no_role_mapped": "✅ Verified `{gameName}#{tagLine}` — **{tier} {rank}** ({lp} LP). No role is mapped to this tier yet; ask an admin to run `/tier_role_set`.",
   "highlight_err_not_verified": "❌ You need to verify your Riot account with `/tier_verify` before using the highlight feature.",
+  "highlight_err_daily_limit_guild": "⏳ This server has used up today's limit ({limit} per day). Please try again tomorrow.",
+  "highlight_err_daily_limit_user": "⏳ You've used up today's limit ({limit} per day). Please try again tomorrow.",
   "highlight_err_invalid_attachment": "❌ Please attach a video file (e.g. mp4). Files larger than 100MB aren't supported.",
   "highlight_err_clip_too_long": "❌ This clip is too long. Only clips of {max} seconds or shorter are supported.",
   "highlight_err_unsupported_aspect_ratio": "❌ This video's aspect ratio isn't supported. Only landscape PC gameplay captures with the in-game clock visible in the top-right corner are supported - portrait recordings aren't supported.",

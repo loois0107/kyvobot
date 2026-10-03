@@ -392,6 +392,8 @@
   "tier_verify_success": "✅ `{gameName}#{tagLine}` 인증 완료 — **{tier} {rank}** ({lp} LP). **{role}** 역할이 부여되었습니다.",
   "tier_verify_success_no_role_mapped": "✅ `{gameName}#{tagLine}` 인증 완료 — **{tier} {rank}** ({lp} LP). 아직 이 티어에 매핑된 역할이 없습니다. 관리자에게 `/tier_role_set` 실행을 요청하세요.",
   "highlight_err_not_verified": "❌ 먼저 `/tier_verify`로 라이엇 계정을 인증해야 하이라이트 기능을 쓸 수 있습니다.",
+  "highlight_err_daily_limit_guild": "⏳ 오늘 이 서버에서 사용 가능한 횟수(하루 {limit}회)를 모두 사용했어요. 내일 다시 시도해주세요.",
+  "highlight_err_daily_limit_user": "⏳ 오늘 사용 가능한 횟수(하루 {limit}회)를 모두 사용했어요. 내일 다시 시도해주세요.",
   "highlight_err_invalid_attachment": "❌ 영상 파일(mp4 등)을 첨부해주세요. 파일 크기는 100MB를 넘을 수 없습니다.",
   "highlight_err_clip_too_long": "❌ 클립이 너무 깁니다. {max}초 이하의 영상만 지원합니다.",
   "highlight_err_unsupported_aspect_ratio": "❌ 이 영상은 지원하지 않는 화면비입니다. 인게임 시계가 우측 상단에 보이는 일반적인 가로 화면(PC 게임 캡처) 클립만 지원합니다 - 세로 화면 녹화는 지원하지 않습니다.",

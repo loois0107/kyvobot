@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
 
@@ -167,6 +168,19 @@ BROWSER_USER_AGENT_HEADER = {
 
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100MB
 MAX_CLIP_DURATION_SECONDS = 45.0
+
+# 🛡️ [하루 사용 한도 - cogs/anonymous_reports.py의 REPORT_DAILY_LIMIT/REPORT_DAILY_WINDOW_SECONDS
+# 패턴 그대로 재사용] OCR(시계 인식, 렌더당 6~24회 GPT-4o-mini 비전 호출)+ElevenLabs TTS(렌더당
+# 2~4회)는 기존 쿨다운(유저당 30초)·동시처리(전역 1개)로는 "하루 총 비용"을 전혀 막지 못한다 -
+# 이 셋은 서로 다른 축(스팸 방지/서버 부하/일일 총량)이라 겹치지 않고 전부 같이 걸린다. ex=86400은
+# "자정 리셋"이 아니라 "이 윈도우 안에서 첫 요청 시점 기준 24시간 롤링"이다(anonymous_reports와
+# 동일 선택) - KST/UTC 자정 중 어느 쪽으로 고정하든 자정 직전에 몰아 쓰고 자정 직후 또 몰아 쓰는
+# 우회가 가능해지는데, 롤링 윈도우는 그 우회가 원천적으로 불가능하다. 이미 이 봇의 "일일 한도"
+# 기능 2곳(anonymous_reports, ticket_ai)이 전부 이 방식이라, /highlight만 자정 고정으로 다르게
+# 가면 오히려 일관성이 깨진다.
+HIGHLIGHT_DAILY_WINDOW_SECONDS = 86400
+HIGHLIGHT_DAILY_LIMIT_USER = 5
+HIGHLIGHT_DAILY_LIMIT_GUILD = 30
 
 # 🛡️ [매치 판별 2단계] 1차(creation_time ±2분 정밀 매칭)는 그대로 두고, 그게 실패했을 때만
 # (주로 리플레이 뷰어 녹화본 - creation_time이 "본 시각"이라 실제 매치 시각과 몇 시간씩
@@ -2871,6 +2885,10 @@ class KyvoHighlight(KyvoBaseCog):
         self.ai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         self.render_executor = ThreadPoolExecutor(max_workers=HIGHLIGHT_MAX_WORKERS, thread_name_prefix="kyvo-highlight")
         self.render_semaphore = asyncio.Semaphore(HIGHLIGHT_MAX_CONCURRENT)
+        # 🛡️ [anonymous_reports.py의 daily_limit_cache와 동일한 정신] Redis 장애 시에도 진짜
+        # 작동하는 방어 - 프로세스 재시작 시 초기화되지만(로컬 캐시의 알려진 한계), Redis가
+        # 정상이면 애초에 이 캐시를 거치지 않는다.
+        self.daily_limit_cache: dict[str, tuple[int, float]] = {}
 
     async def _db_call(self, fn):
         loop = asyncio.get_running_loop()
@@ -2885,6 +2903,32 @@ class KyvoHighlight(KyvoBaseCog):
         if cog is None:
             print("[HIGHLIGHT][CRITICAL] KyvoTierVerify cog not loaded - cannot make Riot API calls.", flush=True)
         return cog
+
+    # ══════════════════════════════════════════════════════════
+    #  하루 사용 한도 (cogs/anonymous_reports.py의 Redis 카운터 패턴 그대로 - SET NX로 첫 요청
+    #  시점에만 TTL을 걸고 INCR로 누적, 길드/유저 두 축이라 키+한도를 인자로 받는 형태만
+    #  cogs/ticket_ai.py의 범용화를 따른다)
+    # ══════════════════════════════════════════════════════════
+    async def _check_daily_limit(self, key: str, limit: int) -> bool:
+        """True면 아직 한도 이내(허용), False면 한도 초과. 호출될 때마다 카운터가 1 증가한다
+        (허용/차단 여부와 무관하게 "시도 자체"를 센다 - anonymous_reports/ticket_ai와 동일)."""
+        try:
+            await self.bot.redis.set(key, 0, ex=HIGHLIGHT_DAILY_WINDOW_SECONDS, nx=True)
+            count = await self.bot.redis.incr(key)
+            return count <= limit
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Redis daily-limit check failed for '{key}', falling back to local: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return self._check_daily_limit_local(key, limit)
+
+    def _check_daily_limit_local(self, key: str, limit: int) -> bool:
+        now = time.time()
+        count, expiry = self.daily_limit_cache.get(key, (0, now + HIGHLIGHT_DAILY_WINDOW_SECONDS))
+        if now > expiry:
+            count, expiry = 0, now + HIGHLIGHT_DAILY_WINDOW_SECONDS
+        count += 1
+        self.daily_limit_cache[key] = (count, expiry)
+        return count <= limit
 
     # ══════════════════════════════════════════════════════════
     #  사전 조건 조회 (DB만, 비용 발생 전에 전부 확인)
@@ -4883,7 +4927,25 @@ class KyvoHighlight(KyvoBaseCog):
             await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_not_verified"), ephemeral=True)
             return
 
-        # 3. 첨부파일 형식/크기 확인 (다운로드 전에 메타데이터만으로 판단)
+        # 3. 하루 사용 한도 확인 - OCR/TTS 호출(비용 발생)보다 먼저, 첨부파일 다운로드보다도
+        # 먼저 막는다. 길드 전체 한도(더 넓은 게이트)를 먼저 보고, 그다음 유저 개인 한도를
+        # 본다 - ticket_ai.py와 동일한 순서 원칙.
+        guild_daily_key = f"highlight_daily:guild:{guild_id}"
+        if not await self._check_daily_limit(guild_daily_key, HIGHLIGHT_DAILY_LIMIT_GUILD):
+            await interaction.followup.send(
+                await self.get_msg(guild_id, "highlight_err_daily_limit_guild", limit=HIGHLIGHT_DAILY_LIMIT_GUILD),
+                ephemeral=True,
+            )
+            return
+        user_daily_key = f"highlight_daily:user:{guild_id}:{interaction.user.id}"
+        if not await self._check_daily_limit(user_daily_key, HIGHLIGHT_DAILY_LIMIT_USER):
+            await interaction.followup.send(
+                await self.get_msg(guild_id, "highlight_err_daily_limit_user", limit=HIGHLIGHT_DAILY_LIMIT_USER),
+                ephemeral=True,
+            )
+            return
+
+        # 4. 첨부파일 형식/크기 확인 (다운로드 전에 메타데이터만으로 판단)
         if not (video.content_type or "").startswith("video/"):
             await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_invalid_attachment"), ephemeral=True)
             return
