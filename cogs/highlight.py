@@ -3390,7 +3390,16 @@ class KyvoHighlight(KyvoBaseCog):
             # (738px)과 킬 숫자(최악값 "99") 좌측 끝(832px) 사이 94px 여유, 타워 숫자
             # 시작(556px)과 골드 아이콘 좌측 끝(652px) 사이 96px 여유 - 전부 사전 계산으로
             # 재확인했다.
-            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.30, 0.60, 0.85
+            # 🛡️ [세트 스코어 사각형을 메인바 안으로 이동 - TOWER_FRAC 재조정] 세트 스코어
+            # 사각형(아래, 가로 60px 필요)을 팀 라벨 바로 옆 메인바 안쪽(LABEL_DIVIDER_FRAC=
+            # 0.23 지점과 타워 아이콘 사이의 빈 공간)에 넣으려고 TOWER_FRAC을 0.30->0.34로
+            # 늘렸다 - 라벨/구분선 기준점(LABEL_DIVIDER_FRAC)은 그대로 둬서 라벨 폰트 크기에
+            # 영향이 없고(사용자 지시), 빈 공간만 68.6px로 넓어져 60px 그룹이 여유 있게
+            # 들어간다. 타워-골드 충돌도 재계산: 최악값("99" 타워 숫자 끝 607.2px vs
+            # "99.9k" 골드 아이콘 좌측 끝 649.4px) 42.2px 여유로 안전(기존 96px보다 줄었지만
+            # 아이콘 크기(29px)보다 커서 충돌 없음). 골드-킬 간격은 TOWER_FRAC과 무관해
+            # 그대로 112px 유지.
+            TOWER_FRAC, GOLD_FRAC, KILL_FRAC = 0.34, 0.60, 0.85
             # 🛡️ [팀 라벨/구분선은 분리된 고정 기준점 유지] TOWER_FRAC을 0.23->0.30으로
             # 올리면서 BLUE/RED 라벨과 구분선이 tower_x_l에 바로 종속돼 있어(아래
             # divider_x_l/blue_text_x/red_text_x 계산) 같이 밀려버렸다 - 타워 "아이콘+숫자"
@@ -3560,25 +3569,26 @@ class KyvoHighlight(KyvoBaseCog):
             )
             label = "vmdiv2"
 
-            # 🛡️ [세트 스코어 표시 - 순수 연출용 랜덤] LCK 스타일 "이번 세트 승수" 사각형
-            # 3개씩(팀당) - 실제 시리즈 데이터가 없으므로 매 렌더마다 무작위로 생성한다.
-            # 한쪽이 이미 3개를 다 채우면 시리즈가 끝났을 상황이라 부자연스러우므로,
-            # 리더 팀은 1~2개만 채우고 상대는 그보다 적은(0~리더-1) 개수만 채운 상태만
-            # 나오게 한다(3-3 등 대칭/완주 조합은 절대 나오지 않음).
-            # 🛡️ [위치 - 라벨 가로 중심 아래로, 크기 2.2배] 처음엔 바 가장자리에 붙여서
-            # 작게 뒀었는데, LCK 실측 비교 결과 팀 태그 바로 아래 그 폭 중심에 맞춰 눈에
-            # 띄는 크기로 박혀 있다는 피드백 - BLUE/RED 각 라벨의 실제 잉크 중심
-            # (blue_text_x+blue_text_w/2, red_text_x+blue_text_w/2 - RED도 자간
-            # 스트레치로 동일 폭이라 blue_text_w 재사용) 바로 아래로 그룹을 옮기고,
-            # 크기는 이전(top_sub_h*0.5)의 2.2배로 키웠다. 커진 만큼 top_sub_h 밴드
-            # 안에 억지로 맞추지 않고 메인바 바로 아래에 작은 여백만 두고 자연스럽게
-            # 게임 화면 위로 걸치게 둔다 - 이 x 구간(라벨 중심, 바 가장자리 쪽)은
-            # 오브젝트 서브바(695~1225px)나 타이머와 전혀 겹치지 않는 영역이라 문제없다.
-            set_sq_size = max(4, int(round(top_sub_h * 0.5 * 2.2)))
-            set_sq_gap = max(2, int(round(set_sq_size * 0.35)))
-            set_sq_border = max(1, int(round(set_sq_size * 0.18)))
-            set_group_w = 3 * set_sq_size + 2 * set_sq_gap
-            set_sq_y = top_main_h + max(2, int(round(set_sq_size * 0.15)))
+            # 🛡️ [세트 스코어 표시 - 순수 연출용 랜덤] LCK 스타일 "이번 세트 승수" 표시 -
+            # 실제 시리즈 데이터가 없으므로 매 렌더마다 무작위로 생성한다. 한쪽이 이미
+            # 3개를 다 채우면 시리즈가 끝났을 상황이라 부자연스러우므로, 리더 팀은 1~2개만
+            # 채우고 상대는 그보다 적은(0~리더-1) 개수만 채운 상태만 나오게 한다(3-3 등
+            # 대칭/완주 조합은 절대 나오지 않음).
+            # 🛡️ [메인바 안으로 이동 - 세로 사각형(참고 이미지: HLE/GEN류) 3개] 기존엔
+            # 메인바 바로 밑(게임 화면 위)에 정사각형으로 걸쳐 그렸는데, 팀 로고/라벨
+            # 바로 옆 메인바 안쪽에 넣어달라는 요청으로 위치/모양을 바꿨다. 자리는
+            # LABEL_DIVIDER_FRAC(0.23, 라벨/구분선 기준점 - 그대로 유지, 라벨 폰트 크기에
+            # 영향 없음) 지점과 타워 아이콘(TOWER_FRAC, 0.30->0.34로 조정) 사이에 새로
+            # 생긴 공간(68.6px)에 넣는다 - 그룹 폭(60px, 세로 사각형 16px x 3개 + 간격
+            # 6px x 2개) 양옆에 4px씩 여백을 두고 꽉 들어간다. 높이는 top_main_h*0.7로
+            # 메인바 세로 중앙 정렬 - "세로 사각형"답게 폭보다 높이가 더 크도록(16x34,
+            # 약 1:2.1) 잡았다.
+            set_bar_w = max(3, int(round(top_main_h * 0.33)))  # 48 기준 -> 16px
+            set_bar_gap = max(2, int(round(set_bar_w * 0.375)))  # -> 6px
+            set_bar_h = max(6, int(round(top_main_h * 0.7)))  # 48 기준 -> 34px
+            set_group_w = 3 * set_bar_w + 2 * set_bar_gap
+            set_group_y = (top_main_h - set_bar_h) / 2
+            SET_BAR_SIDE_PAD = 4
 
             _set_leader = random.choice(["left", "right"])
             _set_leader_filled = random.randint(1, 2)
@@ -3588,22 +3598,24 @@ class KyvoHighlight(KyvoBaseCog):
             else:
                 right_filled, left_filled = _set_leader_filled, _set_other_filled
 
-            blue_label_center_x = blue_text_x + blue_text_w / 2
-            red_label_center_x = red_text_x + blue_text_w / 2
-            left_group_x0 = blue_label_center_x - set_group_w / 2
-            right_group_x0 = red_label_center_x - set_group_w / 2
+            # 🛡️ [위치 기준 - 라벨/구분선 바로 옆, 타워 쪽으로] 라벨 쪽 divider 기준점
+            # (label_divider_x_l/r, LABEL_DIVIDER_FRAC)에서 SET_BAR_SIDE_PAD만큼 안쪽
+            # (타워 방향)으로 들어간 지점부터 시작/끝. tower_x_l/r(TOWER_FRAC=0.34)까지
+            # 여유(68.6px)가 그룹 폭(60px)+양옆 패딩(4px*2=8px)과 정확히 맞아 안 겹친다.
+            left_group_x0 = label_divider_x_l + SET_BAR_SIDE_PAD
+            right_group_x0 = label_divider_x_r - SET_BAR_SIDE_PAD - set_group_w
 
-            for side_tag, side_x0, filled_count, sq_color in (
+            for side_tag, side_x0, filled_count, bar_color in (
                 ("l", left_group_x0, left_filled, TEAM_BLUE_COLOR),
                 ("r", right_group_x0, right_filled, TEAM_RED_COLOR),
             ):
                 for i in range(3):
-                    sq_x = int(round(side_x0 + i * (set_sq_size + set_sq_gap)))
-                    sq_t = "fill" if i < filled_count else str(set_sq_border)
+                    bar_x = int(round(side_x0 + i * (set_bar_w + set_bar_gap)))
+                    bar_t = "fill" if i < filled_count else "1"
                     next_label = f"vmset_{side_tag}{i}"
                     text_chain += (
-                        f";[{label}]drawbox=x={sq_x}:y={set_sq_y:.2f}:"
-                        f"w={set_sq_size}:h={set_sq_size}:color={sq_color}:t={sq_t}[{next_label}]"
+                        f";[{label}]drawbox=x={bar_x}:y={set_group_y:.2f}:"
+                        f"w={set_bar_w}:h={set_bar_h}:color={bar_color}:t={bar_t}[{next_label}]"
                     )
                     label = next_label
 
