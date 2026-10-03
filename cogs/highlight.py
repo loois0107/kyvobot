@@ -2428,17 +2428,160 @@ def _compute_scoreboard_at_time(timeline: dict, participants: list[dict], kill_g
     }
 
 
-def _compute_participant_levels_at_time(timeline: dict, kill_game_ms: float) -> dict[int, int]:
-    """킬 시점(kill_game_ms) 기준 각 참가자의 챔피언 레벨을 timeline에서 계산하는
-    순수 함수(테스트 가능) - _compute_scoreboard_at_time의 골드 계산과 정확히 같은
-    "가장 가까운 프레임" 패턴을 재사용한다(participantFrames는 약 60초 간격이라 최대
-    ±30초 오차가 있을 수 있지만, "매치 최종 레벨"을 쓰는 것보다 킬 시점에 훨씬
-    가깝다). ParticipantFrameDto에는 level 필드가 totalGold와 같은 자리에 있다."""
+def _compute_participant_frame_stats_at_time(timeline: dict, kill_game_ms: float) -> dict[int, dict]:
+    """킬 시점(kill_game_ms) 기준 각 참가자의 레벨/CS를 timeline에서 계산하는 순수 함수
+    (테스트 가능) - _compute_scoreboard_at_time의 골드 계산과 정확히 같은 "가장 가까운
+    프레임" 패턴을 재사용한다(participantFrames는 약 60초 간격이라 최대 ±30초 오차가
+    있을 수 있지만, "매치 최종값"을 쓰는 것보다 킬 시점에 훨씬 가깝다). 레벨/CS 둘 다
+    같은 closest_frame 하나로 끝나므로(조사 라운드에서 확인된 그대로) 함수를 합쳐서
+    중복 계산을 없앴다 - 원래 이름(_compute_participant_levels_at_time)은 CS 추가 전
+    유일한 호출부(roster 생성 루프)에서 그대로 갱신."""
     closest_frame = min(timeline["info"]["frames"], key=lambda f: abs(f["timestamp"] - kill_game_ms))
     return {
-        int(pid_str): pframe.get("level", 1)
+        int(pid_str): {
+            "level": pframe.get("level", 1),
+            "cs": pframe.get("minionsKilled", 0) + pframe.get("jungleMinionsKilled", 0),
+        }
         for pid_str, pframe in closest_frame["participantFrames"].items()
     }
+
+
+def _compute_participant_kda_at_time(timeline: dict, kill_game_ms: float) -> dict[int, tuple[int, int, int]]:
+    """킬 시점(kill_game_ms) 기준 각 참가자의 K/D/A를 timeline의 CHAMPION_KILL 이벤트로
+    계산하는 순수 함수(테스트 가능) - _compute_scoreboard_at_time과 똑같이 timestamp<=
+    kill_game_ms로 이벤트를 필터링한 뒤, killerId/victimId/assistingParticipantIds를
+    각각 kills/deaths/assists에 누적한다. 실제 매치(KR_8393410432)로 교차검증 완료 -
+    이 함수로 계산한 팀별 킬 합계가 _compute_scoreboard_at_time의 team_kills와 정확히
+    일치함을 확인했다(조사 라운드 investigate_kill_time_roster.py 참고)."""
+    kda: dict[int, list[int]] = {p["participantId"]: [0, 0, 0] for p in timeline["info"]["participants"]} \
+        if "participants" in timeline["info"] else {}
+    if not kda:
+        # 🛡️ timeline 응답엔 participants가 없을 수 있다(매치 상세 쪽에만 있음) - 그 경우
+        # 이벤트에 실제로 등장하는 participantId를 집계 과정에서 바로 등록한다.
+        kda = {}
+    for frame in timeline["info"]["frames"]:
+        for ev in frame.get("events", []):
+            ts = ev.get("timestamp")
+            if ts is None or ts > kill_game_ms:
+                continue
+            if ev.get("type") != "CHAMPION_KILL":
+                continue
+            killer_id = ev.get("killerId")
+            victim_id = ev.get("victimId")
+            if killer_id:
+                kda.setdefault(killer_id, [0, 0, 0])[0] += 1
+            if victim_id:
+                kda.setdefault(victim_id, [0, 0, 0])[1] += 1
+            for aid in ev.get("assistingParticipantIds", []):
+                kda.setdefault(aid, [0, 0, 0])[2] += 1
+    return {pid: tuple(v) for pid, v in kda.items()}
+
+
+# 🛡️ [장신구(트린켓) 식별 - 실제 매치 item6 값으로 교차검증] KR_8393410432의 10명 전원
+# 최종 item6(트린켓 전용 슬롯, item0~5와 완전히 별개)을 직접 열어 확인한 값 - 와딩 토템
+# 계열(3340)/시야석(3364)/원시 시야(3363) 3개뿐이었다. 이벤트 스트림(ITEM_PURCHASED 등)에는
+# 트린켓 교체도 똑같이 섞여 들어오므로, 6칸 시뮬레이션에서 명시적으로 걸러내야 한다 - 다른
+# 아이템 메타데이터(Data Dragon item.json)를 새로 받아올 필요 없이 이 고정 세트로 충분하다
+# (라이엇이 새 트린켓을 추가하면 갱신 필요 - 팀명 매핑 등 다른 하드코딩 상수와 같은 유지보수
+# 성격).
+TRINKET_ITEM_IDS = {3340, 3363, 3364}
+
+
+def _compute_participant_items_at_time(timeline: dict, kill_game_ms: float) -> dict[int, list[int]]:
+    """킬 시점(kill_game_ms) 기준 각 참가자의 6칸 아이템 슬롯을 timeline의 아이템 이벤트
+    (ITEM_PURCHASED/ITEM_SOLD/ITEM_UNDO/ITEM_DESTROYED)를 시간순으로 재생해 시뮬레이션하는
+    순수 함수(테스트 가능) - 실제 클라이언트의 "첫 빈 칸에 배치" 동작을 그대로 흉내낸다.
+    장신구(TRINKET_ITEM_IDS)는 이벤트에 섞여 들어오지만 item0~5(트린켓은 item6 별도 슬롯)와
+    의미를 맞추기 위해 제외한다. 소모품은 걸러내지 않고 그대로 슬롯에 표시한다(사용자 지시 -
+    "소모품도 실제로 그 순간 들고 있었다"는 사실 자체는 왜곡이 아니라고 판단).
+
+    🛡️ [안전장치 - "확신이 안 서는 슬롯만" 비워두는 설계] 이 함수는 "성공이 확실한 조작만
+    수행"한다 - 제거할 아이템을 현재 슬롯 어디서도 못 찾거나(상태가 이미 어긋났다는 신호),
+    배치할 빈 칸이 하나도 없으면(6개 초과 보유는 정상 플레이에서 발생하지 않음) 그 개별
+    이벤트만 조용히 건너뛴다. 전체 인벤토리를 리셋하거나 틀린 칸에 억지로 끼워넣지 않으므로,
+    잘못 건드려진 슬롯은 항상 "확신이 선 마지막 상태"(비어있음 포함) 그대로 남는다 - 틀린
+    값을 보여주는 것보다 안전하다는 판단(조사 라운드 결론).
+
+    🛡️ [ITEM_UNDO 재료 복원 - 실제 버그 발견 후 수정, Data Dragon 폴백은 실측으로 기각]
+    beforeId(취소 직전 보유하던 아이템)를 제거하고 afterId(취소 후 되돌아갈 아이템)를
+    복원하는 것까지는 맞지만, afterId=0이면서 beforeId가 "조합 아이템"인 경우(완성템
+    구매를 취소 = 재료 환불) 예전 코드는 그냥 아무 것도 복원하지 않았다 - 실제 매치
+    (futuresavior, Zhonya's Hourglass 조합 직후 UNDO)로 재료 2개(Needlessly Large Rod/
+    Seeker's Armguard)가 증발하는 버그를 확인했다(investigate_item_mismatch_cause.py).
+    beforeId 구매 당시(_last_purchase_ts로 추적) 같은 timestamp에 같이 파괴된 아이템들
+    (_destroyed_batch)을 복원 대상으로 쓴다 - "이 조합에 실제로 들어간 재료"라는 확실한
+    신호다. 처음엔 이 신호가 없을 때 Data Dragon item.json의 "from"(일반 조합 레시피)으로
+    대체하는 폴백도 넣었지만, 실제 캐시된 매치 20개(~200명) 전체로 정확도를 측정해보니
+    오히려 악화됐다(82.0%->79.2%) - UNDO가 "조합 취소"가 아니라 그냥 "직접 구매 취소"인
+    경우(같은 timestamp에 파괴된 게 없음 = 재료를 실제로 안 썼다는 뜻)에도 from 목록을
+    억지로 끼워넣어 엉뚱한 재료가 생겨버리는 사례가 더 많았다. 같은 timestamp 파괴 신호만
+    쓰면(폴백 없음) 82.4%로 오히려 개선됐다 - 그래서 Data Dragon 폴백은 뺐다. 그 신호조차
+    없으면(직접구매였거나 데이터 누락) 예전처럼 아무 것도 복원하지 않는다(안전장치 유지,
+    틀린 값보다 빈 칸)."""
+    slots: dict[int, list[int]] = {}
+    last_purchase_ts: dict[tuple[int, int], int] = {}
+    destroyed_batch: dict[tuple[int, int], list[int]] = {}
+
+    def _place(pid: int, item_id: int) -> None:
+        if item_id in TRINKET_ITEM_IDS:
+            return
+        row = slots.setdefault(pid, [0] * 6)
+        for i, v in enumerate(row):
+            if v == 0:
+                row[i] = item_id
+                return
+        # 6칸이 전부 찬 상태에서 또 배치하라는 신호 - 정상 플레이에선 발생하지 않는다.
+        # 어느 칸을 덮어쓸지 확신할 수 없으니 이 구매 이벤트는 그냥 버린다(안전장치).
+
+    def _remove(pid: int, item_id: int) -> None:
+        if item_id in TRINKET_ITEM_IDS:
+            return
+        row = slots.setdefault(pid, [0] * 6)
+        for i, v in enumerate(row):
+            if v == item_id:
+                row[i] = 0
+                return
+        # 현재 슬롯 어디에도 없는 아이템을 제거하라는 신호 - 상태가 이미 어긋났다는 뜻이니
+        # 아무 것도 건드리지 않는다(안전장치, "확신이 안 서는 슬롯만 비워둔다"의 핵심).
+
+    for frame in timeline["info"]["frames"]:
+        for ev in frame.get("events", []):
+            ts = ev.get("timestamp")
+            if ts is None or ts > kill_game_ms:
+                continue
+            etype = ev.get("type")
+            pid = ev.get("participantId")
+            if not pid:
+                continue
+            if etype == "ITEM_PURCHASED":
+                item_id = ev.get("itemId", 0)
+                _place(pid, item_id)
+                last_purchase_ts[(pid, item_id)] = ts
+            elif etype in ("ITEM_SOLD", "ITEM_DESTROYED"):
+                item_id = ev.get("itemId", 0)
+                _remove(pid, item_id)
+                if etype == "ITEM_DESTROYED":
+                    destroyed_batch.setdefault((pid, ts), []).append(item_id)
+            elif etype == "ITEM_UNDO":
+                before_id = ev.get("beforeId", 0)
+                after_id = ev.get("afterId", 0)
+                if before_id:
+                    _remove(pid, before_id)
+                    if not after_id:
+                        # 🛡️ [조합 구매 취소 - 재료 복원] before_id가 실제로 구매된 시점에
+                        # 같이 파괴된 아이템들만 복원한다(그 조합에 진짜로 들어간 재료라는
+                        # 확실한 신호). 그 신호가 없으면(같은 timestamp에 파괴된 게 없음)
+                        # 직접구매를 취소한 것으로 보고 아무 것도 복원하지 않는다 - Data
+                        # Dragon from으로 무조건 대체하면 오히려 정확도가 떨어짐을 실측으로
+                        # 확인했다(위 docstring 참고).
+                        purchase_ts = last_purchase_ts.get((pid, before_id))
+                        materials = destroyed_batch.get((pid, purchase_ts), []) if purchase_ts is not None else []
+                        for material_id in materials:
+                            _place(pid, material_id)
+                if after_id:
+                    _place(pid, after_id)
+
+    return slots
 
 
 def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
@@ -5022,14 +5165,38 @@ class KyvoHighlight(KyvoBaseCog):
         # 🛡️ [하단 포지션별 5행 그리드용 데이터] participants 10명 전원은 chosen에 이미 다
         # fetch돼 있다(추가 Riot API 호출 없음). position(teamPosition)까지 같이 뽑아서
         # _pair_roster_by_position()이 팀 간 매칭에 쓴다.
-        # 🛡️ [레벨 - 킬 시점 기준] CS와 달리 레벨은 "매치 최종값"이 아니라 _compute_
-        # scoreboard_at_time과 동일한 패턴(가장 가까운 participantFrames)으로 킬 시점
-        # 기준을 쓴다 - 화면에 찍히는 시간과 레벨이 어긋나는 걸 막기 위함(CS는 이번
-        # 라운드 범위 밖이라 그대로 매치 최종값 유지).
-        participant_levels = _compute_participant_levels_at_time(timeline, game_time_ms)
+        # 🛡️ [레벨/CS/KDA - 킬 시점 기준, 아이템은 매치 최종값 유지] 예전엔 레벨만 킬 시점
+        # 기준이고 CS/KDA는 "매치 최종값"을 그대로 썼는데, 상단바(scoreboard)는 이미 킬 시점
+        # 기준이라 로스터 패널과 기준 시점이 어긋나는 문제가 있었다(실제 검증: 17분대 킬
+        # 클립에 23킬 같은 "미래" 최종 스탯이 찍힘). 레벨/CS는 같은 closest_frame 하나로
+        # 끝나서 함수를 합쳤다(_compute_participant_frame_stats_at_time). KDA도 전용 순수
+        # 함수로 분리(조사 라운드에서 설계/검증 완료, 상단바 킬 스코어와 100% 교차검증됨).
+        # 🛡️ [아이템도 킬 시점 반영 - 여러 라운드의 실측 비교 끝에 결정] ITEM_UNDO 재료 복원
+        # 버그를 고친 뒤(같은 timestamp DESTROYED 신호만 사용, Data Dragon from 폴백은
+        # 실측으로 역효과 확인돼 제외) 20개 매치(~200명) 기준 집합 정확도 82.4%, 그리고
+        # "화면이 예산상 불가능한 비율"로 비교하면 매치 최종값(10분 컷오프 88.5% 불가능) vs
+        # 킬 시점 재생(0.5% 불가능)으로 압도적 차이가 났다 - 남은 ~18% 오차(대부분 타임라인
+        # 이벤트 자체 누락, 코드로 못 고침)보다 "아직 벌지도 않은 돈으로 아이템을 들고 있는"
+        # 쪽이 훨씬 눈에 띄는 문제라고 판단해 최종값 대신 킬 시점 재생으로 교체한다.
+        # 🛡️ [폴백 안전장치] 재생 함수가 예외를 내거나(알 수 없는 timeline 스키마 변화 등)
+        # timeline 자체가 비어있으면(falsy) 기존처럼 매치 최종값으로 폴백한다 - 아이템 패널이
+        # 통째로 비는 것보다 "조금 안 맞을 수 있는 최종값"이라도 보여주는 쪽이 안전하다.
+        try:
+            if not timeline:
+                raise ValueError("timeline empty")
+            participant_items = _compute_participant_items_at_time(timeline, game_time_ms)
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] 킬 시점 아이템 재생 실패(guild={guild_id}) - "
+                  f"매치 최종값으로 폴백. {type(e).__name__}: {e}", flush=True)
+            participant_items = None
+        participant_frame_stats = _compute_participant_frame_stats_at_time(timeline, game_time_ms)
+        participant_kda = _compute_participant_kda_at_time(timeline, game_time_ms)
         roster = []
         for p in chosen["info"]["participants"]:
-            items = [p.get(f"item{i}", 0) for i in range(6)]
+            pid = p["participantId"]
+            frame_stats = participant_frame_stats.get(pid, {})
+            final_items = [p.get(f"item{i}", 0) for i in range(6)]
+            items = participant_items.get(pid, final_items) if participant_items is not None else final_items
             # 🛡️ [룬/스펠 복원 - 키스톤 id 추출] Match-v5 스키마: perks.styles[0]이
             # primaryStyle(첫 슬롯이 항상 키스톤), 그 안의 selections[0].perk가 키스톤
             # 룬 id - 실제 응답으로 재확인함(위 DDRAGON_RUNE_ICON_URL_TEMPLATE 주석
@@ -5039,14 +5206,14 @@ class KyvoHighlight(KyvoBaseCog):
             primary_selections = styles[0].get("selections") if styles else None
             keystone_id = primary_selections[0].get("perk") if primary_selections else None
             roster.append({
-                "participant_id": p["participantId"],
+                "participant_id": pid,
                 "team_id": p.get("teamId"),
                 "position": p.get("teamPosition") or None,
                 "champion": p["championName"],
                 "name": p.get("riotIdGameName") or p.get("summonerName") or "Unknown",
-                "kda": (p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)),
-                "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
-                "level": participant_levels.get(p["participantId"], p.get("champLevel", 1)),
+                "kda": participant_kda.get(pid, (0, 0, 0)),
+                "cs": frame_stats.get("cs", 0),
+                "level": frame_stats.get("level", p.get("champLevel", 1)),
                 "items": items,
                 "spell1_id": p.get("summoner1Id"),
                 "spell2_id": p.get("summoner2Id"),
