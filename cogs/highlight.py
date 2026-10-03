@@ -1127,6 +1127,51 @@ def _hyphenate_korean_name(name: str) -> str:
     이름 3~5자 범위에서만 쓴다(HYPE_NICKNAME_SHOUT_STRETCHED_TEMPLATE 참고)."""
     return "-".join(name)
 
+
+# 🛡️ [EN 비영문 닉네임 미발화 원칙] 실제 매치 데이터(KR_8393410432)에서 10명 중 6명이
+# 한글/혼합 스크립트 닉네임이었음을 확인 - 로마자 변환/GPT 음역 시도는 전부 "그럴듯하게
+# 들리지만 부정확한 발음"만 만들어낼 뿐이라 포기하고, "영문이 아니면 아예 안 부른다"는
+# 원칙으로 간다. isascii()는 한글/한자/일본어/이모지 등 비ASCII 문자를 전부 걸러내고,
+# 알파벳이 하나도 없는 경우(순수 숫자/기호 닉네임)도 "부를 이름"으로서는 의미가 없어
+# 같이 걸러낸다.
+def _is_ascii_name(name: str) -> bool:
+    """닉네임이 순수 영문(ASCII: 알파벳/숫자/공백/일반 특수문자)으로만 이루어져 있고
+    알파벳을 하나 이상 포함하는지 판별하는 순수 함수(테스트 가능)."""
+    return bool(name) and name.isascii() and any(c.isalpha() for c in name)
+
+
+# 🛡️ [포지션 기반 대체 표현] Riot API의 teamPosition 값("TOP"/"JUNGLE"/"MIDDLE"/
+# "BOTTOM"/"UTILITY", 비드래프트 모드는 빈 문자열) -> 캐스터가 실제로 쓰는 역할 명칭.
+EN_POSITION_ROLE_WORDS = {
+    "TOP": "top laner", "JUNGLE": "jungler", "MIDDLE": "mid laner",
+    "BOTTOM": "bot laner", "UTILITY": "support",
+}
+
+
+def _en_display_name(name: str, position: str | None, side: str) -> str:
+    """EN 전용 - 닉네임이 영문이면 그대로, 아니면 "부르지 않고" 역할/대명사로 대체한
+    표시용 이름을 반환하는 순수 함수(테스트 가능). side는 "killer"/"victim"/"assist" -
+    같은 역할(예: 양쪽 다 미드라이너)이 킬러/피해자로 동시에 나와도 "the enemy mid
+    laner"(킬러) vs "the mid laner"(피해자)로 구분되게 접두사를 다르게 둔다. 포지션
+    정보가 없으면(비드래프트 등) 일반 대명사로 대체 - 이 치환은 GPT 프롬프트에 원문
+    이름을 아예 넘기지 않는 단계(호출부)에서 쓰이므로, "이름을 부르지 말라"는 지시에
+    기대지 않고 애초에 원문을 노출시키지 않아 지시 불이행 위험 자체가 없다."""
+    if _is_ascii_name(name):
+        return name
+    role_word = EN_POSITION_ROLE_WORDS.get(position or "")
+    if role_word:
+        if side == "killer":
+            return f"the enemy {role_word}"
+        if side == "victim":
+            return f"the {role_word}"
+        return f"their {role_word}"
+    if side == "killer":
+        return "the enemy"
+    if side == "victim":
+        return "his opponent"
+    return "a teammate"
+
+
 # ── 2단계(Sub 의문형 감탄, 정적 풀) ──
 SUB_QUESTION_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_question_*.wav")))
 SUB_QUESTION_TEXT = {
@@ -2113,6 +2158,9 @@ def _participant_id_to_name(match_detail: dict) -> dict[int, dict]:
             # 추가한 것뿐 - 조사에서 확인된 대로 추가 API 호출 없음.
             "team_id": p.get("teamId"),
             "kda": (p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)),
+            # 🛡️ [EN 비영문 닉네임 대체용] teamPosition도 이미 응답에 있는 필드 - 추가 API
+            # 호출 없이 _en_display_name의 역할 명칭(예: "the jungler") 계산에 쓴다.
+            "position": p.get("teamPosition") or None,
         }
     return mapping
 
@@ -2557,7 +2605,12 @@ EN_SYSTEM_PROMPT = (
     "  a) '{killer} finishes it, {assist} set it up!!'\n"
     "  b) '{killer} and {assist} combine to end {victim}!!'\n"
     "  c) '{assist} softens them up and {killer} closes it out!!'\n"
-    "Kills with no assist stay a plain killer/victim sentence like the example above.\n\n"
+    "Kills with no assist stay a plain killer/victim sentence like the example above.\n"
+    "- Some facts below may already show a role (e.g. 'the jungler', 'the enemy mid laner') or a "
+    "generic word (e.g. 'the enemy', 'his opponent', 'a teammate') in place of a name - this is "
+    "intentional (that player's name isn't announcer-friendly), so treat it exactly like a name "
+    "and build the sentence naturally around it. Never invent a real name to replace it, and "
+    "never add 'the' in front of it if it's already there.\n\n"
     "Factual rules (never violate):\n"
     "- The 'confirmed facts list' below may include, besides kill events, reference info like "
     "game time / team score (kills/towers/dragons/barons/rift heralds/voidgrubs) / gold gap / "
@@ -4314,11 +4367,19 @@ class KyvoHighlight(KyvoBaseCog):
         import json
         is_en = lang == "en"
         kill_facts_lines = []
+        # 🛡️ [EN 비영문 닉네임 미발화] killer_display/victim_display/assist_displays는
+        # _run_pipeline이 kills_with_names를 만들 때 이미 계산해둔 표시용 이름(영문이면
+        # 원문 그대로, 아니면 역할/대명사로 치환됨, _en_display_name 참고) - 여기서는 그걸
+        # 그대로 facts 블록에 써서 GPT에 넘긴다. 키가 없는 호출부(과거 방식/테스트 스크립트
+        # 등)를 위해 .get()으로 원문 이름 폴백을 유지한다(하위 호환, 회귀 없음).
         for k in kills_with_names:
             if is_en:
-                assist_str = f", assists: {', '.join(k['assists'])}" if k["assists"] else ""
+                killer_disp = k.get("killer_display", k["killer"])
+                victim_disp = k.get("victim_display", k["victim"])
+                assist_disp = k.get("assist_displays", k["assists"])
+                assist_str = f", assists: {', '.join(assist_disp)}" if assist_disp else ""
                 kill_facts_lines.append(
-                    f"[{k['index']}] at {k['timestamp_ms']}ms - {k['killer']} kills {k['victim']}{assist_str}"
+                    f"[{k['index']}] at {k['timestamp_ms']}ms - {killer_disp} kills {victim_disp}{assist_str}"
                 )
             else:
                 assist_str = f", 어시스트: {', '.join(k['assists'])}" if k["assists"] else ""
@@ -4381,8 +4442,12 @@ class KyvoHighlight(KyvoBaseCog):
         covered = {l["event_index"] for l in lines}
         for k in kills_with_names:
             if k["index"] not in covered:
+                # 🛡️ [EN 비영문 닉네임 미발화 - 폴백도 표시용 이름 사용] 여기서 원문
+                # k['killer']/k['victim']를 그대로 쓰면 비ASCII 닉네임이 폴백 경로로
+                # 되살아나 버린다 - 위 facts 블록과 동일하게 display 이름을 쓴다.
                 fallback = (
-                    f"{k['killer']} takes down {k['victim']}!!" if is_en else
+                    f"{k.get('killer_display', k['killer'])} takes down "
+                    f"{k.get('victim_display', k['victim'])}!!" if is_en else
                     f"{k['killer']}{_i_or_ga(k['killer'])} {k['victim']}{_eul_or_reul(k['victim'])} 처치했어요!"
                 )
                 lines.append({"event_index": k["index"], "text": fallback})
@@ -4898,9 +4963,28 @@ class KyvoHighlight(KyvoBaseCog):
             # id(100/200)를 같이 들고 있는다 - 어시스트가 있는 킬일 때 "누구 닉네임"
             # 대신 팀명으로 샤우팅을 바꾸기 위해 필요(아래 hype_nickname_text_by_voice 참고).
             killer_team_id = names.get(k["killer_id"], {}).get("team_id") if k["killer_id"] else None
+            # 🛡️ [EN 비영문 닉네임 미발화 - 표시용 이름을 여기서 한 번만 계산] GPT 프롬프트
+            # (_generate_commentary)와 _run_pipeline의 검증/폴백/닉네임 샤우팅이 전부 같은
+            # 표시용 이름을 써야 일관되므로, kills_with_names를 만드는 이 자리에서 딱 한 번
+            # 계산해 공유한다. KO는 원문 이름을 그대로 쓰는 기존 동작과 완전히 동일(회귀 없음) -
+            # EN만 _en_display_name으로 치환해, 원문 비ASCII 이름 자체가 GPT 프롬프트에
+            # 노출되지 않게 한다("부르지 말라"는 지시에 기대는 대신 애초에 안 보여준다).
+            if lang == "en":
+                killer_position = names.get(k["killer_id"], {}).get("position") if k["killer_id"] else None
+                victim_position = names.get(k["victim_id"], {}).get("position")
+                killer_display = _en_display_name(killer, killer_position, "killer")
+                victim_display = _en_display_name(victim, victim_position, "victim")
+                assist_displays = [
+                    _en_display_name(a_name, names.get(a_id, {}).get("position"), "assist")
+                    for a_id, a_name in zip(k["assist_ids"], assists)
+                ]
+            else:
+                killer_display, victim_display, assist_displays = killer, victim, list(assists)
             kills_with_names.append({
                 "index": i, "timestamp_ms": k["timestamp_ms"],
                 "killer": killer, "victim": victim, "assists": assists,
+                "killer_display": killer_display, "victim_display": victim_display,
+                "assist_displays": assist_displays,
                 "killer_team_id": killer_team_id,
                 "clip_t_sec": k["clip_t_sec"],
             })
@@ -5069,6 +5153,13 @@ class KyvoHighlight(KyvoBaseCog):
         kill_t = kills_with_names[0]["clip_t_sec"]
         killer_name = kills_with_names[0]["killer"]
         victim_name = kills_with_names[0]["victim"]
+        # 🛡️ [EN 비영문 닉네임 미발화 - 검증/폴백도 표시용 이름 기준] EN은 GPT에게 애초에
+        # killer_display/victim_display(비ASCII면 역할/대명사로 치환됨)만 넘겼으므로, "킬러
+        # 이름이 문장에 들어있는지" 검증도 원문이 아니라 표시용 이름 기준이어야 한다 - 원문
+        # 기준으로 검증하면 의도적으로 안 부른 비ASCII 이름이 "빠졌다"고 오판되어 폴백이
+        # 발동하고, 그 폴백이 원문을 다시 끼워넣어버리는 역효과가 난다(아래 폴백도 동일).
+        killer_display = kills_with_names[0].get("killer_display", killer_name)
+        victim_display = kills_with_names[0].get("victim_display", victim_name)
         main_fact_text = lines_raw[0]["text"]
 
         # 🛡️ [킬러 이름 검증 - 3단계 Main 담당] GPT는 온도 0.8로 자유 생성돼서 "킬러 이름을
@@ -5076,11 +5167,12 @@ class KyvoHighlight(KyvoBaseCog):
         # 확인됨 - 코드가 이걸 검증하는 지점이 아예 없었던 게 실질적 원인. 사실 서술 역할이
         # 3단계 Main으로 옮겨왔으므로 검증도 그대로 따라온다. LLM을 재호출하면 비용/시간이 또
         # 드니, 검증 실패 시 즉시 안전한 고정 템플릿으로 대체한다(재시도 없음).
-        if not _commentary_names_killer(main_fact_text, killer_name):
+        if not _commentary_names_killer(main_fact_text, killer_display if lang == "en" else killer_name):
             print(f"[HIGHLIGHT][WARN] Commentary text missing killer name (guild={guild_id}) - "
-                  f"falling back to template. killer={killer_name!r} text={main_fact_text!r}", flush=True)
+                  f"falling back to template. killer={killer_name!r} killer_display={killer_display!r} "
+                  f"text={main_fact_text!r}", flush=True)
             main_fact_text = (
-                f"{killer_name} takes down {victim_name}!!" if lang == "en" else
+                f"{killer_display} takes down {victim_display}!!" if lang == "en" else
                 f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했어요!"
             )
         elif lang != "en" and not _commentary_avoids_seumnida(main_fact_text):
@@ -5124,10 +5216,23 @@ class KyvoHighlight(KyvoBaseCog):
         # 안전하게 기존 동작(킬러 이름 그대로)으로 폴백한다.
         killer_team_id = kills_with_names[0].get("killer_team_id")
         has_assists = bool(kills_with_names[0]["assists"])
+        # 🛡️ [EN 비영문 닉네임 미발화 - 닉네임 샤우팅도 동일 원칙] killer_display는
+        # kills_with_names 생성 시 이미 계산된 표시용 이름(비ASCII면 역할/대명사로 치환,
+        # _en_display_name 참고) - 어시스트가 없어 개인 닉네임을 그대로 외치려던 자리에서도
+        # 원문이 영문이 아니면 그대로 외치지 않는다. 팀 매핑이 가능하면(대부분의 경우) 팀명
+        # 샤우팅으로 대체하고, 팀 매핑조차 불가능한 극히 드문 경우(killer_id=0, 미니언/포탑
+        # 귀속 킬)에만 killer_display의 일반 대명사 폴백("the enemy")을 그대로 외친다.
+        non_ascii_en_killer = lang == "en" and not _is_ascii_name(killer_name)
         if has_assists and killer_team_id in TEAM_ID_TO_NAME_KO:
             team_name_map = TEAM_ID_TO_NAME_EN if lang == "en" else TEAM_ID_TO_NAME_KO
             shout_name = team_name_map[killer_team_id]
             is_team_shout = True
+        elif non_ascii_en_killer and killer_team_id in TEAM_ID_TO_NAME_KO:
+            shout_name = TEAM_ID_TO_NAME_EN[killer_team_id]
+            is_team_shout = True
+        elif non_ascii_en_killer:
+            shout_name = kills_with_names[0].get("killer_display", killer_name)
+            is_team_shout = False
         else:
             shout_name = killer_name
             is_team_shout = False
