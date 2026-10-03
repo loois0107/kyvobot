@@ -3751,7 +3751,17 @@ class KyvoHighlight(KyvoBaseCog):
             # 같이 커진다("건드리지 마" 지시 위반) - 그래서 오브젝트 숫자 전용
             # obj_font_size를 새로 둔다. sub_icon_size는 오브젝트 스택에서만 쓰여서
             # (time_text엔 아이콘이 없음) 직접 바꿔도 안전하다.
-            sub_icon_size = top_sub_h
+            # 🛡️ [아이콘 1.4배 확대 - 서브바 띠 높이는 그대로, 세로로 살짝 오버플로 허용]
+            # overlay_frame_v2.png의 서브바 띠(TOP_SUB_BAR_X_RATIO/HEIGHT_RATIO)는 플레인한
+            # 반투명 단색 밴드일 뿐 아이콘 전용 여백 구조가 PNG 안에 따로 없다(직접 열어서
+            # 확인) - sub_icon_size가 이미 top_sub_h를 여백 없이 100% 채우고 있어서, 띠
+            # 자체를 키우지 않는 한 "여백을 줄여서 키운다"는 접근 자체가 불가능했다. 대신
+            # 띠 높이(top_sub_h, 전체 바 비율 7.78%)는 그대로 두고 아이콘만 1.4배로 키워
+            # 위아래로 살짝 넘치게 둔다 - d_icon_y 공식이 이미 "(top_sub_h-sub_icon_size)/2"
+            # 라 아이콘이 띠보다 커지면 음수가 되어 자동으로 위아래 대칭으로 넘치며 세로
+            # 중앙 정렬은 그대로 유지된다(별도 보정 불필요). minor_icon_size(전령/바론/
+            # 공허유충)는 sub_icon_size*0.75로 derive돼 있어 같이 비례 확대된다.
+            sub_icon_size = int(round(top_sub_h * 1.4))
             obj_font_size = max(8, int(round(top_sub_h * 0.75)))
             # 🛡️ [세로 정렬 보정 - 실측으로 발견] ffmpeg drawtext의 text_h는 폰트의 전체
             # 행간(어센더+디센더 포함) 기준이라, 디센더를 안 쓰는 숫자/콜론 글리프의 실제
