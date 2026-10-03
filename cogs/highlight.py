@@ -984,14 +984,16 @@ BATTLE_LEADIN_JOIN_MAX_DELAY_SEC = 0.6
 
 BATTLE_PREOVERLAP_MIN_SEC = 0.3
 BATTLE_PREOVERLAP_MAX_SEC = 0.5
-BATTLE_SHORT_INTERJECTION_LETTERS = {"f", "g", "h", "i"}
+BATTLE_SHORT_INTERJECTION_LETTERS = {"f", "g", "h", "i", "j", "k", "l", "m"}
 
 
 def _filter_short_interjection_pool(pool: list[str]) -> list[str]:
     """BATTLE_MAIN_POOL/BATTLE_SUB_POOL에서 짧은 끼어들기 추임새(f~i: "오!"/"어?!"/
     "엇!"/"와!?")만 골라내는 순수 함수(테스트 가능) - urgent 종료 직전 겹침에는
     긴 반복형 문구(a~e)가 아니라 이 짧은 추임새만 써야 urgent 본문을 가리지 않는다.
-    파일명 규칙(battle_{voice}_{letter}.wav)의 마지막 글자로 판별한다."""
+    파일명 규칙(battle_{voice}_{letter}.wav)의 마지막 글자로 판별한다.
+    j~m은 EN 전용 호탕한 웃음 리액션("Whoa-ho-ho!!" 등, Carter/Atlee만 보유, KO
+    쪽(battle_main/battle_sub)엔 해당 글자 파일이 없어 이 확장은 KO 동작에 영향 없음)."""
     return [p for p in pool
             if os.path.splitext(os.path.basename(p))[0].rsplit("_", 1)[-1] in BATTLE_SHORT_INTERJECTION_LETTERS]
 
@@ -1367,11 +1369,17 @@ BATTLE_LEADIN_CHAIN_GAP_SEC = 0.15
 # 동일한 역할을 하는 EN 전용 풀. Sterling은 이미 en_leadin 보이스로 쓰여서 제외했다
 # (KO가 lck_caster_dynamic을 pre_buildup과 겹친다고 제외한 것과 동일한 논리) -
 # Carter+Atlee 둘만 반복형 긴 문구 5개("Get him! Get him!!" 류) + 짧은 끼어들기
-# 4개(f~i, BATTLE_SHORT_INTERJECTION_LETTERS와 동일한 글자 규칙)를 쓴다. KO와 똑같은
+# 8개(f~m, BATTLE_SHORT_INTERJECTION_LETTERS와 동일한 글자 규칙)를 쓴다. KO와 똑같은
 # 구조적 문제(긴 반복형이 특정 보이스에서 중간 무음으로 15회 전부 실패)가 실제로
 # 재현됐다 - Carter는 a/c/d가 전부 실패해 반복 제거한 단문으로 교체했고(아래 TEXT의
 # 실제 값 참고), Atlee는 c만 실패했다. eleven_v4 + [excited][shouts] + stability=0.45
 # (KO urgent 레시피 재사용) + atempo=1.2(나머지 EN 신규 콘텐츠와 톤 일관성 유지).
+# 🛡️ [호탕한 웃음 리액션 정식 등록 - j~m] 단일 내레이션 재설계 후 "메인 내레이터가
+# 계속 말하는 동안 제3자가 짧게 리액션만 얹는다" 구조로 바뀌면서, 담백한 감탄사(f~i)
+# 외에 "호탕하게 웃으며 감탄"하는 버전도 필요해 추가 실험 후 채택한 4개 - "하하/호호"
+# 반복 텍스트 접근(비교 실험의 그룹 B 중 1개 포함)과 웃음 섞인 감탄사(그룹 A 전부)
+# 중, 그룹 A 3개 + 그룹 B 1개가 채택됐다. 나머지 그룹 B 2개("Ha-ha, no way!!"/
+# "Ha-ha-ha!!")는 폐기(에셋 미등록) - Carter/Atlee 둘 다 동일 텍스트로 녹음.
 EN_BATTLE_CARTER_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_carter_*.wav")))
 EN_BATTLE_ATLEE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "battle_atlee_*.wav")))
 EN_BATTLE_CARTER_TEXT = {
@@ -1384,6 +1392,10 @@ EN_BATTLE_CARTER_TEXT = {
     "battle_carter_g.wav": "Whoa!",
     "battle_carter_h.wav": "Come on!",
     "battle_carter_i.wav": "Yes!!",
+    "battle_carter_j.wav": "Whoa-ho-ho!!",
+    "battle_carter_k.wav": "Wooo-hoo!!",
+    "battle_carter_l.wav": "Oho-ho-ho!!",
+    "battle_carter_m.wav": "Ho-ho, unbelievable!!",
 }
 EN_BATTLE_ATLEE_TEXT = {
     "battle_atlee_a.wav": "Get him! Get him!!",
@@ -1395,6 +1407,10 @@ EN_BATTLE_ATLEE_TEXT = {
     "battle_atlee_g.wav": "Whoa!",
     "battle_atlee_h.wav": "Come on!",
     "battle_atlee_i.wav": "Yes!!",
+    "battle_atlee_j.wav": "Whoa-ho-ho!!",
+    "battle_atlee_k.wav": "Wooo-hoo!!",
+    "battle_atlee_l.wav": "Oho-ho-ho!!",
+    "battle_atlee_m.wav": "Ho-ho, unbelievable!!",
 }
 
 
@@ -2584,6 +2600,31 @@ EN_ASSIST_FRIENDLY_STYLE_INDICES = (1, 2, 3, 8)
 # EN_SYSTEM_PROMPT)가 이미 따로 담당하므로 여기서 또 언급하면 내용 중복/상충 위험이
 # 있다. {target_words}/{target_sec}는 호출부가 kill_t로부터 역산한 가용 시간을 바로
 # 넘겨서, 사전 길이 못박기 없이도 GPT가 대략적인 분량 감을 잡게 한다.
+# 🛡️ [중립형 원칙(양방향) - KO "미접전 단정형" 문제의 EN 재현 확인 후 추가] 실험
+# 라운드에서 베이스라인 10개 중 8개가 "they close in"/"circle each other"류로 "아직 안
+# 붙었다"를 단정해 KO와 동일한 문제가 재현됨을 확인 - 중립형 절 추가 후 0/10으로
+# 사라졌으나, 대신 2/10이 반대로 "이미 붙었다"(clash/unleash)를 단정하는 새 패턴을
+# 보여 양방향 모두 명시적으로 금지하도록 보강했다. 완벽한 보장은 아니다 - 텍스트는
+# kill_t 역산 시간만 알 뿐 실제 화면 상태를 모르므로, 두 방향의 단정을 "줄일" 뿐
+# "0%로 만들" 수는 없다.
+# 🛡️ [금지 예시에 standoff류 추가 - 실제 렌더에서 새어나온 사례 확인 후] 양방향 절
+# 추가 후 10회 재호출에선 1/10만 "standoff"로 걸렸는데, 그 1건이 실제 프로덕션 렌더
+# (verify_mainfact_anchor_render_test)에서도 그대로 나왔다 - "locked in a fierce
+# standoff"는 "아직 안 붙었다"를 노골적으로 전제하는 표현. "standoff"와 같은 계열
+# (face-off/stare-down/stalemate, 전부 "대치만 하고 아직 안 붙었다"를 명시)을 금지
+# 예시에 직접 추가했다 - 이번에 걸린 단어는 확실히 막되, 다른 유사 표현이 새로
+# 새어나올 가능성 자체는 여전히 남는다(아래 검증 라운드에서 재확인).
+# 🛡️ [converge 추가 - standoff 수정 후 재검증에서 또 발견] standoff류를 막은 직후
+# 10회 재검증에서 자동 키워드 집계는 0/10이었지만 직접 다시 읽어보니 "as forces
+# converge"가 "closing the distance"/"circling"과 같은 계열(서로 다가가는 중 ->
+# 아직 안 붙었다 암시)이라 추가로 금지했다 - standoff류와 동일한 패턴: "이번에
+# 걸린 단어 하나씩 막아나가는" 대증적 조치이지 완전 차단이 아니다.
+# 🛡️ [Escalation 지시 - KO urgent 슬롯과 유사한 효과 노림] KO는 마지막 슬롯을 별도
+# 녹음된 "긴박 톤" 전용 풀로 교체하지만, EN은 한 문단을 한 번에 합성하는 구조라
+# 똑같은 방식을 쓸 수 없다 - 대신 "뒤로 갈수록 문장이 더 짧고 격해지도록" 텍스트
+# 차원의 지시만 추가한다. TTS가 실제로 뒷부분을 더 격앙되게 "읽어주는 것"까지는
+# 보장 못 한다(ElevenLabs가 텍스트 단서엔 어느 정도 반응하지만 KO의 stability 조정급
+# 보장은 아님) - 어디까지나 "확률을 낮추는" 개선이지 "보장"이 아니다.
 EN_NARRATION_SYSTEM_PROMPT = (
     "You are a high-energy esports caster calling the lead-up to a kill in a League of Legends "
     "highlight clip. Write ONE continuous paragraph of building-tension commentary - a single "
@@ -2593,6 +2634,17 @@ EN_NARRATION_SYSTEM_PROMPT = (
     "that is handled by a separate line elsewhere. This paragraph is pure atmosphere/tension "
     "build-up only, and every sentence must stay true no matter what actually happens in the "
     "clip (no guesses about which side wins the fight).\n"
+    "- Neutral-truth rule: every sentence must stay true whether the two sides have ALREADY "
+    "started fighting by the time it plays, or haven't yet - never write a sentence that assumes "
+    "either state as fact. Avoid phrases that assume the clash HASN'T started yet (e.g. 'closing "
+    "the distance', 'sizing each other up', 'waiting for an opening', 'circling', 'inching "
+    "closer', 'converge', 'standoff', 'face-off', 'stare-down', 'stalemate'). Also avoid phrases "
+    "that assume it HAS already started (e.g. 'they clash', 'unleashes a flurry of attacks', "
+    "'exchanging blows'). Describe the abstract atmosphere/energy/momentum instead, so the line "
+    "reads true regardless of the actual state.\n"
+    "- Escalate gradually: later sentences (closer to the end of the paragraph) should feel more "
+    "urgent and intense than earlier ones - shorter clauses, sharper words, rising energy - "
+    "building toward the capstone line below.\n"
     "- End the paragraph with a vague, abstract sense that the moment has arrived or someone "
     "couldn't hold on (e.g. '...and there's no way out now!', '...and it's already over!') - "
     "still no specific names, champions, or details, just a dramatic capstone line.\n"
@@ -5310,10 +5362,14 @@ class KyvoHighlight(KyvoBaseCog):
                 }
                 leadin_end_times.append(narration_start + narration_duration)
 
-                # 🛡️ [제3자 짧은 리액션 유지 - 지난 라운드 녹음 재활용] "Oh!?"/"Whoa!"/
-                # "Come on!"/"Yes!!"(f~i, Carter/Atlee 양쪽에 다 있음) 중 보이스 하나를
-                # 무작위로 골라, 내레이션이 끝나는 시점 바로 직전에 살짝 겹쳐서 한 번만
-                # 넣는다 - "제3의 해설자가 짧게 리액션만 얹는다"는 새 설계 그대로.
+                # 🛡️ [제3자 짧은 리액션 - main_fact 재생 도중으로 앵커 이전] 기존엔 "내레이션
+                # 종료 직전"(킬 이전)에 걸려 있었으나, "Sterling이 결과(main_fact)를 말하는
+                # 동안 옆에서 웃는다"는 그림에 맞춰 main_fact 시작 직후로 옮겼다 - main_fact_
+                # start/duration은 이 블록보다 먼저(위쪽에서) 이미 계산되어 있으므로 그대로
+                # 참조만 하면 된다. "Oh!?"/"Whoa!"/"Come on!"/"Yes!!"(f~i) + "Whoa-ho-ho!!"/
+                # "Wooo-hoo!!"/"Oho-ho-ho!!"/"Ho-ho, unbelievable!!"(j~m, 호탕한 웃음) 총 8개
+                # 중 보이스 하나를 무작위로 골라 한 번만 넣는다 - "제3의 해설자가 짧게
+                # 리액션만 얹는다"는 설계는 그대로, 겹치는 대상만 내레이션 -> main_fact로 교체.
                 reaction_voice = random.choice(("carter", "atlee"))
                 reaction_pool = EN_BATTLE_CARTER_POOL if reaction_voice == "carter" else EN_BATTLE_ATLEE_POOL
                 reaction_text_map = EN_BATTLE_CARTER_TEXT if reaction_voice == "carter" else EN_BATTLE_ATLEE_TEXT
@@ -5321,7 +5377,7 @@ class KyvoHighlight(KyvoBaseCog):
                 if short_files:
                     reaction_file = random.choice(short_files)
                     reaction_duration = await self._to_executor(self._probe_audio_duration, reaction_file)
-                    reaction_start = max(0.0, narration_start + narration_duration - 0.3)
+                    reaction_start = main_fact_start + 0.3
                     schedule[f"en_reaction_{reaction_voice}"] = {
                         "wav": reaction_file,
                         "text": reaction_text_map[os.path.basename(reaction_file)],
