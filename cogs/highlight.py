@@ -3498,14 +3498,37 @@ class KyvoHighlight(KyvoBaseCog):
             # 🛡️ [배경 블록 제거] 텍스트가 충분히 크고 두꺼워져(FontKR-Black+자간) 별도
             # 배경 없이도 시인성이 확보된다는 피드백 - 검정 반투명 블록을 없애고 팀 컬러
             # 배경(메인바 그라데이션) 위에 텍스트만 직접 그린다.
+            # 🛡️ [세트 스코어 사각형 geometry - 라벨 폰트 계산보다 먼저] 참고 이미지(HLE/GEN
+            # 실제 방송 그래픽) 확대 재대조 결과 배열 방향이 틀렸었다 - 사각형 3개가
+            # 가로로 나열된 게 아니라, 바 가장자리에서 세로로 3개가 쌓여 있고 위에서부터
+            # 아래로 팀 컬러가 채워지는 구조다(1세트 승리 -> 맨 위 칸만 채움, 2세트 승리
+            # -> 위 두 칸, …). 개별 사각형 1개의 크기(세로 28%, 세로:가로 ≈2.2:1)는 이전
+            # 라운드에서 이미 맞게 잡혔으므로 그대로 유지하고, 배치만 가로→세로로 바꾼다.
+            # 이 블록을 라벨 폰트 크기 계산보다 먼저 두는 이유: avail_text_w(라벨 텍스트가
+            # 쓸 수 있는 가로폭)가 이제 사각형 그룹 폭만큼 줄어야 해서, 폰트 크기 계산 전에
+            # 그룹 폭을 먼저 알아야 한다. 세로로 쌓으면서 그룹이 차지하는 가로폭은 사각형
+            # 1개 폭(set_bar_w)뿐이라, 가로로 나열했을 때(3*w+2*gap)보다 훨씬 좁아져 라벨
+            # 텍스트가 쓸 수 있는 폭이 늘어난다.
+            set_bar_h = max(4, int(round(top_main_h * 0.28)))
+            set_bar_w = max(2, int(round(set_bar_h * 0.45)))
+            set_bar_gap = max(1, int(round(set_bar_h * 0.15)))  # 칸 사이 세로 여백
+            set_group_w = set_bar_w
+            set_group_h = 3 * set_bar_h + 2 * set_bar_gap
+            set_group_y0 = (top_main_h - set_group_h) / 2
+            SET_BAR_EDGE_PAD = 6  # 바 가장자리~사각형 그룹 사이 여백(기존 edge_pad와 동일 관례)
+            SET_BAR_LABEL_GAP = 6  # 사각형 그룹~팀 이름 텍스트 사이 여백
+
             blue_spaced_text = "B L U E"
             edge_pad = 6
             divider_gap_for_label = 6
             divider_w_for_label = 2
             _probe_font = ImageFont.truetype(SCOREBAR_FONT_KR_BLACK, 100)
             _blue_ratio = _probe_font.getlength(blue_spaced_text) / 100
+            # 🛡️ [가로 가용폭에서 사각형 그룹 몫을 먼저 뺀다] 기존엔 bar_x0+edge_pad에서
+            # 바로 텍스트가 시작했는데, 이제 그 자리에 사각형 그룹이 먼저 오고 텍스트는
+            # 그 뒤(SET_BAR_LABEL_GAP만큼 띄워서)부터 시작해야 한다.
             avail_text_w = (label_divider_x_l - divider_gap_for_label - divider_w_for_label - divider_gap_for_label) \
-                - (bar_x0 + edge_pad) - edge_pad
+                - (bar_x0 + SET_BAR_EDGE_PAD + set_group_w + SET_BAR_LABEL_GAP) - edge_pad
             font_size_by_width = int(avail_text_w / _blue_ratio)
             font_size_by_height = int(round(top_main_h * 0.72))
             team_label_font_size = max(8, min(font_size_by_width, font_size_by_height))
@@ -3573,22 +3596,17 @@ class KyvoHighlight(KyvoBaseCog):
             # 실제 시리즈 데이터가 없으므로 매 렌더마다 무작위로 생성한다. 한쪽이 이미
             # 3개를 다 채우면 시리즈가 끝났을 상황이라 부자연스러우므로, 리더 팀은 1~2개만
             # 채우고 상대는 그보다 적은(0~리더-1) 개수만 채운 상태만 나오게 한다(3-3 등
-            # 대칭/완주 조합은 절대 나오지 않음).
-            # 🛡️ [메인바 안으로 이동 - 세로 사각형(참고 이미지: HLE/GEN류) 3개] 기존엔
-            # 메인바 바로 밑(게임 화면 위)에 정사각형으로 걸쳐 그렸는데, 팀 로고/라벨
-            # 바로 옆 메인바 안쪽에 넣어달라는 요청으로 위치/모양을 바꿨다. 자리는
-            # LABEL_DIVIDER_FRAC(0.23, 라벨/구분선 기준점 - 그대로 유지, 라벨 폰트 크기에
-            # 영향 없음) 지점과 타워 아이콘(TOWER_FRAC, 0.30->0.34로 조정) 사이에 새로
-            # 생긴 공간(68.6px)에 넣는다 - 그룹 폭(60px, 세로 사각형 16px x 3개 + 간격
-            # 6px x 2개) 양옆에 4px씩 여백을 두고 꽉 들어간다. 높이는 top_main_h*0.7로
-            # 메인바 세로 중앙 정렬 - "세로 사각형"답게 폭보다 높이가 더 크도록(16x34,
-            # 약 1:2.1) 잡았다.
-            set_bar_w = max(3, int(round(top_main_h * 0.33)))  # 48 기준 -> 16px
-            set_bar_gap = max(2, int(round(set_bar_w * 0.375)))  # -> 6px
-            set_bar_h = max(6, int(round(top_main_h * 0.7)))  # 48 기준 -> 34px
-            set_group_w = 3 * set_bar_w + 2 * set_bar_gap
-            set_group_y = (top_main_h - set_bar_h) / 2
-            SET_BAR_SIDE_PAD = 4
+            # 대칭/완주 조합은 절대 나오지 않음). geometry(set_bar_w/h/gap/group_w/h)는
+            # 라벨 폰트 크기 계산 전에 이미 위에서 확정했다 - 거기서 그 이유 설명.
+            # 🛡️ [위치 재수정 - 라벨 "안쪽"이 아니라 바 가장자리, 라벨보다 바깥쪽] 참고
+            # 이미지(HLE/GEN) 재대조 결과 사각형이 "[사각형][팀로고/이름]" 순서로 라벨보다
+            # 화면 가장자리에 더 가깝게 와야 했는데, 지난 라운드엔 반대로 divider와 타워
+            # 사이(라벨보다 안쪽)에 넣어버렸다. 이제 bar_x0/bar_x1 가장자리에서
+            # SET_BAR_EDGE_PAD만큼만 떨어진 자리에 두고, 라벨 텍스트가 그 뒤
+            # (SET_BAR_LABEL_GAP만큼 띄워서)부터 시작하도록 avail_text_w 쪽에서 이미
+            # 공간을 비워뒀다.
+            left_group_x0 = bar_x0 + SET_BAR_EDGE_PAD
+            right_group_x0 = bar_x1 - SET_BAR_EDGE_PAD - set_group_w
 
             _set_leader = random.choice(["left", "right"])
             _set_leader_filled = random.randint(1, 2)
@@ -3598,23 +3616,16 @@ class KyvoHighlight(KyvoBaseCog):
             else:
                 right_filled, left_filled = _set_leader_filled, _set_other_filled
 
-            # 🛡️ [위치 기준 - 라벨/구분선 바로 옆, 타워 쪽으로] 라벨 쪽 divider 기준점
-            # (label_divider_x_l/r, LABEL_DIVIDER_FRAC)에서 SET_BAR_SIDE_PAD만큼 안쪽
-            # (타워 방향)으로 들어간 지점부터 시작/끝. tower_x_l/r(TOWER_FRAC=0.34)까지
-            # 여유(68.6px)가 그룹 폭(60px)+양옆 패딩(4px*2=8px)과 정확히 맞아 안 겹친다.
-            left_group_x0 = label_divider_x_l + SET_BAR_SIDE_PAD
-            right_group_x0 = label_divider_x_r - SET_BAR_SIDE_PAD - set_group_w
-
             for side_tag, side_x0, filled_count, bar_color in (
                 ("l", left_group_x0, left_filled, TEAM_BLUE_COLOR),
                 ("r", right_group_x0, right_filled, TEAM_RED_COLOR),
             ):
                 for i in range(3):
-                    bar_x = int(round(side_x0 + i * (set_bar_w + set_bar_gap)))
+                    bar_y = set_group_y0 + i * (set_bar_h + set_bar_gap)
                     bar_t = "fill" if i < filled_count else "1"
                     next_label = f"vmset_{side_tag}{i}"
                     text_chain += (
-                        f";[{label}]drawbox=x={bar_x}:y={set_group_y:.2f}:"
+                        f";[{label}]drawbox=x={int(round(side_x0))}:y={bar_y:.2f}:"
                         f"w={set_bar_w}:h={set_bar_h}:color={bar_color}:t={bar_t}[{next_label}]"
                     )
                     label = next_label
