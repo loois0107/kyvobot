@@ -171,6 +171,7 @@ PARAMETER_KO: dict[tuple[str, str], dict[str, str]] = {
 
     # ── highlight.py ──
     ("highlight", "video"): {"name": "클립", "description": "플레이 화면 클립(mp4), 시계 우측 상단, 킬 7초 전부터 녹화. 리플레이는 게임 종료 직후 바로 녹화하세요(다른 게임을 하면 매치가 잘못 잡힐 수 있음)."},
+    ("highlight", "style"): {"name": "스타일", "description": "이 클립만 다른 스타일로 만들고 싶을 때 선택하세요. 생략하면 서버 기본 설정을 따릅니다."},
 }
 
 

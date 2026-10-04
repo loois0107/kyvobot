@@ -95,14 +95,21 @@ class KyvoBaseCog(commands.Cog):
     # ══════════════════════════════════════════════════════════
     #  통합 다국어 메시지 치환 로더 (get_msg)
     # ══════════════════════════════════════════════════════════
-    async def get_msg(self, guild_id: int, key: str, **kwargs) -> str:
-        """서버 설정 언어에 맞는 메시지를 반환한다. 언어는 캐시된 설정에서 읽어 DB 부하를 차단."""
-        settings = await self.get_guild_settings(guild_id)
-        # 🛡️ [버그 수정] .get("language", "en")은 키가 아예 없을 때만 기본값을 쓴다 - DB 컬럼이
-        # NULL이라 {"language": None}처럼 키는 있고 값만 None인 경우엔 기본값이 안 먹혀서
-        # lang이 None이 되고, 이후 모든 lang == "en"/"ko" 비교가 실패해 의도와 무관한 분기로
-        # 샐 수 있었다. or로 None/빈 문자열까지 전부 안전하게 "en"으로 폴백시킨다.
-        lang = settings.get("language") or "en"
+    async def get_msg(self, guild_id: int, key: str, lang_override: str | None = None, **kwargs) -> str:
+        """서버 설정 언어에 맞는 메시지를 반환한다. 언어는 캐시된 설정에서 읽어 DB 부하를 차단.
+        🛡️ [lang_override - /highlight의 선택적 style 파라미터용] 유저가 "이번 한 번만 다른
+        언어로" 명시적으로 고른 경우(예: 서버 설정은 en인데 style="ko"로 실행), 길드 설정을
+        무시하고 이 값을 강제한다. 기본값 None이면 기존 동작과 완전히 동일(다른 모든 cog의
+        get_msg 호출은 이 파라미터를 아예 모르므로 회귀 없음)."""
+        if lang_override:
+            lang = lang_override
+        else:
+            settings = await self.get_guild_settings(guild_id)
+            # 🛡️ [버그 수정] .get("language", "en")은 키가 아예 없을 때만 기본값을 쓴다 - DB 컬럼이
+            # NULL이라 {"language": None}처럼 키는 있고 값만 None인 경우엔 기본값이 안 먹혀서
+            # lang이 None이 되고, 이후 모든 lang == "en"/"ko" 비교가 실패해 의도와 무관한 분기로
+            # 샐 수 있었다. or로 None/빈 문자열까지 전부 안전하게 "en"으로 폴백시킨다.
+            lang = settings.get("language") or "en"
 
         template = get_locale_message(lang, key)
         if kwargs:

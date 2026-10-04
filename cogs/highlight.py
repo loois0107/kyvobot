@@ -4900,81 +4900,107 @@ class KyvoHighlight(KyvoBaseCog):
     #  /highlight
     # ══════════════════════════════════════════════════════════
     @app_commands.command(name="highlight", description="Turn a gameplay clip into an AI-narrated highlight with real match facts (run /tier_verify first).")
-    @app_commands.describe(video="mp4, clock top-right, record 7s+ before kill. Watch replay right after the game ends.")
+    @app_commands.describe(
+        video="mp4, clock top-right, record 7s+ before kill. Watch replay right after the game ends.",
+        style="Choose this to make just this clip in a different style. Leave it out to follow the server's default setting.",
+    )
+    @app_commands.choices(style=[
+        app_commands.Choice(name="🇰🇷 LCK 스타일 (한국어)", value="ko"),
+        app_commands.Choice(name="🇺🇸 LCS 스타일 (English)", value="en"),
+    ])
     @app_commands.checks.cooldown(1, 30.0, key=lambda i: i.user.id)
-    async def highlight(self, interaction: discord.Interaction, video: discord.Attachment):
+    async def highlight(self, interaction: discord.Interaction, video: discord.Attachment,
+                         style: app_commands.Choice[str] = None):
         guild_id = interaction.guild_id
         await interaction.response.defer(ephemeral=True)
 
+        # 🛡️ [선택적 style 파라미터 - 이번 호출 전체에 일관되게 적용] style을 고르면 길드
+        # 설정과 무관하게 이번 한 번만 그 언어로 강제한다. get_msg()(cogs/base.py)가 받는
+        # lang_override에 이 값을 그대로 넘기도록, 이 함수 안에서만 쓰는 로컬 클로저로
+        # self.get_msg(guild_id, ...)를 감싼다 - 호출부 34곳 전부가 guild_id/override를
+        # 매번 안 반복해도 자동으로 같은 값을 쓰게 되어, 하나라도 빠뜨릴 위험이 없다.
+        style_override = style.value if style else None
+        get_msg = lambda key, **kw: self.get_msg(guild_id, key, lang_override=style_override, **kw)
+
         tv_cog = self._tier_verify_cog()
         if tv_cog is None:
-            await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_unexpected"), ephemeral=True)
+            await interaction.followup.send(await get_msg("highlight_err_unexpected"), ephemeral=True)
             return
 
         # 1. 길드 지역 설정 확인 (tier_verify와 동일한 사전 조건, 메시지도 그대로 재사용)
         platform_region = await tv_cog._get_platform_region(guild_id)
         if not platform_region:
-            await interaction.followup.send(await self.get_msg(guild_id, "tier_verify_err_region_not_set"), ephemeral=True)
+            await interaction.followup.send(await get_msg("tier_verify_err_region_not_set"), ephemeral=True)
             return
         regional_route = PLATFORM_TO_REGIONAL.get(platform_region)
         if regional_route is None:
-            await interaction.followup.send(await self.get_msg(guild_id, "tier_verify_err_region_not_set"), ephemeral=True)
+            await interaction.followup.send(await get_msg("tier_verify_err_region_not_set"), ephemeral=True)
             return
 
         # 2. 티어 인증(puuid) 확인 - party.py의 min_tier 미인증 차단과 동일한 원칙: 비용 발생 전에 막는다
         puuid = await self._get_verified_puuid(guild_id, interaction.user.id)
         if puuid is None:
-            await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_not_verified"), ephemeral=True)
+            await interaction.followup.send(await get_msg("highlight_err_not_verified"), ephemeral=True)
             return
 
         # 3. 하루 사용 한도 확인 - OCR/TTS 호출(비용 발생)보다 먼저, 첨부파일 다운로드보다도
         # 먼저 막는다. 길드 전체 한도(더 넓은 게이트)를 먼저 보고, 그다음 유저 개인 한도를
-        # 본다 - ticket_ai.py와 동일한 순서 원칙.
+        # 본다 - ticket_ai.py와 동일한 순서 원칙. style 선택과 무관하게 항상 guild_id/user_id
+        # 기준으로만 집계하므로(한도 자체는 style별로 안 나뉨), 선택 여부가 한도 작동에
+        # 영향을 주지 않는다.
         guild_daily_key = f"highlight_daily:guild:{guild_id}"
         if not await self._check_daily_limit(guild_daily_key, HIGHLIGHT_DAILY_LIMIT_GUILD):
             await interaction.followup.send(
-                await self.get_msg(guild_id, "highlight_err_daily_limit_guild", limit=HIGHLIGHT_DAILY_LIMIT_GUILD),
+                await get_msg("highlight_err_daily_limit_guild", limit=HIGHLIGHT_DAILY_LIMIT_GUILD),
                 ephemeral=True,
             )
             return
         user_daily_key = f"highlight_daily:user:{guild_id}:{interaction.user.id}"
         if not await self._check_daily_limit(user_daily_key, HIGHLIGHT_DAILY_LIMIT_USER):
             await interaction.followup.send(
-                await self.get_msg(guild_id, "highlight_err_daily_limit_user", limit=HIGHLIGHT_DAILY_LIMIT_USER),
+                await get_msg("highlight_err_daily_limit_user", limit=HIGHLIGHT_DAILY_LIMIT_USER),
                 ephemeral=True,
             )
             return
 
         # 4. 첨부파일 형식/크기 확인 (다운로드 전에 메타데이터만으로 판단)
         if not (video.content_type or "").startswith("video/"):
-            await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_invalid_attachment"), ephemeral=True)
+            await interaction.followup.send(await get_msg("highlight_err_invalid_attachment"), ephemeral=True)
             return
         if video.size > MAX_ATTACHMENT_BYTES:
-            await interaction.followup.send(await self.get_msg(guild_id, "highlight_err_invalid_attachment"), ephemeral=True)
+            await interaction.followup.send(await get_msg("highlight_err_invalid_attachment"), ephemeral=True)
             return
 
         progress_msg = await interaction.followup.send(
-            await self.get_msg(guild_id, "highlight_progress_queued"), ephemeral=True, wait=True
+            await get_msg("highlight_progress_queued"), ephemeral=True, wait=True
         )
 
         work_dir = tempfile.mkdtemp(prefix="kyvo_highlight_")
         try:
             async with self.render_semaphore:
-                await self._run_pipeline(interaction, guild_id, video, work_dir, progress_msg, tv_cog, regional_route, puuid)
+                await self._run_pipeline(interaction, guild_id, video, work_dir, progress_msg, tv_cog, regional_route,
+                                          puuid, style_override)
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
-    async def _run_pipeline(self, interaction, guild_id, video, work_dir, progress_msg, tv_cog, regional_route, puuid):
+    async def _run_pipeline(self, interaction, guild_id, video, work_dir, progress_msg, tv_cog, regional_route, puuid,
+                             style_override=None):
         # 🛡️ [언어 분기 진입점] get_msg()(cogs/base.py)와 완전히 동일한 패턴으로 guild 설정
         # 언어를 한 번만 읽어서 lang 변수로 만들고, 이후 단계(코멘터리 생성/0단계 캐스케이드/
         # 리드인 필러)에 그대로 넘긴다. 디스코드 상태 메시지(get_msg)는 이미 별도로 이 값을
         # 읽고 있어 서로 안 겹치는 두 번째 조회지만, DB가 아니라 캐시된 설정에서 읽으므로
         # 부하 문제는 없다.
+        # 🛡️ [style_override 우선] highlight()에서 유저가 style을 명시적으로 골랐으면
+        # 길드 설정을 완전히 무시하고 그 값을 그대로 쓴다 - or 단축평가라 style_override가
+        # None/빈 문자열이면 자동으로 기존 길드 설정 경로로 폴백한다(회귀 없음). 진행/에러
+        # 메시지도 같은 lang을 따르도록, 여기서도 같은 lang_override를 쓰는 로컬 get_msg
+        # 클로저를 만든다(highlight()의 것과 동일한 값 - style_override를 그대로 다시 넘김).
+        get_msg = lambda key, **kw: self.get_msg(guild_id, key, lang_override=style_override, **kw)
         guild_settings = await self.get_guild_settings(guild_id)
         # 🛡️ [버그 수정 - get_msg()와 동일한 문제] .get("language", "en")은 DB 컬럼이 NULL이라
         # 키는 있고 값만 None인 경우 기본값이 안 먹혀서 lang이 None이 되고, 이후 lang == "en"
         # 비교가 전부 실패해 의도와 무관하게 한국어(else) 분기로 샐 수 있었다.
-        lang = guild_settings.get("language") or "en"
+        lang = style_override or (guild_settings.get("language") or "en")
 
         video_path = os.path.join(work_dir, "input.mp4")
         await video.save(video_path)
@@ -4983,21 +5009,21 @@ class KyvoHighlight(KyvoBaseCog):
             duration, creation, (width, height) = await self._to_executor(self._probe_duration_and_creation, video_path)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Failed to probe attachment (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_invalid_attachment"))
+            await progress_msg.edit(content=await get_msg("highlight_err_invalid_attachment"))
             return
 
         if duration > MAX_CLIP_DURATION_SECONDS:
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clip_too_long", max=int(MAX_CLIP_DURATION_SECONDS)))
+            await progress_msg.edit(content=await get_msg("highlight_err_clip_too_long", max=int(MAX_CLIP_DURATION_SECONDS)))
             return
 
         aspect_ratio = width / height
         if aspect_ratio < MIN_LANDSCAPE_ASPECT_RATIO:
             print(f"[HIGHLIGHT][INFO] Rejected non-landscape aspect ratio {width}x{height} "
                   f"(ratio={aspect_ratio:.3f}, min={MIN_LANDSCAPE_ASPECT_RATIO:.2f}, guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unsupported_aspect_ratio"))
+            await progress_msg.edit(content=await get_msg("highlight_err_unsupported_aspect_ratio"))
             return
 
-        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_analyzing"))
+        await progress_msg.edit(content=await get_msg("highlight_progress_analyzing"))
 
         # 시계 표시가 정수 초 단위라 최대 ~1초의 양자화 오차가 있다 - 샘플을 촘촘히(최소 6개) 늘려
         # 최소자승 회귀의 slope 추정 오차를 줄인다.
@@ -5044,12 +5070,12 @@ class KyvoHighlight(KyvoBaseCog):
                 mapping = await try_crop_ratio(CLOCK_CROP_RATIO_REPLAY)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Clock OCR/mapping failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clock_read_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_clock_read_failed"))
             return
         if mapping is None:
             print(f"[HIGHLIGHT][ERROR] Clock mapping is None after try/except with no exception raised - "
                   f"this should be unreachable (guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_clock_read_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_clock_read_failed"))
             return
 
         # 매치 자동 판별 + 타임라인 조회
@@ -5131,7 +5157,7 @@ class KyvoHighlight(KyvoBaseCog):
                         print(f"[HIGHLIGHT][WARN] 2차(게임시각+creation_time 근접) 판별도 실패 - "
                               f"game_ms_end={game_ms_end:.0f}ms 이상 진행된 후보가 {len(fallback_details)}개 "
                               f"중 없음 (guild={guild_id})", flush=True)
-                        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
+                        await progress_msg.edit(content=await get_msg("highlight_err_match_not_found"))
                         return
 
                     # 🛡️ [실제 킬 존재 검증 - 오늘 실사고(KR_8393538099 vs KR_8393410432) 수정]
@@ -5182,26 +5208,26 @@ class KyvoHighlight(KyvoBaseCog):
                     timeline = await self._riot_get(tv_cog, session, riot_call_url)
         except RiotAuthError as e:
             print(f"[HIGHLIGHT][CRITICAL] Riot API auth failure (status={e.status}, guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_auth"))
+            await progress_msg.edit(content=await get_msg("highlight_err_riot_auth"))
             return
         except RiotRateLimitedError:
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_rate_limited"))
+            await progress_msg.edit(content=await get_msg("highlight_err_riot_rate_limited"))
             return
         except RiotServerError as e:
             print(f"[HIGHLIGHT][WARN] Riot server error (status={e.status}, guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_server_error"))
+            await progress_msg.edit(content=await get_msg("highlight_err_riot_server_error"))
             return
         except RiotTimeoutError:
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_riot_timeout"))
+            await progress_msg.edit(content=await get_msg("highlight_err_riot_timeout"))
             return
         except RiotNotFoundError:
             print(f"[HIGHLIGHT][WARN] Riot API 404 not found (stage={riot_call_stage}, url={riot_call_url}, "
                   f"guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_match_not_found"))
+            await progress_msg.edit(content=await get_msg("highlight_err_match_not_found"))
             return
         except RiotAPIError as e:
             print(f"[HIGHLIGHT][ERROR] Unexpected Riot API error (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
+            await progress_msg.edit(content=await get_msg("highlight_err_unexpected"))
             return
 
         kills = _extract_champion_kills(timeline)
@@ -5227,7 +5253,7 @@ class KyvoHighlight(KyvoBaseCog):
                 f"match_id={match_id} match_pick_stage={match_pick_stage}",
                 flush=True,
             )
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_no_kills"))
+            await progress_msg.edit(content=await get_msg("highlight_err_no_kills"))
             return
 
         kills_with_names = []
@@ -5438,7 +5464,7 @@ class KyvoHighlight(KyvoBaseCog):
         scoreboard["team100_dragon_icon_paths"] = _dragon_icon_paths(team100_dragon_subtypes)
         scoreboard["team200_dragon_icon_paths"] = _dragon_icon_paths(team200_dragon_subtypes)
 
-        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_scripting"))
+        await progress_msg.edit(content=await get_msg("highlight_progress_scripting"))
         try:
             lines_raw = await self._generate_commentary(
                 kills_with_names, lang, roster_pairs=roster_pairs,
@@ -5446,7 +5472,7 @@ class KyvoHighlight(KyvoBaseCog):
             )
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Commentary generation failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_ai_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_ai_failed"))
             return
 
         # MAX_KILLS_PER_CLIP=1이라 kills_with_names/lines_raw는 항상 정확히 1건.
@@ -5504,7 +5530,7 @@ class KyvoHighlight(KyvoBaseCog):
                     f"{killer_name}{_i_or_ga(killer_name)} {victim_name}{_eul_or_reul(victim_name)} 처치했어요!"
                 )
 
-        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_progress_rendering"))
+        await progress_msg.edit(content=await get_msg("highlight_progress_rendering"))
 
         # ── 1단계(닉네임 샤우팅, 3보이스 동시 콜) + 3단계(Main 사실 전달)만 실시간 TTS
         # (렌더당 ElevenLabs 호출 정확히 4회, asyncio.gather로 병렬) - 나머지 네 자리는
@@ -5601,7 +5627,7 @@ class KyvoHighlight(KyvoBaseCog):
             )
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] ElevenLabs TTS failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_tts_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_tts_failed"))
             return
 
         if lang == "en":
@@ -5668,7 +5694,7 @@ class KyvoHighlight(KyvoBaseCog):
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
-                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+                await progress_msg.edit(content=await get_msg("highlight_err_render_failed"))
                 return
 
             # 0단계 재설계: Carter가 kill_t에 시작(옛 hype_explode 자리 계승), Atlee는 Carter
@@ -5804,7 +5830,7 @@ class KyvoHighlight(KyvoBaseCog):
                       f"pre_buildup={len(PRE_BUILDUP_POOL)} "
                       f"main_explode={len(MAIN_EXPLODE_POOL)} hype_explode={len(HYPE_EXPLODE_POOL)} "
                       f"sub_explode={len(SUB_EXPLODE_POOL)} sub_question={len(SUB_QUESTION_POOL)}", flush=True)
-                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_unexpected"))
+                await progress_msg.edit(content=await get_msg("highlight_err_unexpected"))
                 return
 
             # 🛡️ [N슬롯화 - 이전 라운드] 상황멘트를 1개 고정 대신 en_leadin과 동일한 패턴
@@ -5893,7 +5919,7 @@ class KyvoHighlight(KyvoBaseCog):
             except Exception as e:
                 print(f"[HIGHLIGHT][ERROR] Failed to probe/post-process voice lines (guild={guild_id}): "
                       f"{type(e).__name__}: {e}", flush=True)
-                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+                await progress_msg.edit(content=await get_msg("highlight_err_render_failed"))
                 return
 
             # 0단계: Main+Hype+Sub 셋 다 kill_t 근처(0~150ms 각자 독립 랜덤 오프셋, 완전
@@ -6147,15 +6173,18 @@ class KyvoHighlight(KyvoBaseCog):
             await self._to_executor(self._render_video, video_path, duration, width, height, schedule, work_dir, out_mp4)
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Render failed (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_render_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_render_failed"))
             return
 
-        await self._send_result_or_report_failure(interaction, progress_msg, guild_id, out_mp4)
+        await self._send_result_or_report_failure(interaction, progress_msg, guild_id, out_mp4, style_override)
 
-    async def _send_result_or_report_failure(self, interaction, progress_msg, guild_id, out_mp4) -> None:
+    async def _send_result_or_report_failure(self, interaction, progress_msg, guild_id, out_mp4,
+                                               style_override=None) -> None:
         """렌더링된 파일을 보내되, 용량 초과나 그 외 업로드 실패를 조용히 묻지 않고 progress_msg를
         적절한 에러로 되돌린다. 독립 메서드로 뺀 이유: 이 분기 로직 자체를 파이프라인 전체를
-        돌리지 않고도 단위 테스트할 수 있어야 하기 때문."""
+        돌리지 않고도 단위 테스트할 수 있어야 하기 때문. style_override는 _run_pipeline에서
+        받은 값을 그대로 다시 전달받아, 성공/실패 메시지도 유저가 고른 style을 그대로 따른다."""
+        get_msg = lambda key, **kw: self.get_msg(guild_id, key, lang_override=style_override, **kw)
         # 🛡️ 비트레이트 역산으로 크기를 목표 근처로 수렴시켰지만, 그래도 극단적인 경우(예상보다
         # 훨씬 복잡한 콘텐츠, 컨테이너/오디오 오버헤드 오차)를 대비해 실제 파일 크기를 보내기
         # 전에 먼저 확인한다 - 어차피 실패할 업로드를 시도해서 시간 버릴 필요 없이 바로 안내.
@@ -6163,7 +6192,7 @@ class KyvoHighlight(KyvoBaseCog):
         if out_size_bytes > DISCORD_UPLOAD_LIMIT_BYTES:
             print(f"[HIGHLIGHT][WARN] Rendered output exceeds Discord upload limit "
                   f"({out_size_bytes / 1024 / 1024:.1f}MB, guild={guild_id})", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_output_too_large"))
+            await progress_msg.edit(content=await get_msg("highlight_err_output_too_large"))
             return
 
         # 🛡️ [버그 수정] 이전에는 전송 성공 여부와 무관하게 먼저 "완성됐습니다"로 편집해버려서,
@@ -6171,23 +6200,23 @@ class KyvoHighlight(KyvoBaseCog):
         # 받는 상황이 조용히 묻혔다. 전송을 먼저 시도하고, 성공했을 때만 성공 메시지로 편집한다.
         try:
             await interaction.followup.send(
-                content=await self.get_msg(guild_id, "highlight_success_caption"),
+                content=await get_msg("highlight_success_caption"),
                 file=discord.File(out_mp4, filename="highlight.mp4"),
                 ephemeral=False,
             )
         except discord.HTTPException as e:
             print(f"[HIGHLIGHT][ERROR] Upload failed (status={e.status}, guild={guild_id}): {e}", flush=True)
             if e.status == 413:
-                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_output_too_large"))
+                await progress_msg.edit(content=await get_msg("highlight_err_output_too_large"))
             else:
-                await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_upload_failed"))
+                await progress_msg.edit(content=await get_msg("highlight_err_upload_failed"))
             return
         except Exception as e:
             print(f"[HIGHLIGHT][ERROR] Unexpected upload failure (guild={guild_id}): {type(e).__name__}: {e}", flush=True)
-            await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_err_upload_failed"))
+            await progress_msg.edit(content=await get_msg("highlight_err_upload_failed"))
             return
 
-        await progress_msg.edit(content=await self.get_msg(guild_id, "highlight_success_caption"))
+        await progress_msg.edit(content=await get_msg("highlight_success_caption"))
 
 
 async def setup(bot):
