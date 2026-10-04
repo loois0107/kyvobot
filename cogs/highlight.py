@@ -1909,6 +1909,20 @@ POSITION_ORDER = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 LEFT_CARD_ZONE_WIDTH_RATIO = 170 / 2560
 RIGHT_MINIMAP_X_START_RATIO = 2100 / 2560
 
+# 🛡️ [관전(자동 전환 카메라) 모드 네이티브 UI 가림 - 실측] 리플레이를 "특정 플레이어
+# 고정"이 아니라 기본값인 자동 전환 관전 모드로 녹화하면, 하단 패널(BOTTOM_PANEL_*) 바로
+# 왼쪽 바깥(패널이 안 가리는 영역)에 게임 클라이언트 자체의 "자동 카메라 이동 카운트 다운"/
+# "전장의 안개" 드롭다운 컨트롤이 그대로 노출된 채 최종 영상에 남는다(실제 렌더 결과물로
+# 확인됨). LEFT_CARD_ZONE(좌측 10인 카드 column, 위쪽)과는 겹치지 않는 아래쪽 빈 공간에만
+# 있는 요소라 실측 2560x1072 캡처에서 그리드로 좌표를 쟀다 - x는 화면 맨 왼쪽(0)부터
+# 시작해서 두 드롭다운+아이콘 버튼까지만 덮으면 되고(패널 시작 전에 끝나서 서로 안 겹침),
+# y는 그 컨트롤이 있는 화면 맨 아래쪽 띠만. 일반 라이브 플레이 녹화(이 컨트롤이 원래
+# 없음)에서는 이 구역이 그냥 빈 바닥/배경이라, 가려도 외곽 어두운 모퉁이 비네트처럼만
+# 보인다.
+NATIVE_UI_MASK_WIDTH_RATIO = 320 / 2560
+NATIVE_UI_MASK_Y_START_RATIO = 948 / 1072
+NATIVE_UI_MASK_Y_END_RATIO = 1066 / 1072
+
 # 🛡️ [킬 배너 폭 - 하단 패널 박스 폭과 일치] 안전지대 전체(1447px)까지 키웠더니, 그
 # 뒤에 항상 그려지는 하단 통계 패널의 검은 배경 박스(BOTTOM_PANEL_WIDTH_RATIO, 819px -
 # 화면 중앙 정렬)가 배너보다 좁아서 배너 위쪽에 어울리지 않게 좁은 검은 박스가 삐져나와
@@ -3402,6 +3416,21 @@ class KyvoHighlight(KyvoBaseCog):
             f";[{current_label}][vframe2]overlay=x=0:y=0[vframed2]"
         )
         current_label = "vframed2"
+
+        # 🛡️ [관전 모드 네이티브 UI 가림] NATIVE_UI_MASK_* 실측 좌표(위 상수 선언부 주석
+        # 참고) 그대로 어두운 박스 하나만 깔아서, 하단 패널이 안 덮는 왼쪽 바깥 구역에
+        # 남아있는 "자동 카메라 이동 카운트 다운"/"전장의 안개" 드롭다운을 가린다. 항상
+        # 같은 자리에 같은 크기로만 그리면 돼서 enable= 시간 조건이 필요 없다(클립 전체
+        # 구간에 고정).
+        mask_x0 = 0
+        mask_y0 = int(round(final_height * NATIVE_UI_MASK_Y_START_RATIO))
+        mask_w = int(round(final_width * NATIVE_UI_MASK_WIDTH_RATIO))
+        mask_h = int(round(final_height * (NATIVE_UI_MASK_Y_END_RATIO - NATIVE_UI_MASK_Y_START_RATIO)))
+        video_chain += (
+            f";[{current_label}]drawbox=x={mask_x0}:y={mask_y0}:w={mask_w}:h={mask_h}:"
+            f"color={UI_BG_COLOR}@0.97:t=fill[vnativeuimask]"
+        )
+        current_label = "vnativeuimask"
 
         # 🛡️ [스코어바(상단)/KDA(하단) 텍스트 오버레이] scoreboard는 _run_pipeline에서
         # hud_event 여부와 무관하게 항상 채워서 넘어온다(정상 파이프라인에선 항상 not None -
