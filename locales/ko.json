@@ -410,6 +410,8 @@
   "highlight_err_ai_failed": "❌ 해설 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_render_failed": "❌ 영상 렌더링 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "highlight_err_unexpected": "❌ 예상치 못한 오류가 발생했습니다. 문제가 계속되면 관리자에게 문의해주세요.",
+  "highlight_caution_title": "📋 시작 전에 확인해주세요",
+  "highlight_caution_desc": "• 클립당 킬 장면은 1개만 처리돼요\n• 영상 길이는 최대 {max_duration}초까지예요\n• 하루 사용 횟수는 1인당 {user_limit}회로 제한돼요",
   "highlight_progress_queued": "⏳ 대기열에 등록되었습니다...",
   "highlight_progress_analyzing": "🔍 영상 시계를 읽고 매치 데이터를 확인하는 중...",
   "highlight_progress_scripting": "🎙️ 캐스터 해설 대본을 생성하는 중...",

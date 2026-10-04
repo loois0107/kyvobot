@@ -77,6 +77,12 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     "riot_region_set": {"name": "라이엇지역설정", "description": "계정 인증을 위해 이 서버의 리그 오브 레전드 지역을 설정합니다."},
     "tier_verify": {"name": "티어인증", "description": "리그 오브 레전드 계정을 인증하고 티어 기반 역할을 받습니다(먼저 /riot_region_set 필요)."},
 
+    # ── highlight.py ──
+    # 🛡️ [2026-09-02 highlight.py 추가 시 누락] PARAMETER_KO의 video/style 항목은 처음부터
+    # 있었지만, 정작 명령어 자체의 name/description은 COMMAND_KO에 추가되지 않아 한국어
+    # 클라이언트에서도 영어로 떴던 문제 - 뒤늦게 추가.
+    "highlight": {"name": "하이라이트", "description": "게임 클립을 실제 매치 기록 기반 AI 해설 하이라이트 영상으로 만듭니다(먼저 /tier_verify 필요)."},
+
     # ── giveaway.py ──
     "giveaway points": {"name": "포인트", "description": "당첨자에게 포인트를 지급하는 추첨을 생성합니다."},
     "giveaway role": {"name": "역할", "description": "당첨자에게 역할을 부여하는 추첨을 생성합니다."},
@@ -85,6 +91,7 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     # ── party.py ──
     "party_recruit": {"name": "파티모집", "description": "파티 모집 게시글을 엽니다."},
     "party_close": {"name": "파티마감", "description": "모집을 취소하거나, 파티 채널을 조기 종료합니다."},
+    "party_change_position": {"name": "포지션변경", "description": "이 채널에서 모집 중인 파티에 등록한 포지션을 변경합니다."},
     "tier_role_set": {"name": "티어역할설정", "description": "파티 모집에서 티어마다 부여할 역할을 설정합니다. /dashboard에서 더 쉽게 설정할 수 있습니다."},
     "tier_set": {"name": "티어설정", "description": "본인의 랭크 티어를 자진 신고합니다."},
 

@@ -410,6 +410,8 @@
   "highlight_err_ai_failed": "❌ Something went wrong generating the commentary. Please try again in a moment.",
   "highlight_err_render_failed": "❌ Something went wrong rendering the video. Please try again in a moment.",
   "highlight_err_unexpected": "❌ An unexpected error occurred. If this keeps happening, please contact an administrator.",
+  "highlight_caution_title": "📋 Before you start",
+  "highlight_caution_desc": "• Only 1 kill per clip gets processed\n• Clips can be up to {max_duration}s long\n• Limited to {user_limit} uses per person per day",
   "highlight_progress_queued": "⏳ Queued...",
   "highlight_progress_analyzing": "🔍 Reading the clip's clock and matching it to your game data...",
   "highlight_progress_scripting": "🎙️ Generating caster commentary...",

@@ -169,6 +169,10 @@ BROWSER_USER_AGENT_HEADER = {
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100MB
 MAX_CLIP_DURATION_SECONDS = 45.0
 
+# 🛡️ [첫 진행 메시지용 주의사항 카드] onboarding.py의 ONBOARDING_EMBED_COLOR와 같은 디스코드
+# 블러플 색상 - 별도 브랜드 색을 새로 정하지 않고 기존 임베드들과 톤을 맞춘다.
+HIGHLIGHT_CAUTION_EMBED_COLOR = 0x5865F2
+
 # 🛡️ [하루 사용 한도 - cogs/anonymous_reports.py의 REPORT_DAILY_LIMIT/REPORT_DAILY_WINDOW_SECONDS
 # 패턴 그대로 재사용] OCR(시계 인식, 렌더당 6~24회 GPT-4o-mini 비전 호출)+ElevenLabs TTS(렌더당
 # 2~4회)는 기존 쿨다운(유저당 30초)·동시처리(전역 1개)로는 "하루 총 비용"을 전혀 막지 못한다 -
@@ -5027,8 +5031,24 @@ class KyvoHighlight(KyvoBaseCog):
             await interaction.followup.send(await get_msg("highlight_err_invalid_attachment"), ephemeral=True)
             return
 
+        # 🛡️ [핵심 주의사항 카드] /whats-new, /guide 웹페이지까지 안 가도 디스코드 안에서
+        # 바로 보이도록, 첫 진행 메시지에 embed를 같이 보낸다. onboarding.py의
+        # build_welcome_embed와 동일한 패턴(discord.Embed(title=, description=, color=)).
+        # 이후 _run_pipeline의 모든 progress_msg.edit(content=...) 호출은 embed 인자를 아예
+        # 안 넘기므로(discord.py의 edit()는 전달 안 한 필드를 그대로 유지) 이 embed는 성공/
+        # 실패와 무관하게 마지막 메시지까지 계속 붙어 있는다 - 별도의 "매번 다시 첨부" 로직이
+        # 필요 없다.
+        caution_embed = discord.Embed(
+            title=await get_msg("highlight_caution_title"),
+            description=await get_msg(
+                "highlight_caution_desc",
+                max_duration=int(MAX_CLIP_DURATION_SECONDS),
+                user_limit=HIGHLIGHT_DAILY_LIMIT_USER,
+            ),
+            color=HIGHLIGHT_CAUTION_EMBED_COLOR,
+        )
         progress_msg = await interaction.followup.send(
-            await get_msg("highlight_progress_queued"), ephemeral=True, wait=True
+            await get_msg("highlight_progress_queued"), embed=caution_embed, ephemeral=True, wait=True
         )
 
         work_dir = tempfile.mkdtemp(prefix="kyvo_highlight_")
