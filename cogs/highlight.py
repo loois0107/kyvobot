@@ -2598,16 +2598,36 @@ def _compute_participant_items_at_time(timeline: dict, kill_game_ms: float) -> d
     return slots
 
 
-def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime) -> dict | None:
+def _pick_match_for_clip(matches_detail: list[dict], clip_creation: datetime.datetime,
+                          max_staleness_sec: float = MATCH_GAME_TIME_MAX_STALENESS_SEC) -> list[dict]:
+    """1차 판별 - clip_creation이 실제 값(None 아님)일 때만 호출부가 이 함수를 쓴다(None이면
+    날짜 기반 판별 자체가 불가능하므로 호출부가 아예 2차 경로로 보낸다).
+    🛡️ [반환형 변경 - dict|None -> list[dict]] 예전엔 창(시작-2분~종료+2분)에 맞는 첫 매치
+    하나만 반환했는데, 2차(_pick_match_by_game_time_range)와 동일하게 "창에 맞는 후보
+    전부"를 반환하도록 바꿔서, 호출부가 2차와 똑같이 킬 존재 교차검증을 할 수 있게
+    한다(실제로는 같은 계정이 동시에 두 매치를 뛸 수 없어 현실적으로 0개 아니면 1개뿐이지만,
+    구조를 2차와 통일해둔다).
+    🛡️ [staleness 체크 추가] 창에 들어가도 매치 종료 시각이 clip_creation보다
+    max_staleness_sec 이상 먼 매치는 제외한다. ±2분 창 자체가 이미 이보다 훨씬 좁아서
+    실제로 이 필터에 걸릴 일은 거의 없지만(창을 통과했다는 건 이미 거의 동시간대라는 뜻),
+    "매치 종료 6시간 이내"라는 기존 안내 문구(highlight_err_match_not_found)의 약속을
+    1차 판별도 명시적으로 지키도록 방어적 일관성을 맞춘다."""
+    matched = []
     for md in matches_detail:
         info = md["info"]
         start = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, tz=datetime.timezone.utc)
         end = datetime.datetime.fromtimestamp(
             (info["gameStartTimestamp"] + info["gameDuration"] * 1000) / 1000, tz=datetime.timezone.utc
         )
-        if start - datetime.timedelta(minutes=2) <= clip_creation <= end + datetime.timedelta(minutes=2):
-            return md
-    return None
+        if not (start - datetime.timedelta(minutes=2) <= clip_creation <= end + datetime.timedelta(minutes=2)):
+            continue
+        if (clip_creation - end).total_seconds() > max_staleness_sec:
+            continue
+        matched.append(md)
+    matched.sort(key=lambda md: abs((clip_creation - datetime.datetime.fromtimestamp(
+        (md["info"]["gameStartTimestamp"] + md["info"]["gameDuration"] * 1000) / 1000,
+        tz=datetime.timezone.utc)).total_seconds()))
+    return matched
 
 
 def _has_bot_participant(match_detail: dict) -> bool:
@@ -2950,7 +2970,7 @@ class KyvoHighlight(KyvoBaseCog):
     #  ffmpeg/PIL/OpenCV 계열 블로킹 작업 (전부 render_executor로 격리)
     # ══════════════════════════════════════════════════════════
     @staticmethod
-    def _probe_duration_and_creation(video_path: str) -> tuple[float, datetime.datetime, tuple[int, int]]:
+    def _probe_duration_and_creation(video_path: str) -> tuple[float, datetime.datetime | None, tuple[int, int]]:
         r = subprocess.run([FFMPEG_EXE, "-i", video_path], capture_output=True, text=True)
         stderr = r.stderr
         dur_m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", stderr)
@@ -2958,11 +2978,16 @@ class KyvoHighlight(KyvoBaseCog):
             raise ValueError("ffmpeg가 영상 길이를 읽지 못함 - 손상되었거나 지원하지 않는 형식")
         h, m, s = dur_m.groups()
         duration = int(h) * 3600 + int(m) * 60 + float(s)
+        # 🛡️ [버그 수정 - "창작 시각 불명"을 "방금"으로 둔갑시키던 문제] 컨테이너에
+        # creation_time 메타데이터가 없는 클립(녹화 도구에 따라 흔함, 재인코딩/트리밍으로
+        # 메타데이터가 날아간 경우 등)을 예전엔 datetime.now()로 대체했다 - 그러면 "녹화
+        # 시각"이 아니라 "방금 업로드한 시각"을 기준으로 매치를 찾게 되어, 1차 판별(날짜
+        # 범위 제한이 없었음)이 그 시각 근처에 끝난 전혀 무관한 최근 매치를 통과시킬 수
+        # 있었다(실제 위험 확인됨 - 엉뚱한 매치의 선수 이름/KDA/아이템이 그대로 입혀진
+        # 하이라이트가 조용히 완성될 수 있었음). 이제 메타데이터가 없으면 None을 그대로
+        # 반환해서 "모른다"는 상태를 호출부가 명시적으로 다르게(더 엄격하게) 처리하게 한다.
         ct_m = re.search(r"creation_time\s*:\s*([\d\-T:.Z]+)", stderr)
-        if ct_m:
-            creation = datetime.datetime.fromisoformat(ct_m.group(1).replace("Z", "+00:00"))
-        else:
-            creation = datetime.datetime.now(datetime.timezone.utc)
+        creation = datetime.datetime.fromisoformat(ct_m.group(1).replace("Z", "+00:00")) if ct_m else None
         # 🛡️ 회전 메타데이터(휴대폰 rotate/displaymatrix 태그로 실제 표시 화면비가 저장된
         # 픽셀 치수와 달라지는 경우)는 감지하지 않음 - PC 화면 녹화(League 클립)라는 실제
         # 사용 범위에선 나타나지 않는 경우라 알려진 한계로 남겨둠.
@@ -4896,6 +4921,37 @@ class KyvoHighlight(KyvoBaseCog):
     async def _riot_get(self, tv_cog, session: aiohttp.ClientSession, url: str):
         return await tv_cog._riot_request(session, url, extra_headers=BROWSER_USER_AGENT_HEADER)
 
+    async def _verify_candidates_by_kill(self, tv_cog, session: aiohttp.ClientSession, regional_route: str,
+                                          candidates: list[dict], mapping: tuple[float, float], duration: float,
+                                          guild_id: int, max_verify_n: int, stage_label: str):
+        """candidates(이미 호출부가 원하는 순서로 정렬해서 넘김) 상위 max_verify_n개의
+        timeline을 하나씩 조회하면서, 클립의 추정 game_ms 구간(_select_kills_in_clip)에
+        실제 킬이 있는 첫 후보를 찾는 즉시 멈춘다. 기존에 2차 판별(_pick_match_by_game_
+        time_range) 전용으로 인라인돼 있던 로직을 그대로 추출한 것 - 이제 1차 판별도
+        creation_time 불명 경로도 전부 이 하나의 구현을 공유한다(로직이 두 군데서
+        미묘하게 갈라지는 걸 방지).
+        반환: (매치 또는 None, 그 매치의 timeline 또는 None, {matchId: timeline} 캐시).
+        전부 킬이 없으면 (None, None, 조회해둔 timeline들) - 호출부가 "가장 가까운 후보로
+        폴백"할지 "완전히 실패 처리"할지는 각자 다르므로(1차는 폴백, creation_time 불명
+        경로는 날짜 신뢰 근거가 없어 폴백하지 않고 실패 처리) 여기선 검증 결과만 반환하고
+        폴백 정책은 호출부에 맡긴다. fetched_timelines를 같이 돌려주는 이유는 호출부가
+        폴백하기로 했을 때(candidates[0] 선택) 이미 조회한 timeline이면 재조회를 피하기
+        위함."""
+        top_candidates = candidates[:max_verify_n]
+        fetched_timelines: dict[str, dict] = {}
+        for cand in top_candidates:
+            cand_id = cand["metadata"]["matchId"]
+            timeline_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{cand_id}/timeline"
+            cand_timeline = await self._riot_get(tv_cog, session, timeline_url)
+            fetched_timelines[cand_id] = cand_timeline
+            cand_kills = _extract_champion_kills(cand_timeline)
+            has_kill = bool(_select_kills_in_clip(cand_kills, mapping, duration))
+            print(f"[HIGHLIGHT][INFO] {stage_label} 후보 킬 검증: {cand_id} "
+                  f"has_kill_in_range={has_kill} (guild={guild_id})", flush=True)
+            if has_kill:
+                return cand, cand_timeline, fetched_timelines
+        return None, None, fetched_timelines
+
     # ══════════════════════════════════════════════════════════
     #  /highlight
     # ══════════════════════════════════════════════════════════
@@ -5101,44 +5157,26 @@ class KyvoHighlight(KyvoBaseCog):
                     details.append(await self._riot_get(tv_cog, session, riot_call_url))
 
                 match_pick_stage = "primary"  # 🛡️ [진단성] no_kills 로그에서 참고할 매치 판별 단계 추적
-                # 🛡️ [실제 킬 존재 검증용] 2차 판별에서 상위 후보의 timeline을 먼저 당겨보고
-                # 그 후보가 최종 선택되면, 바로 아래 "timeline 조회" 단계에서 같은 매치를
-                # 또 조회하는 중복 호출을 막기 위한 캐시.
+                # 🛡️ [실제 킬 존재 검증용] 선택된 후보의 timeline을 먼저 당겨보고 그 후보가
+                # 최종 선택되면, 바로 아래 "timeline 조회" 단계에서 같은 매치를 또 조회하는
+                # 중복 호출을 막기 위한 캐시.
                 prefetched_timeline = None
-                chosen = _pick_match_for_clip(details, creation)
-                if chosen is None:
-                    # 🛡️ [진단성] 지난 라운드에 RiotNotFoundError 분기만 로그를 붙이고 이 분기(진짜
-                    # _pick_match_for_clip이 못 찾은 경우)는 빼먹었었다 - _pick_match_for_clip
-                    # 자체는 순수 함수로 남겨두고(테스트 용이성), 호출부에서 5개 후보 전부의
-                    # 시간창과 클립 creation_time을 비교해 "왜" 안 맞았는지(너무 이르다/늦다,
-                    # 얼마나) 남긴다.
-                    diag_lines = [f"clip_creation={creation.isoformat()}"]
-                    for d in details:
-                        info = d["info"]
-                        start = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, tz=datetime.timezone.utc)
-                        end = datetime.datetime.fromtimestamp(
-                            (info["gameStartTimestamp"] + info["gameDuration"] * 1000) / 1000, tz=datetime.timezone.utc
-                        )
-                        window_start = start - datetime.timedelta(minutes=2)
-                        window_end = end + datetime.timedelta(minutes=2)
-                        if creation < window_start:
-                            reason = f"too early by {(window_start - creation).total_seconds():.0f}s"
-                        elif creation > window_end:
-                            reason = f"too late by {(creation - window_end).total_seconds():.0f}s"
-                        else:
-                            reason = "within window (unexpected - should have matched)"
-                        diag_lines.append(
-                            f"  {d['metadata']['matchId']}: window=[{window_start.isoformat()}, "
-                            f"{window_end.isoformat()}] - {reason}"
-                        )
-                    print(f"[HIGHLIGHT][WARN] No candidate match window contains clip creation_time "
-                          f"(guild={guild_id}):\n" + "\n".join(diag_lines), flush=True)
+                chosen = None
 
-                    # 🛡️ [2차: creation_time을 못 믿는 경우 - 주로 리플레이 뷰어 녹화본] 1차가
-                    # 실패했을 때만, 후보 폭을 넓혀(count=20) 다시 조회하고 "클립이 보여주는
-                    # 게임시각까지 실제로 진행됐는가"로 후보를 추린 뒤 creation_time이 가장
-                    # 가까운 걸 고른다. 1차가 성공하는 일반 클립은 이 블록 자체를 안 타서
-                    # 조회량이 늘지 않는다.
+                if creation is None:
+                    # 🛡️ [창작 시각 불명 - 날짜 기반 판별 자체를 건너뜀] creation_time
+                    # 메타데이터가 없으면 "방금"으로 대체하던 예전 동작이 엉뚱한 최근 매치를
+                    # 조용히 통과시키는 구멍이었다(실제 위험 확인됨) - 더 이상 어떤 날짜
+                    # 비교도 하지 않는다(1차의 ±2분 창도, 2차의 staleness/거리 폴백도 전부
+                    # "믿을 수 있는 시각"이 있어야 의미가 있는데 그게 없으므로). 대신 후보
+                    # 폭을 넓혀(count=20) duration/봇 매치만 거르고, by-puuid가 이미 최신순으로
+                    # 주는 순서 그대로 상위 MATCH_KILL_VERIFY_TOP_N개의 실제 킬 존재만으로
+                    # 판별한다 - 날짜 근접성이라는 신뢰할 수 없는 신호에 기대는 대신, "그
+                    # 순간에 실제로 킬이 있었는가"라는 콘텐츠 신호만 받아들인다. 전부 킬이
+                    # 없으면(=날짜 신뢰 근거가 없는 상태에서 거리 기준 폴백은 너무 위험하다고
+                    # 판단) 거리 기준으로 대충 고르지 않고 명확히 실패 처리한다.
+                    print(f"[HIGHLIGHT][INFO] 클립에 creation_time 메타데이터가 없음 - 1차 판별을 "
+                          f"건너뛰고 킬 존재 교차검증만으로 매치를 찾습니다 (guild={guild_id})", flush=True)
                     game_ms_end = _clip_t_to_game_ms(duration, mapping)
                     riot_call_stage = "match_ids_fallback"
                     riot_call_url = (
@@ -5152,53 +5190,124 @@ class KyvoHighlight(KyvoBaseCog):
                         riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}"
                         fallback_details.append(await self._riot_get(tv_cog, session, riot_call_url))
 
-                    ranked_candidates = _pick_match_by_game_time_range(fallback_details, creation, game_ms_end)
-                    if not ranked_candidates:
-                        print(f"[HIGHLIGHT][WARN] 2차(게임시각+creation_time 근접) 판별도 실패 - "
-                              f"game_ms_end={game_ms_end:.0f}ms 이상 진행된 후보가 {len(fallback_details)}개 "
-                              f"중 없음 (guild={guild_id})", flush=True)
+                    no_date_candidates = [md for md in fallback_details
+                                           if md["info"]["gameDuration"] * 1000 >= game_ms_end
+                                           and not _has_bot_participant(md)]
+                    chosen, prefetched_timeline, _ = await self._verify_candidates_by_kill(
+                        tv_cog, session, regional_route, no_date_candidates, mapping, duration, guild_id,
+                        MATCH_KILL_VERIFY_TOP_N, "창작시각불명")
+                    if chosen is None:
+                        print(f"[HIGHLIGHT][WARN] 창작 시각 불명 + 킬 교차검증 전부 실패 - "
+                              f"game_ms_end={game_ms_end:.0f}ms 이상 진행된 후보 {len(no_date_candidates)}개 "
+                              f"전부 해당 시점 킬 없음 (guild={guild_id})", flush=True)
                         await progress_msg.edit(content=await get_msg("highlight_err_match_not_found"))
                         return
+                    match_pick_stage = "unknown_creation_verified"
+                    print(f"[HIGHLIGHT][INFO] 창작 시각 불명 경로로 매치 선택됨: "
+                          f"{chosen['metadata']['matchId']} (guild={guild_id})", flush=True)
+                else:
+                    primary_candidates = _pick_match_for_clip(details, creation)
+                    if primary_candidates:
+                        # 🛡️ [1차 판별도 킬 존재 교차검증] 예전엔 창에 맞는 첫 매치를 그냥 바로
+                        # 썼다 - 같은 계정이 동시에 두 매치를 뛸 수 없으니 현실적으로 후보는
+                        # 거의 항상 1개뿐이라, 이 교차검증은 "틀린 매치를 걸러낸다"기보다
+                        # "OCR 매핑이 살짝 어긋나 아예 다른 순간을 가리키는 경우"를 잡아내는
+                        # 역할에 가깝다. 어차피 아래에서 timeline을 곧 조회해야 하므로(캐시
+                        # 안 하면 이중 조회), 여기서 미리 당겨써도 정상 케이스엔 API 호출이
+                        # 늘지 않는다 - 그저 "언제 조회하느냐"만 앞당겨질 뿐.
+                        chosen, prefetched_timeline, fetched_timelines_p = await self._verify_candidates_by_kill(
+                            tv_cog, session, regional_route, primary_candidates, mapping, duration, guild_id,
+                            MATCH_KILL_VERIFY_TOP_N, "1차 판별")
+                        if chosen is None:
+                            # 날짜(±2분 창)는 이미 신뢰할 수 있는 상태이므로, 2차와 동일한
+                            # 철학으로 가장 가까운 후보로 안전하게 폴백한다(완전 실패 처리
+                            # 대신) - OCR 매핑 오차 같은 정상적인 노이즈까지 전부 차단하면
+                            # 평소에 잘 되던 케이스가 깨질 수 있다.
+                            chosen = primary_candidates[0]
+                            prefetched_timeline = fetched_timelines_p.get(chosen["metadata"]["matchId"])
+                        match_pick_stage = "primary_verified"
+                    else:
+                        # 🛡️ [진단성] 지난 라운드에 RiotNotFoundError 분기만 로그를 붙이고 이 분기(진짜
+                        # _pick_match_for_clip이 못 찾은 경우)는 빼먹었었다 - _pick_match_for_clip
+                        # 자체는 순수 함수로 남겨두고(테스트 용이성), 호출부에서 5개 후보 전부의
+                        # 시간창과 클립 creation_time을 비교해 "왜" 안 맞았는지(너무 이르다/늦다,
+                        # 얼마나) 남긴다.
+                        diag_lines = [f"clip_creation={creation.isoformat()}"]
+                        for d in details:
+                            info = d["info"]
+                            start = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, tz=datetime.timezone.utc)
+                            end = datetime.datetime.fromtimestamp(
+                                (info["gameStartTimestamp"] + info["gameDuration"] * 1000) / 1000, tz=datetime.timezone.utc
+                            )
+                            window_start = start - datetime.timedelta(minutes=2)
+                            window_end = end + datetime.timedelta(minutes=2)
+                            if creation < window_start:
+                                reason = f"too early by {(window_start - creation).total_seconds():.0f}s"
+                            elif creation > window_end:
+                                reason = f"too late by {(creation - window_end).total_seconds():.0f}s"
+                            else:
+                                reason = "within window but filtered by staleness check"
+                            diag_lines.append(
+                                f"  {d['metadata']['matchId']}: window=[{window_start.isoformat()}, "
+                                f"{window_end.isoformat()}] - {reason}"
+                            )
+                        print(f"[HIGHLIGHT][WARN] No candidate match window contains clip creation_time "
+                              f"(guild={guild_id}):\n" + "\n".join(diag_lines), flush=True)
 
-                    # 🛡️ [실제 킬 존재 검증 - 오늘 실사고(KR_8393538099 vs KR_8393410432) 수정]
-                    # "종료 시각이 가장 가깝다"는 이유만으로 고르면, 게임을 끝낸 뒤 다른 게임을
-                    # 더 하고 나서야 리플레이를 녹화한 경우 그 사이에 플레이한 "더 최근에 끝난
-                    # 다른 게임"이 실제 정답보다 가까워서 오답으로 뽑히는 사고가 실측으로
-                    # 확인됐다. 상위 최대 MATCH_KILL_VERIFY_TOP_N개 후보(그 이상은 확인하지
-                    # 않음 - API 호출 상한)의 timeline을 거리가 가까운 순서대로 하나씩 추가
-                    # 조회하면서, 클립의 추정 game_ms 구간(_select_kills_in_clip, 기존 로직
-                    # 그대로 재사용)에 실제 킬이 있는 첫 후보를 찾는 즉시 멈춘다(조기 종료 -
-                    # 정답이 상위권일 때 나머지를 조회하는 낭비가 없음) - 거리 순서보다
-                    # "실제 킬 존재"를 우선한다. 후보가 1개뿐이면 이 검증 자체를 스킵해서
-                    # (추가 API 호출 0회) 기존과 동일하게 빠르게 처리된다 - 상위 후보 전부
-                    # 킬이 없으면 예전과 동일한 "거리가 가장 가까운 것" 안전망으로 폴백한다.
-                    chosen = None
-                    top_candidates = ranked_candidates[:MATCH_KILL_VERIFY_TOP_N]
-                    fetched_timelines = {}  # 🛡️ 폴백 시(전부 킬 없음) 이미 조회한 timeline 재사용용
-                    if len(top_candidates) >= 2:
-                        for cand in top_candidates:
-                            cand_id = cand["metadata"]["matchId"]
-                            riot_call_stage = "timeline_disambiguation"
-                            riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{cand_id}/timeline"
-                            cand_timeline = await self._riot_get(tv_cog, session, riot_call_url)
-                            fetched_timelines[cand_id] = cand_timeline
-                            cand_kills = _extract_champion_kills(cand_timeline)
-                            has_kill = bool(_select_kills_in_clip(cand_kills, mapping, duration))
-                            print(f"[HIGHLIGHT][INFO] 2차 판별 후보 킬 검증: {cand_id} "
-                                  f"has_kill_in_range={has_kill} (guild={guild_id})", flush=True)
-                            if has_kill:
-                                chosen = cand
-                                prefetched_timeline = cand_timeline
-                                break
-                    if chosen is None:
-                        chosen = ranked_candidates[0]
-                        # 검증한 후보 전부 킬이 없어 거리 기준으로 폴백하는 경우 -
-                        # ranked_candidates[0]은 top_candidates에 항상 포함되므로(len>=2일 때)
-                        # 이미 조회했다면 재조회하지 않는다.
-                        prefetched_timeline = fetched_timelines.get(chosen["metadata"]["matchId"])
-                    match_pick_stage = "fallback_game_time_range"
-                    print(f"[HIGHLIGHT][INFO] 2차 판별로 매치 선택됨: {chosen['metadata']['matchId']} "
-                          f"(game_ms_end={game_ms_end:.0f}ms, guild={guild_id})", flush=True)
+                        # 🛡️ [2차: creation_time은 있지만 1차 창에 안 맞는 경우 - 주로 리플레이
+                        # 뷰어 녹화본] 1차가 실패했을 때만, 후보 폭을 넓혀(count=20) 다시
+                        # 조회하고 "클립이 보여주는 게임시각까지 실제로 진행됐는가"로 후보를
+                        # 추린 뒤 creation_time이 가장 가까운 걸 고른다. 1차가 성공하는 일반
+                        # 클립은 이 블록 자체를 안 타서 조회량이 늘지 않는다.
+                        game_ms_end = _clip_t_to_game_ms(duration, mapping)
+                        riot_call_stage = "match_ids_fallback"
+                        riot_call_url = (
+                            f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
+                            f"?start=0&count={MATCH_LOOKUP_COUNT_FALLBACK}"
+                        )
+                        fallback_ids = await self._riot_get(tv_cog, session, riot_call_url)
+                        fallback_details = []
+                        for mid in fallback_ids:
+                            riot_call_stage = "match_detail_fallback"
+                            riot_call_url = f"https://{regional_route}.api.riotgames.com/lol/match/v5/matches/{mid}"
+                            fallback_details.append(await self._riot_get(tv_cog, session, riot_call_url))
+
+                        ranked_candidates = _pick_match_by_game_time_range(fallback_details, creation, game_ms_end)
+                        if not ranked_candidates:
+                            print(f"[HIGHLIGHT][WARN] 2차(게임시각+creation_time 근접) 판별도 실패 - "
+                                  f"game_ms_end={game_ms_end:.0f}ms 이상 진행된 후보가 {len(fallback_details)}개 "
+                                  f"중 없음 (guild={guild_id})", flush=True)
+                            await progress_msg.edit(content=await get_msg("highlight_err_match_not_found"))
+                            return
+
+                        # 🛡️ [실제 킬 존재 검증 - 오늘 실사고(KR_8393538099 vs KR_8393410432) 수정]
+                        # "종료 시각이 가장 가깝다"는 이유만으로 고르면, 게임을 끝낸 뒤 다른 게임을
+                        # 더 하고 나서야 리플레이를 녹화한 경우 그 사이에 플레이한 "더 최근에 끝난
+                        # 다른 게임"이 실제 정답보다 가까워서 오답으로 뽑히는 사고가 실측으로
+                        # 확인됐다. 상위 최대 MATCH_KILL_VERIFY_TOP_N개 후보(그 이상은 확인하지
+                        # 않음 - API 호출 상한)의 timeline을 거리가 가까운 순서대로 하나씩 추가
+                        # 조회하면서, 클립의 추정 game_ms 구간(_select_kills_in_clip, 기존 로직
+                        # 그대로 재사용)에 실제 킬이 있는 첫 후보를 찾는 즉시 멈춘다(조기 종료 -
+                        # 정답이 상위권일 때 나머지를 조회하는 낭비가 없음) - 거리 순서보다
+                        # "실제 킬 존재"를 우선한다. 후보가 1개뿐이면 이 검증 자체를 스킵해서
+                        # (추가 API 호출 0회) 기존과 동일하게 빠르게 처리된다 - 상위 후보 전부
+                        # 킬이 없으면 예전과 동일한 "거리가 가장 가까운 것" 안전망으로 폴백한다.
+                        chosen = None
+                        top_candidates = ranked_candidates[:MATCH_KILL_VERIFY_TOP_N]
+                        fetched_timelines = {}  # 🛡️ 폴백 시(전부 킬 없음) 이미 조회한 timeline 재사용용
+                        if len(top_candidates) >= 2:
+                            chosen, prefetched_timeline, fetched_timelines = await self._verify_candidates_by_kill(
+                                tv_cog, session, regional_route, ranked_candidates, mapping, duration, guild_id,
+                                MATCH_KILL_VERIFY_TOP_N, "2차 판별")
+                        if chosen is None:
+                            chosen = ranked_candidates[0]
+                            # 검증한 후보 전부 킬이 없어 거리 기준으로 폴백하는 경우 -
+                            # ranked_candidates[0]은 top_candidates에 항상 포함되므로(len>=2일 때)
+                            # 이미 조회했다면 재조회하지 않는다.
+                            prefetched_timeline = fetched_timelines.get(chosen["metadata"]["matchId"])
+                        match_pick_stage = "fallback_game_time_range"
+                        print(f"[HIGHLIGHT][INFO] 2차 판별로 매치 선택됨: {chosen['metadata']['matchId']} "
+                              f"(game_ms_end={game_ms_end:.0f}ms, guild={guild_id})", flush=True)
                 match_id = chosen["metadata"]["matchId"]
                 if prefetched_timeline is not None:
                     timeline = prefetched_timeline
