@@ -340,6 +340,38 @@ VOICE_MIX_GAIN_DB_FILE_OVERRIDE = {
     "sub_shout_b.wav": VOICE_MIX_GAIN_DB + 2.0,
     "sub_shout_d.wav": VOICE_MIX_GAIN_DB + 2.0,
     "sub_shout_e.wav": VOICE_MIX_GAIN_DB + 2.0,
+    # 🛡️ [멀티킬 콜아웃 풀 재녹음 - 단계별 차등 게인] main_explode 수준(stability 0.35
+    # 이하 + SCREAMING류 태그)으로 재녹음한 뒤 실측한 결과, KO는 이미 -12.7~-14.2dB로
+    # 기존 0단계(-11.6~-14.5dB) 밴드에 거의 들어왔고(보정 필요 적음), EN(carter 보이스)은
+    # 원본 자체가 -20.2~-21.5dB로 여전히 크게 낮아 main_explode_d/sub_shout_c와 같은
+    # "파일 단위 보정" 패턴을 그대로 가져왔다. 트리플<쿼드라<펜타로 체계적 상승이
+    # 들리도록 단계마다 보정폭을 키운다(실측 평균에 맞춘 보정 + 단계별 추가 상승분
+    # 혼합) - 더블킬 외침은 가장 짧고 격차가 컸던 만큼 "펜타 수준" 보정을 그대로 썼다.
+    # EN 보정폭(+7~9dB)이 main_explode_d의 기존 +7.0dB 전례보다 큰데, 리미터가 이미
+    # 포화 상태라 이 폭까지 올려도 기대만큼 안 늘 수 있다는 전례(main_explode_d/
+    # sub_shout_c 주석 참고)가 있어 실제 믹스 결과는 다음 라운드에 재확인이 필요하다.
+    "triple_kill_call_ko_a.wav": VOICE_MIX_GAIN_DB + 1.0,
+    "triple_kill_call_ko_b.wav": VOICE_MIX_GAIN_DB + 1.0,
+    "quadra_kill_call_ko_a.wav": VOICE_MIX_GAIN_DB + 2.0,
+    "quadra_kill_call_ko_b.wav": VOICE_MIX_GAIN_DB + 2.0,
+    "penta_kill_call_ko_a.wav": VOICE_MIX_GAIN_DB + 3.0,
+    "penta_kill_call_ko_b.wav": VOICE_MIX_GAIN_DB + 3.0,
+    "triple_kill_call_en_a.wav": VOICE_MIX_GAIN_DB + 7.0,
+    "triple_kill_call_en_b.wav": VOICE_MIX_GAIN_DB + 7.0,
+    "quadra_kill_call_en_a.wav": VOICE_MIX_GAIN_DB + 8.0,
+    "quadra_kill_call_en_b.wav": VOICE_MIX_GAIN_DB + 8.0,
+    "penta_kill_call_en_a.wav": VOICE_MIX_GAIN_DB + 9.0,
+    "penta_kill_call_en_b.wav": VOICE_MIX_GAIN_DB + 9.0,
+    # 🛡️ [더블킬 외침 게인 - 독립 트랙으로 분리된 뒤로는 원본 파일명 그대로 조회됨] 더 이상
+    # 닉네임 샤우팅에 이어붙이지 않고(위 "외침 분리" 주석 참고) double_kill_shout라는
+    # 별도 스케줄 키로 들어가므로, entry["wav"]의 파일명이 항상 double_kill_shout_*.wav
+    # 원본 그대로다 - 이 이름으로 직접 등록한다. 0단계와 더 이상 안 겹치므로(kill_t
+    # 이전으로 당김) 경쟁할 상대가 줄었지만, 원본 자체가 여전히 조용해서(KO -19.2dB,
+    # EN -20dB대) 어느 정도 보정은 유지한다.
+    "double_kill_shout_ko_a.wav": VOICE_MIX_GAIN_DB + 6.0,
+    "double_kill_shout_ko_b.wav": VOICE_MIX_GAIN_DB + 6.0,
+    "double_kill_shout_en_a.wav": VOICE_MIX_GAIN_DB + 8.0,
+    "double_kill_shout_en_b.wav": VOICE_MIX_GAIN_DB + 8.0,
 }
 
 # ══════════════════════════════════════════════════════════
@@ -734,7 +766,13 @@ MULTI_KILL_CALL_POOLS = {
 # 쓰고 있어 그 관례를 따른다.
 DOUBLE_KILL_SHOUT_POOL_KO = sorted(glob.glob(os.path.join(VOICE_DIR, "double_kill_shout_ko_*.wav")))
 DOUBLE_KILL_SHOUT_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "double_kill_shout_en_*.wav")))
-DOUBLE_KILL_SHOUT_GAP_SEC = 0.05  # 외침->신남 전환이 한 호흡처럼 느껴지도록 거의 붙여서 이음
+# 🛡️ [더블킬 외침 - 독립 트랙으로 분리, kill_t 이전으로 당김] 0단계(main_explode 등)와
+# 같은 자리에서 겹쳐 재생하면 비슷한 게인끼리 부딪혀 묻히는 게 실측 확인돼서(main_explode_d
+# 꼬리와 겹침), 더 이상 닉네임 샤우팅에 이어붙이지 않고 독립 트랙으로 뗀다. EOEO_GAP_SEC
+# (리드인이 kill_t 앞에 반드시 비워두는 여백, 0.3초)과 정확히 같은 값을 재사용하지 않고
+# 그보다 살짝 짧게 잡아서(0.25초) 리드인이 이미 끝내둔 조용한 구간 "안쪽"에 확실히
+# 들어가게 한다(리드인 꼬리 끝=kill_t-0.3s와 거슬리지 않도록 작은 여유).
+DOUBLE_KILL_SHOUT_LEAD_SEC = 0.25
 # 🛡️ [발성 강도 재녹음 - "국어책 읽는 느낌" 피드백] 게인만 올렸을 뿐(VOICE_MIX_GAIN_DB_OVERRIDE)
 # 발성 자체의 텐션은 그대로였다는 피드백으로, 텍스트(모음 반복 구조)는 그대로 두고 태그/
 # voice_settings만 바꿔 재녹음했다. 1차로 [SCREAMING][terrified excitement]+stability=0.0+
@@ -3207,6 +3245,53 @@ class KyvoHighlight(KyvoBaseCog):
                         capture_output=True, check=True)
         return duration
 
+    @staticmethod
+    def _trim_internal_gap(wav_path: str, duration: float, out_path: str,
+                            noise_db: float = -25.0, min_silence_sec: float = 0.15,
+                            keep_sec: float = 0.07,
+                            search_start_ratio: float = 0.2, search_end_ratio: float = 0.7) -> float:
+        """🛡️ [더블킬 복합 대사 중간 무음 트림] "더블킬!!! {닉네임}~~!!"처럼 느낌표로 끝나는
+        구절을 이어 붙인 텍스트를 한 번에 합성하면, TTS가 그 경계를 문장 끝으로 오인해
+        실측상 219~313ms(일반 "{닉네임}~~!!" 단독 템플릿의 자연스러운 미세 휴지
+        60~100ms의 2~5배)짜리 중간 무음을 넣는다는 게 확인됐다(투자 조사 라운드).
+        클립 전체 끝(트레일링 꼬리)만 보는 _trim_trailing_silence와 달리, 클립 '중간'
+        (대략 20~70% 구간 - 머리말/꼬리 무음과 안 겹치게 여유를 둠)에서 가장 긴 무음
+        하나를 찾아 그 가운데만 잘라내고 keep_sec(기본 70ms)만큼은 남긴다 - 완전히
+        0으로 없애면 오히려 숨도 안 쉬고 이어붙은 것처럼 부자연스러울 수 있어서,
+        기존 환호 콜아웃 트림 때처럼 "약간의 여유는 남기는" 방식을 그대로 재사용한다.
+        조건에 맞는 무음이 안 잡히면(이미 짧거나 찾는 구간 밖에만 있으면) 원본을
+        그대로 복사하고 duration을 안 바꾼다 - "모르면 건드리지 않는다"
+        (_trim_trailing_silence와 동일 원칙, 실시간 경로라 재시도 불가)."""
+        r = subprocess.run(
+            [FFMPEG_EXE, "-i", wav_path, "-af",
+             f"silencedetect=noise={noise_db}dB:d={min_silence_sec}", "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        starts = [float(x) for x in re.findall(r"silence_start:\s*([\d.]+)", r.stderr)]
+        ends = [float(x) for x in re.findall(r"silence_end:\s*([\d.]+)", r.stderr)]
+        pairs = list(zip(starts, ends))
+        search_lo = duration * search_start_ratio
+        search_hi = duration * search_end_ratio
+        candidates = [(s, e) for s, e in pairs
+                      if s >= search_lo and e <= search_hi and (e - s) > keep_sec]
+        if not candidates:
+            subprocess.run([FFMPEG_EXE, "-y", "-i", wav_path, "-c", "copy", out_path],
+                            capture_output=True, check=True)
+            return duration
+        gap_start, gap_end = max(candidates, key=lambda p: p[1] - p[0])
+        cut_from = gap_start + keep_sec / 2
+        cut_to = gap_end - keep_sec / 2
+        filter_complex = (
+            f"[0:a]atrim=0:{cut_from:.4f},asetpts=PTS-STARTPTS[a];"
+            f"[0:a]atrim={cut_to:.4f}:{duration:.4f},asetpts=PTS-STARTPTS[b];"
+            f"[a][b]concat=n=2:v=0:a=1[out]"
+        )
+        subprocess.run(
+            [FFMPEG_EXE, "-y", "-i", wav_path, "-filter_complex", filter_complex, "-map", "[out]", out_path],
+            capture_output=True, check=True,
+        )
+        return duration - (gap_end - gap_start) + keep_sec
+
     def _render_video(self, video_path: str, video_duration: float, video_width: int,
                        video_height: int, schedule: dict, work_dir: str, out_mp4: str) -> str:
         """schedule = {"total_duration", "kill_t", <voice_key>...} - <voice_key>는
@@ -3286,7 +3371,8 @@ class KyvoHighlight(KyvoBaseCog):
                     # 🛡️ [멀티킬 지원] 콜아웃은 피니시가 쿼드라/펜타일 때만 최대 3개(중간
                     # 킬 최대 2개 + 피니시 자신 1개) - 1킬/더블/트리플 클립엔 애초에
                     # schedule에 안 생겨서 None으로 조용히 스킵된다(회귀 없음).
-                    "multi_kill_call_1", "multi_kill_call_2", "multi_kill_call_3"):
+                    "multi_kill_call_1", "multi_kill_call_2", "multi_kill_call_3",
+                    "double_kill_shout"):
             entry = schedule.get(key)
             if entry is None:
                 continue
@@ -5717,15 +5803,13 @@ class KyvoHighlight(KyvoBaseCog):
         # 동일(회귀 없음). lines_raw도 위에서 [finish_kill] 하나만 넘겨 생성했으므로
         # lines_raw[0]이 곧 피니시 킬의 해설이다.
         kill_t = finish_kill["clip_t_sec"]
-        # 🛡️ [멀티킬 지원 - 리드인 끝점 앵커 분리, B안] 리드인 내레이션(EN 연속 내레이션/
-        # KO urgent+다중 리액션 체인)이 "클립 시작 ~ kill_t 직전"을 자기 혼자 채운다는
-        # 전제로 설계돼 있어서, 쿼드라/펜타 피니시에서 중간 콜아웃 킬(callout_kills)의
-        # 타임스탬프를 그대로 두면 내레이션이 그 위를 덮어버린다. 콜아웃이 있으면
-        # "첫 콜아웃 킬 직전까지만" 리드인이 채우고 그 뒤(콜아웃들 사이)는 비워서 콜아웃
-        # 스팅어만 들리게 한다(B안 - 끊고 재생성하는 A안보다 호출 비용/실패 위험이 없어
-        # 더 안전하다고 판단한 설계). 더블/트리플 피니시는 callout_kills가 항상 비어 있어
-        # kill_t 그대로라 기존 동작과 완전히 동일(회귀 없음).
-        leadin_end_kill_t = callout_kills[0]["clip_t_sec"] if callout_kills else kill_t
+        # 🛡️ [멀티킬 지원 - B안 폐기, 리드인 끝점 앵커 원복] 한때 콜아웃이 있으면 리드인
+        # 끝점을 "첫 콜아웃 킬 직전"으로 당겨서 그 뒤(콜아웃들 사이)를 비워뒀었는데(B안),
+        # 실제로 들어보니 콜아웃과 콜아웃 사이에 수 초짜리 완전 무음 구간이 생겨 "해설이
+        # 뚝뚝 끊긴다"는 문제가 확인됐다. 원래 의도("1~2킬까지 끊김없이 흐르다가 피니시
+        # 직전에 끝남")대로, 리드인은 항상 kill_t(피니시) 직전까지 끊김없이 이어지고
+        # 콜아웃은 그 위에 짧게 겹쳐서만 들리는 구조로 되돌린다 - 겹침 자체는 콜아웃
+        # 쪽 음량/태그를 강하게(아래 재녹음) 키워서 대응한다.
         killer_name = finish_kill["killer"]
         victim_name = finish_kill["victim"]
         # 🛡️ [EN 비영문 닉네임 미발화 - 검증/폴백도 표시용 이름 기준] EN은 GPT에게 애초에
@@ -5831,9 +5915,10 @@ class KyvoHighlight(KyvoBaseCog):
         # 둘만 늘림+리액션 텍스트를 받고, sub는 일반 템플릿(볼륨 스웰)을 그대로 받도록
         # 보이스별 텍스트 매핑으로 바꿨다 - 팀명 샤우팅(EN 포함)은 전부 use_hyphen_stretch
         # 가 False라 항상 일반 템플릿만 받는다(회귀 없음).
-        # 🛡️ [멀티킬 지원 - 더블킬 전용 복합 대사] 피니시가 더블킬이면 닉네임 샤우팅
-        # 텍스트에 "더블킬!!!"을 미리 붙인다 - 아래에서 TTS 합성된 wav 중 하나에
-        # "우왁!!" 외침을 _concat_wav_chain으로 추가로 이어붙인다(exclaim -> hype).
+        # 🛡️ [멀티킬 지원 - 더블킬 전용 텍스트] 피니시가 더블킬이면 3보이스 전부 닉네임
+        # 샤우팅 텍스트에 "더블킬!!!"을 미리 붙인다 - "우왁!!" 외침은 더 이상 이 텍스트와
+        # 합쳐지지 않고 kill_t 이전의 독립 트랙으로 따로 스케줄된다(아래 "double_kill_
+        # shout" 스케줄링 블록, 0단계 꼬리와 겹쳐 묻히던 문제 수정).
         is_double_kill_finish = finish_multi_kill_length == 2
         if is_double_kill_finish:
             double_kill_template = (HYPE_NICKNAME_SHOUT_DOUBLE_KILL_TEMPLATE_EN if lang == "en"
@@ -5919,6 +6004,18 @@ class KyvoHighlight(KyvoBaseCog):
                 hype_nickname_durations = [
                     await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
                 ]
+                # 🛡️ [더블킬 복합 대사 중간 무음 트림] "더블킬!!!"/"Double kill!!"과 닉네임
+                # 사이에 TTS가 넣는 219~313ms 무음을 스웰 적용 전에 먼저 줄인다(_trim_
+                # internal_gap 주석 참고) - 스웰은 뒷부분(물결표 여운)만 건드리므로 순서가
+                # 바뀌면 안 됨(트림 먼저, 스웰 나중).
+                if is_double_kill_finish:
+                    trimmed_raw = []
+                    for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
+                        trimmed_path = os.path.join(work_dir, f"hype_nickname_raw_{i + 1}_trimmed.wav")
+                        new_dur = await self._to_executor(self._trim_internal_gap, raw, dur, trimmed_path)
+                        trimmed_raw.append(trimmed_path)
+                        hype_nickname_durations[i] = new_dur
+                    hype_nickname_wavs_raw = trimmed_raw
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 # 🛡️ [EN 실시간 합성물 전부 atempo - "쉬지 않고 빠르게 말한다" 핵심 요소]
                 # voice_settings.speed는 이 TTS 엔드포인트에서 무시되는 게 확인됐으므로
@@ -5991,26 +6088,14 @@ class KyvoHighlight(KyvoBaseCog):
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
-            # 🛡️ [멀티킬 지원 - 더블킬 "외침 -> 신남"] 스웰/타임스트레치 후처리가 끝난
-            # 최종 wav에 이어붙인다(그 전에 붙이면 스웰 시작 비율이 "닉네임만"의 길이
-            # 기준으로 계산돼 있어 엉뚱한 지점이 부풀 위험) - 이 보이스 하나만 총 길이가
-            # 늘어날 뿐, stage1 전환 타이밍(위 seq/hype_nickname_start)은 이미 확정된
-            # 뒤라 다른 보이스나 2/3단계 시작 시점에 영향이 없다.
-            if is_double_kill_finish and hype_nickname_wavs:
-                shout_pool = DOUBLE_KILL_SHOUT_POOL_EN if lang == "en" else DOUBLE_KILL_SHOUT_POOL_KO
-                if shout_pool:
-                    shout_file = random.choice(shout_pool)
-                    combined_path = os.path.join(work_dir, "hype_nickname_1_double_kill.wav")
-                    try:
-                        await self._to_executor(
-                            _concat_wav_chain, [shout_file, hype_nickname_wavs[0]],
-                            DOUBLE_KILL_SHOUT_GAP_SEC, combined_path)
-                        hype_nickname_wavs[0] = combined_path
-                        hype_nickname_durations[0] = await self._to_executor(
-                            self._probe_audio_duration, combined_path)
-                    except Exception as e:
-                        print(f"[HIGHLIGHT][WARN] 더블킬 외침 이어붙이기 실패(guild={guild_id}) - "
-                              f"외침 없이 진행: {type(e).__name__}: {e}", flush=True)
+            # 🛡️ [멀티킬 지원 - 더블킬 "외침" 분리, 0단계 꼬리 마스킹 수정] 예전엔 "우왁!!"을
+            # 닉네임 샤우팅 보이스 1 앞에 이어붙여 같은 시각(hype_nickname_start, 0단계와
+            # 겹치는 자리)에 재생했는데, 실측 결과 0단계 꼬리(main_explode_d 등, 같은
+            # 13.0dB 게인)와 겹쳐 외침이 묻히는 문제가 확인됐다 - 외침은 더 이상 닉네임
+            # 보이스와 합치지 않고 독립 트랙으로 분리해 kill_t 이전(아래 별도 스케줄링
+            # 블록, DOUBLE_KILL_SHOUT_LEAD_SEC)으로 당긴다. "더블킬!!! {이름}~~!!" 부분은
+            # 3보이스 전부 지금처럼 hype_nickname_start에 동시 재생(변경 없음) - 복합
+            # 대사를 합치지 않으므로 스웰 타이밍에도 전혀 영향 없다.
             for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
                 schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
                                                        "start": hype_nickname_start, "duration": dur}
@@ -6038,9 +6123,7 @@ class KyvoHighlight(KyvoBaseCog):
             # 길이로 역산한다 - 사전에 길이를 못박지 않고도 "항상 kill_t 근처에서 끝난다"를
             # 보장하는 이 코드베이스의 기존 철학 그대로.
             leadin_end_times = []
-            # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t(콜아웃 없으면 kill_t와
-            # 동일) 사용 - 위 leadin_end_kill_t 선언부 주석 참고.
-            en_narration_end = leadin_end_kill_t - EN_LEADIN_END_GAP_SEC
+            en_narration_end = kill_t - EN_LEADIN_END_GAP_SEC
             en_narration_available = en_narration_end - EN_LEADIN_START_OFFSET_SEC
             if en_narration_available >= EN_NARRATION_MIN_AVAILABLE_SEC:
                 narration_text = await self._generate_leadin_narration(en_narration_available)
@@ -6131,8 +6214,7 @@ class KyvoHighlight(KyvoBaseCog):
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
-                # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t 사용 - 위 선언부 주석 참고.
-                pre_buildup_available = plan_lead_in_forward_eoeo(leadin_end_kill_t)
+                pre_buildup_available = plan_lead_in_forward_eoeo(kill_t)
                 pre_buildup_pool_durations = [
                     await self._to_executor(self._probe_audio_duration, f) for f in PRE_BUILDUP_POOL
                 ]
@@ -6178,6 +6260,18 @@ class KyvoHighlight(KyvoBaseCog):
                 hype_nickname_durations = [
                     await self._to_executor(self._probe_audio_duration, raw) for raw in hype_nickname_wavs_raw
                 ]
+                # 🛡️ [더블킬 복합 대사 중간 무음 트림] "더블킬!!!"과 닉네임 사이에 TTS가 넣는
+                # 219~313ms 무음을 스웰 적용 전에 먼저 줄인다(_trim_internal_gap 주석 참고,
+                # EN 분기와 동일 패턴) - 3보이스 각자 실제 길이가 다르므로 각자 측정해서
+                # 개별 적용한다(일괄 고정값 아님).
+                if is_double_kill_finish:
+                    trimmed_raw = []
+                    for i, (raw, dur) in enumerate(zip(hype_nickname_wavs_raw, hype_nickname_durations)):
+                        trimmed_path = os.path.join(work_dir, f"hype_nickname_raw_{i + 1}_trimmed.wav")
+                        new_dur = await self._to_executor(self._trim_internal_gap, raw, dur, trimmed_path)
+                        trimmed_raw.append(trimmed_path)
+                        hype_nickname_durations[i] = new_dur
+                    hype_nickname_wavs_raw = trimmed_raw
                 main_fact_duration = await self._to_executor(self._probe_audio_duration, main_fact_wav)
                 sub_question_duration = await self._to_executor(self._probe_audio_duration, sub_question_file)
                 # 🛡️ [보이스별 후처리 분기 - sub만 기존 방식 유지] use_hyphen_stretch여도
@@ -6255,27 +6349,14 @@ class KyvoHighlight(KyvoBaseCog):
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
-            # 🛡️ [멀티킬 지원 - 더블킬 "외침 -> 신남"] 스웰/타임스트레치 후처리가 끝난
-            # 최종 wav에 이어붙인다(그 전에 붙이면 스웰 시작 비율이 "닉네임만"의 길이
-            # 기준으로 계산돼 있어 엉뚱한 지점이 부풀 위험) - 이 보이스 하나만 총 길이가
-            # 늘어날 뿐, stage1 전환 타이밍(위 seq/hype_nickname_start)은 이미 확정된
-            # 뒤라 다른 보이스나 2/3단계 시작 시점에 영향이 없다. end_times/total_duration
-            # 계산(아래)보다 먼저 해야 늘어난 길이가 안 잘린다.
-            if is_double_kill_finish and hype_nickname_wavs:
-                shout_pool = DOUBLE_KILL_SHOUT_POOL_EN if lang == "en" else DOUBLE_KILL_SHOUT_POOL_KO
-                if shout_pool:
-                    shout_file = random.choice(shout_pool)
-                    combined_path = os.path.join(work_dir, "hype_nickname_1_double_kill.wav")
-                    try:
-                        await self._to_executor(
-                            _concat_wav_chain, [shout_file, hype_nickname_wavs[0]],
-                            DOUBLE_KILL_SHOUT_GAP_SEC, combined_path)
-                        hype_nickname_wavs[0] = combined_path
-                        hype_nickname_durations[0] = await self._to_executor(
-                            self._probe_audio_duration, combined_path)
-                    except Exception as e:
-                        print(f"[HIGHLIGHT][WARN] 더블킬 외침 이어붙이기 실패(guild={guild_id}) - "
-                              f"외침 없이 진행: {type(e).__name__}: {e}", flush=True)
+            # 🛡️ [멀티킬 지원 - 더블킬 "외침" 분리, 0단계 꼬리 마스킹 수정] 예전엔 "우왁!!"을
+            # 닉네임 샤우팅 보이스 1 앞에 이어붙여 같은 시각(hype_nickname_start, 0단계와
+            # 겹치는 자리)에 재생했는데, 실측 결과 0단계 꼬리(main_explode_d 등, 같은
+            # 13.0dB 게인)와 겹쳐 외침이 묻히는 문제가 확인됐다 - 외침은 더 이상 닉네임
+            # 보이스와 합치지 않고 독립 트랙으로 분리해 kill_t 이전(아래 별도 스케줄링
+            # 블록, DOUBLE_KILL_SHOUT_LEAD_SEC)으로 당긴다. "더블킬!!! {이름}~~!!" 부분은
+            # 3보이스 전부 지금처럼 hype_nickname_start에 동시 재생(변경 없음) - 복합
+            # 대사를 합치지 않으므로 스웰 타이밍에도 전혀 영향 없다.
 
             # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
             # 자리가 허락하는 만큼)를 배치한다. available 계산은 위에서
@@ -6353,8 +6434,7 @@ class KyvoHighlight(KyvoBaseCog):
                         os.path.basename(p): await self._to_executor(self._probe_audio_duration, p)
                         for p in BATTLE_SUB_POOL
                     }
-                    # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t 사용 - 위 선언부 주석 참고.
-                    reaction_end_limit = leadin_end_kill_t - EOEO_GAP_SEC
+                    reaction_end_limit = kill_t - EOEO_GAP_SEC
 
                     # 🛡️ [끼어드는 쪽은 짧은 추임새로 체인을 시작] preoverlap_voice만 첫
                     # 항목을 짧은 끼어들기 추임새(f~i)로 강제하고, 그 뒤 남는 시간은 기존
@@ -6492,14 +6572,50 @@ class KyvoHighlight(KyvoBaseCog):
                 print(f"[HIGHLIGHT][WARN] 멀티킬 콜아웃 길이 조회 실패(guild={guild_id}) - 스킵: "
                       f"{type(e).__name__}: {e}", flush=True)
                 continue
-            call_start = ck["clip_t_sec"] + random.uniform(0, STAGE0_OFFSET_MAX_SEC)
+            # 🛡️ [콜아웃이 0단계보다 먼저 - (B)안] 예전엔 0단계와 똑같이 kill_t+random(0,
+            # STAGE0_OFFSET_MAX_SEC)에서 독립 추첨해서 둘 중 누가 먼저 들릴지가 매번
+            # 랜덤이었다. 콜아웃은 랜덤 오프셋 없이 kill_t에 정확히 고정하고, 0단계
+            # (_stage0_track_starts)는 그대로 kill_t+[0,150)ms에서 시작하므로 콜아웃이
+            # 항상 0단계보다 같거나 먼저 들린다. stage0_dur/plan_kill_sequence 등 이후
+            # 캐스케이드 타이밍 공식은 전혀 안 건드린다(콜아웃은 원래부터 거기 안 들어감).
+            call_start = ck["clip_t_sec"]
             schedule[f"multi_kill_call_{idx + 1}"] = {
                 "wav": call_file, "text": f"(multi_kill_length={tier})",
                 "start": call_start, "duration": call_duration,
             }
             print(f"[HIGHLIGHT][INFO] 멀티킬 콜아웃 배치: tier={tier} kill_clip_t={ck['clip_t_sec']:.3f}s "
                   f"call_start={call_start:.3f}s call_end={call_start + call_duration:.3f}s "
-                  f"leadin_end_kill_t={leadin_end_kill_t:.3f}s (guild={guild_id})", flush=True)
+                  f"(guild={guild_id})", flush=True)
+        # 🛡️ [멀티킬 지원 - 더블킬 외침 독립 스케줄링] 더 이상 닉네임 샤우팅에 이어붙이지
+        # 않고(위 "외침 분리" 주석 참고) 독립 트랙으로 뗀다. "끝점을 kill_t-LEAD_SEC에
+        # 고정하고 시작점을 파일 길이만큼 역산"하는 방식도 시도해봤는데, 외침 파일 길이가
+        # 0.93~1.95초로 리드인이 보장하는 조용한 구간(EOEO_GAP_SEC=0.3초)보다 훨씬 길어서
+        # 역산한 시작점이 오히려 leadin_battle_sub 등 리드인 멘트 "재생 도중"으로 파고드는
+        # 새 문제가 실측으로 발견됐다(예: leadin_battle_sub가 7.726s까지 재생 중인데
+        # 외침이 6.951s에 시작 - 외침의 어택/온셋 자체가 리드인 대사에 묻힘, 0단계 꼬리에
+        # 묻히는 것보다 더 나쁨). 그래서 단순히 "시작점"만 kill_t - LEAD_SEC(0.25초)로
+        # 고정한다 - LEAD_SEC(0.25)가 EOEO_GAP_SEC(0.3)보다 작으므로 리드인이 항상
+        # 끝나기로 약속된 지점(kill_t-0.3s) 이후에 시작해 리드인과는 절대 안 겹치고,
+        # 외침의 어택/온셋은 kill_t 전 조용한 구간에서 먼저 들린다. 꼬리가 길면 0단계
+        # 시작부와 살짝 겹칠 수 있지만(어택은 이미 조용한 구간에서 들린 뒤라) 예전처럼
+        # 0단계 한가운데 통째로 묻히던 것보다는 훨씬 낫다.
+        if is_double_kill_finish:
+            shout_pool = DOUBLE_KILL_SHOUT_POOL_EN if lang == "en" else DOUBLE_KILL_SHOUT_POOL_KO
+            if shout_pool:
+                shout_file = random.choice(shout_pool)
+                try:
+                    shout_duration = await self._to_executor(self._probe_audio_duration, shout_file)
+                    shout_start = max(0.0, kill_t - DOUBLE_KILL_SHOUT_LEAD_SEC)
+                    schedule["double_kill_shout"] = {
+                        "wav": shout_file, "text": "(double kill shout)",
+                        "start": shout_start, "duration": shout_duration,
+                    }
+                    print(f"[HIGHLIGHT][INFO] 더블킬 외침 배치: shout_start={shout_start:.3f}s "
+                          f"shout_end={shout_start + shout_duration:.3f}s kill_t={kill_t:.3f}s "
+                          f"(guild={guild_id})", flush=True)
+                except Exception as e:
+                    print(f"[HIGHLIGHT][WARN] 더블킬 외침 길이 조회 실패(guild={guild_id}) - 생략: "
+                          f"{type(e).__name__}: {e}", flush=True)
         # 🛡️ 스코어바/로스터 그리드는 FIRST BLOOD/SOLO KILL 여부와 무관하게 항상 표시 - hud
         # 키와 달리 조건 없이 매번 채운다.
         schedule["scoreboard"] = scoreboard
