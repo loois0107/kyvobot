@@ -707,6 +707,34 @@ MAIN_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "main_explode_*.wav
 # 오는 파일(a~f)만 정확히 잡도록 좁힌다.
 HYPE_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "hype_[a-z].wav")))
 SUB_EXPLODE_POOL = sorted(glob.glob(os.path.join(VOICE_DIR, "sub_shout_*.wav")))
+
+# 🛡️ [멀티킬 지원 - 콜아웃 풀] 중간 킬(트리플/쿼드라 단계 - 피니시가 아닌 킬)과 피니시
+# 자신(해당 multi_kill_length 단계)에 "트리플킬!!!"/"쿼드라킬~~~!!!"/"펜타킬~~!!"을
+# 닉네임 없이 짧게 외치는 정적 풀. 0단계(MAIN/HYPE/SUB_EXPLODE_POOL)와 같은 패턴(정적
+# 풀+kill_t 기준 작은 랜덤 오프셋)을 재사용하되 보이스는 최대 1명으로 시작(피드백에서
+# "1명이 베스트일 수 있다"고 했으므로 안전하게 적게 시작 - EN 닉네임 샤우팅이 3보이스
+# 동시 콜에서 "못 알아듣는다"는 피드백으로 1보이스로 축소됐던 전례와 같은 이유). KO/EN
+# 텍스트가 다르므로(사용자가 지정한 건 KO 세 문구) 언어별로 풀을 분리한다.
+TRIPLE_KILL_CALL_POOL_KO = sorted(glob.glob(os.path.join(VOICE_DIR, "triple_kill_call_ko_*.wav")))
+QUADRA_KILL_CALL_POOL_KO = sorted(glob.glob(os.path.join(VOICE_DIR, "quadra_kill_call_ko_*.wav")))
+PENTA_KILL_CALL_POOL_KO = sorted(glob.glob(os.path.join(VOICE_DIR, "penta_kill_call_ko_*.wav")))
+TRIPLE_KILL_CALL_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "triple_kill_call_en_*.wav")))
+QUADRA_KILL_CALL_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "quadra_kill_call_en_*.wav")))
+PENTA_KILL_CALL_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "penta_kill_call_en_*.wav")))
+MULTI_KILL_CALL_POOLS = {
+    ("ko", 3): TRIPLE_KILL_CALL_POOL_KO, ("ko", 4): QUADRA_KILL_CALL_POOL_KO, ("ko", 5): PENTA_KILL_CALL_POOL_KO,
+    ("en", 3): TRIPLE_KILL_CALL_POOL_EN, ("en", 4): QUADRA_KILL_CALL_POOL_EN, ("en", 5): PENTA_KILL_CALL_POOL_EN,
+}
+
+# 🛡️ [멀티킬 지원 - 더블킬 전용 "외침" 풀] 더블킬 피니시에서 "우왁!!"(외침, 이 정적 풀) +
+# "더블킬!!! {닉네임}~!!"(신남, 기존 닉네임 샤우팅 실시간 TTS 재사용)을 이어붙인다.
+# 문장 중간에 감정 태그를 섞어 한 줄로 가는 방식은 오늘 test_laughs_tag.py 실측에서
+# "길이만으로는 톤이 실제로 바뀌는지 판단 불가"로 결론이 안 났고, 이 프로젝트의 다른
+# 모든 톤 전환(웃음/전투 리액션 등)도 전부 "미리 녹음한 정적 클립을 이어붙이는" 방식을
+# 쓰고 있어 그 관례를 따른다.
+DOUBLE_KILL_SHOUT_POOL_KO = sorted(glob.glob(os.path.join(VOICE_DIR, "double_kill_shout_ko_*.wav")))
+DOUBLE_KILL_SHOUT_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "double_kill_shout_en_*.wav")))
+DOUBLE_KILL_SHOUT_GAP_SEC = 0.05  # 외침->신남 전환이 한 호흡처럼 느껴지도록 거의 붙여서 이음
 # 🛡️ [발성 강도 재녹음 - "국어책 읽는 느낌" 피드백] 게인만 올렸을 뿐(VOICE_MIX_GAIN_DB_OVERRIDE)
 # 발성 자체의 텐션은 그대로였다는 피드백으로, 텍스트(모음 반복 구조)는 그대로 두고 태그/
 # voice_settings만 바꿔 재녹음했다. 1차로 [SCREAMING][terrified excitement]+stability=0.0+
@@ -1052,6 +1080,11 @@ def pick_urgent_preoverlap_starts(anchor: float,
 # 결합해서 "길게 끄는 느낌"을 오디오 후처리로 흉내낸다(_apply_nickname_swell). 0단계가 이미
 # "우와아아아악!!" 감탄사를 셋이 같이 외치므로, 여기선 닉네임만 - 감탄사 중복 없음.
 HYPE_NICKNAME_SHOUT_TEMPLATE = "{killer}~~!!"
+# 🛡️ [멀티킬 지원 - 더블킬 전용] 더블킬 피니시에서만 쓰는 닉네임 샤우팅 템플릿. 기존
+# HYPE_NICKNAME_SHOUT_TEMPLATE 메커니즘(실시간 TTS, 3보이스 동시 콜)을 그대로 재사용하되
+# 텍스트만 "더블킬!!!"을 앞에 붙여 바꾼다 - 새 TTS 경로를 만들지 않는다.
+HYPE_NICKNAME_SHOUT_DOUBLE_KILL_TEMPLATE_KO = "더블킬!!! {killer}~~!!"
+HYPE_NICKNAME_SHOUT_DOUBLE_KILL_TEMPLATE_EN = "Double kill!! {killer}~~!!"
 # 🛡️ [하이픈 늘려 부르기 - "장이이인정시이인!!"과는 다른 방식] 위 주석의 음절 내부 반복
 # 방식(오발음 확인돼 폐기)과 달리, 이건 음절 "사이"에만 하이픈을 끼운다("페이커" ->
 # "페-이-커") - 오늘 재현 실험(하이픈 1개/2개 × main/lck_caster_dynamic × 각 5회, 총
@@ -2144,12 +2177,13 @@ def _game_ms_to_clip_t(game_ms: float, mapping: tuple[float, float]) -> float:
     return (game_ms - intercept) / slope
 
 
-# 🛡️ [비용 예측 가능성] 0~3단계 킬 리액션 시퀀스(위 plan_kill_sequence)+실시간 TTS 2회는 킬
-# 1건당 비용이 고정이라, 렌더당 비용을 예측 가능하게 만들려면 클립당 킬 개수 자체를 상한 걸어야 한다.
-# 지금은 가장 단순하고 안전한 값인 1로 제한 - 클립에 킬이 여러 개(팀파이트/에이스)여도
-# 시간상 가장 먼저 오는 킬 하나만 다룬다. 나머지가 조용히 버려지는 트레이드오프는 알려진
-# 한계로 남겨둠(추후 필요하면 유저에게 "N개 중 1개만 다뤘습니다" 안내를 붙이는 걸 고려).
-MAX_KILLS_PER_CLIP = 1
+# 🛡️ [멀티킬 지원 - 1 -> 5] 예전엔 "렌더당 비용을 예측 가능하게" 하려고 클립당 킬 1건으로
+# 막아뒀었다(팀파이트에서 가장 먼저 오는 킬 하나만 다루고 나머지는 버림). 실측(실제
+# 펜타킬 매치)으로 확인한 결과 한 스트릭 안의 킬 간격이 3~9초 수준이라 45초 클립 길이
+# 제한 안에 5킬이 전부 들어가고, 타이밍 엔진도 "피니시 킬 하나" 기준으로 재설계했으므로
+# (kills_with_names[-1] = 피니시, 콜아웃은 중간 킬에만 가볍게 붙임) 더 이상 1로 제한할
+# 이유가 없다. 펜타킬이 Riot 쪽에서 의미를 갖는 최댓값이라 5로 상한을 둔다.
+MAX_KILLS_PER_CLIP = 5
 
 
 def _select_kills_in_clip(kills: list[dict], mapping: tuple[float, float],
@@ -2166,15 +2200,31 @@ def _select_kills_in_clip(kills: list[dict], mapping: tuple[float, float],
 
 
 def _extract_champion_kills(timeline: dict) -> list[dict]:
+    # 🛡️ [멀티킬 단계 판별] CHAMPION_SPECIAL_KILL(killType=KILL_MULTI)은 "그 킬이 스트릭의
+    # 몇 번째인가"를 multiKillLength로 알려주는데, 실측 확인 결과 같은 killerId+timestamp의
+    # CHAMPION_KILL과 정확히 동시에 찍힌다(같은 ms) - 그래서 (killerId, timestamp) 키로
+    # 조인한다. 스트릭의 첫 번째 킬(더블로 이어지기 전의 평범한 1킬)은 이 이벤트 자체가
+    # 없으므로 조인에 안 걸리고, 기본값 1(평범한 단일 킬)로 남는다.
+    special_by_key: dict[tuple[int | None, int], int] = {}
+    for frame in timeline["info"]["frames"]:
+        for ev in frame["events"]:
+            if ev.get("type") == "CHAMPION_SPECIAL_KILL" and ev.get("killType") == "KILL_MULTI":
+                special_by_key[(ev.get("killerId"), ev["timestamp"])] = ev.get("multiKillLength", 1)
+
     kills = []
     for frame in timeline["info"]["frames"]:
         for ev in frame["events"]:
             if ev.get("type") == "CHAMPION_KILL":
+                killer_id = ev.get("killerId")
+                timestamp_ms = ev["timestamp"]
+                multi_kill_length = special_by_key.get((killer_id, timestamp_ms), 1)
                 kills.append({
-                    "timestamp_ms": ev["timestamp"],
-                    "killer_id": ev.get("killerId"),
+                    "timestamp_ms": timestamp_ms,
+                    "killer_id": killer_id,
                     "victim_id": ev.get("victimId"),
                     "assist_ids": ev.get("assistingParticipantIds", []),
+                    "kill_type": "KILL_MULTI" if multi_kill_length >= 2 else None,
+                    "multi_kill_length": multi_kill_length,
                 })
     kills.sort(key=lambda k: k["timestamp_ms"])
     return kills
@@ -3232,7 +3282,11 @@ class KyvoHighlight(KyvoBaseCog):
                     "battle_main", "battle_lck_caster_dynamic", "battle_sub",
                     "hype_nickname_1", "hype_nickname_2", "hype_nickname_3", "sub_question", "main_fact",
                     "sterling", "carter", "atlee",
-                    "en_narration", "en_reaction_carter", "en_reaction_atlee"):
+                    "en_narration", "en_reaction_carter", "en_reaction_atlee",
+                    # 🛡️ [멀티킬 지원] 콜아웃은 피니시가 쿼드라/펜타일 때만 최대 3개(중간
+                    # 킬 최대 2개 + 피니시 자신 1개) - 1킬/더블/트리플 클립엔 애초에
+                    # schedule에 안 생겨서 None으로 조용히 스킵된다(회귀 없음).
+                    "multi_kill_call_1", "multi_kill_call_2", "multi_kill_call_3"):
             entry = schedule.get(key)
             if entry is None:
                 continue
@@ -5447,6 +5501,8 @@ class KyvoHighlight(KyvoBaseCog):
                 "assist_displays": assist_displays,
                 "killer_team_id": killer_team_id,
                 "clip_t_sec": k["clip_t_sec"],
+                "kill_type": k.get("kill_type"),
+                "multi_kill_length": k.get("multi_kill_length", 1),
             })
 
         # 🛡️ [오버레이 이벤트 판별 - FIRST BLOOD / SOLO KILL] Riot API 추가 호출 없이 이미
@@ -5454,8 +5510,12 @@ class KyvoHighlight(KyvoBaseCog):
         # _extract_champion_kills에서 timestamp_ms로 이미 정렬돼 있으므로 kills[0]과 동일
         # 시각인지 비교하면 된다). SOLO KILL = 어시스트 0명. 둘 다 해당하면(매치 첫 킬에
         # 어시스트가 없는 경우) FIRST BLOOD를 우선 표시한다. 어느 쪽도 아니면(추격전 킬 등)
-        # HUD 자체를 안 띄운다 - PENTA KILL 등 나머지 이벤트는 다중 킬 백엔드가 나올 때까지
-        # 보류(MAX_KILLS_PER_CLIP=1이라 판별 대상도 항상 이 킬 1건뿐).
+        # HUD 자체를 안 띄운다.
+        # 🛡️ [멀티킬 지원 - 피니시와 분리 유지] FIRST BLOOD/SOLO KILL은 의도적으로 "클립의
+        # 첫 킬"(selected[0]) 기준 그대로 둔다 - 피니시 킬(selected[-1])과는 별개 개념이라,
+        # 더블킬 클립에서 1킬째가 퍼스트블러드면 그 사실은 그대로 유지돼야 한다(피니시가
+        # 더블킬이라고 퍼스트블러드 판정이 사라지면 안 됨). PENTA KILL 등 멀티킬 자체의
+        # HUD 배지는 이번 범위 밖(hud_event 시스템 확장은 별도 작업).
         is_first_blood = selected[0]["timestamp_ms"] == kills[0]["timestamp_ms"]
         is_solo_kill = not selected[0]["assist_ids"]
         hud_event = "FIRST BLOOD" if is_first_blood else ("SOLO KILL" if is_solo_kill else None)
@@ -5469,7 +5529,10 @@ class KyvoHighlight(KyvoBaseCog):
         # 킬 시점(game_time_ms) 기준 값을 다시 계산한다. 이 스코어보드는 FIRST BLOOD/
         # SOLO KILL 여부(hud_event)와 무관하게 모든 클립에 항상 표시되는 상시 UI라서
         # hud_event가 None이어도 채운다.
-        game_time_ms = selected[0]["timestamp_ms"]
+        # 🛡️ [멀티킬 지원 - 피니시 킬 기준으로 변경] 화면에 보여주는 스코어보드는 "이 클립이
+        # 다루는 하이라이트 순간"의 상태를 반영해야 하는데, 그 순간은 이제 피니시 킬
+        # (selected[-1])이다(1킬 클립이면 selected[-1]==selected[0]이라 회귀 없음).
+        game_time_ms = selected[-1]["timestamp_ms"]
         scoreboard = _compute_scoreboard_at_time(timeline, chosen["info"]["participants"], game_time_ms)
         scoreboard["game_time_ms"] = game_time_ms
 
@@ -5622,10 +5685,25 @@ class KyvoHighlight(KyvoBaseCog):
         scoreboard["team100_dragon_icon_paths"] = _dragon_icon_paths(team100_dragon_subtypes)
         scoreboard["team200_dragon_icon_paths"] = _dragon_icon_paths(team200_dragon_subtypes)
 
+        # 🛡️ [멀티킬 지원 - 메인 해설은 피니시 킬 하나만] _generate_commentary는 받은
+        # kills_with_names 전체를 "전부 다뤄야 할 사실 목록"으로 GPT에 넘기는 범용
+        # 함수라(원래도 N건 지원하도록 짜여 있었음), 멀티킬 리스트를 그대로 넘기면
+        # 중간 킬들까지 전부 해설 문장이 생겨버린다 - 설계상 중간 킬은 해설이 아니라
+        # 짧은 콜아웃(아래 참고)만 받아야 하므로, 여기서는 피니시 킬 하나만 담은
+        # 리스트를 넘겨 기존 1킬 동작과 완전히 동일하게 유지한다(회귀 없음).
+        finish_kill = kills_with_names[-1]
+        finish_multi_kill_length = finish_kill.get("multi_kill_length", 1)
+        # 🛡️ [콜아웃 대상 킬 - 트리플 이상부터] multi_kill_length>=3인 킬부터 "트리플킬!!!"
+        # 류 콜아웃이 붙는다(더블=2는 콜아웃 없이 피니시 복합 대사로 따로 처리). 피니시
+        # 자신은 제외(kills_with_names[:-1])하므로 더블/트리플 피니시는 자동으로 빈
+        # 리스트가 된다(트리플 피니시의 앞선 1·2킬은 multi_kill_length가 1·2라 조건에
+        # 안 걸림) - 쿼드라/펜타 피니시일 때만 1~2개가 채워진다.
+        callout_kills = [k for k in kills_with_names[:-1] if k.get("multi_kill_length", 1) >= 3]
+
         await progress_msg.edit(content=await get_msg("highlight_progress_scripting"))
         try:
             lines_raw = await self._generate_commentary(
-                kills_with_names, lang, roster_pairs=roster_pairs,
+                [finish_kill], lang, roster_pairs=roster_pairs,
                 laning_gold_gaps=laning_gold_gaps, scoreboard=scoreboard,
             )
         except Exception as e:
@@ -5633,17 +5711,30 @@ class KyvoHighlight(KyvoBaseCog):
             await progress_msg.edit(content=await get_msg("highlight_err_ai_failed"))
             return
 
-        # MAX_KILLS_PER_CLIP=1이라 kills_with_names/lines_raw는 항상 정확히 1건.
-        kill_t = kills_with_names[0]["clip_t_sec"]
-        killer_name = kills_with_names[0]["killer"]
-        victim_name = kills_with_names[0]["victim"]
+        # 🛡️ [멀티킬 지원 - 피니시 킬 기준] 풀 캐스케이드(닉네임 샤우팅/서브질문/메인해설/
+        # HUD/kill_t 역산 전부)는 항상 피니시 킬(finish_kill = kills_with_names[-1]) 하나를
+        # 다룬다 - 1킬 클립이면 finish_kill is kills_with_names[0]이라 완전히 기존과
+        # 동일(회귀 없음). lines_raw도 위에서 [finish_kill] 하나만 넘겨 생성했으므로
+        # lines_raw[0]이 곧 피니시 킬의 해설이다.
+        kill_t = finish_kill["clip_t_sec"]
+        # 🛡️ [멀티킬 지원 - 리드인 끝점 앵커 분리, B안] 리드인 내레이션(EN 연속 내레이션/
+        # KO urgent+다중 리액션 체인)이 "클립 시작 ~ kill_t 직전"을 자기 혼자 채운다는
+        # 전제로 설계돼 있어서, 쿼드라/펜타 피니시에서 중간 콜아웃 킬(callout_kills)의
+        # 타임스탬프를 그대로 두면 내레이션이 그 위를 덮어버린다. 콜아웃이 있으면
+        # "첫 콜아웃 킬 직전까지만" 리드인이 채우고 그 뒤(콜아웃들 사이)는 비워서 콜아웃
+        # 스팅어만 들리게 한다(B안 - 끊고 재생성하는 A안보다 호출 비용/실패 위험이 없어
+        # 더 안전하다고 판단한 설계). 더블/트리플 피니시는 callout_kills가 항상 비어 있어
+        # kill_t 그대로라 기존 동작과 완전히 동일(회귀 없음).
+        leadin_end_kill_t = callout_kills[0]["clip_t_sec"] if callout_kills else kill_t
+        killer_name = finish_kill["killer"]
+        victim_name = finish_kill["victim"]
         # 🛡️ [EN 비영문 닉네임 미발화 - 검증/폴백도 표시용 이름 기준] EN은 GPT에게 애초에
         # killer_display/victim_display(비ASCII면 역할/대명사로 치환됨)만 넘겼으므로, "킬러
         # 이름이 문장에 들어있는지" 검증도 원문이 아니라 표시용 이름 기준이어야 한다 - 원문
         # 기준으로 검증하면 의도적으로 안 부른 비ASCII 이름이 "빠졌다"고 오판되어 폴백이
         # 발동하고, 그 폴백이 원문을 다시 끼워넣어버리는 역효과가 난다(아래 폴백도 동일).
-        killer_display = kills_with_names[0].get("killer_display", killer_name)
-        victim_display = kills_with_names[0].get("victim_display", victim_name)
+        killer_display = finish_kill.get("killer_display", killer_name)
+        victim_display = finish_kill.get("victim_display", victim_name)
         main_fact_text = lines_raw[0]["text"]
 
         # 🛡️ [킬러 이름 검증 - 3단계 Main 담당] GPT는 온도 0.8로 자유 생성돼서 "킬러 이름을
@@ -5671,7 +5762,7 @@ class KyvoHighlight(KyvoBaseCog):
             retry_text = None
             try:
                 retry_lines = await self._generate_commentary(
-                    kills_with_names, lang, roster_pairs=roster_pairs,
+                    [finish_kill], lang, roster_pairs=roster_pairs,
                     laning_gold_gaps=laning_gold_gaps, scoreboard=scoreboard,
                 )
                 retry_text = retry_lines[0]["text"]
@@ -5698,8 +5789,8 @@ class KyvoHighlight(KyvoBaseCog):
         # 샤우팅 텍스트를 채운다 - 협공을 "누구 하나가 잡았다"처럼 들리게 하지 않기 위함.
         # killer_team_id가 없는 경우(미니언/포탑 킬 등 killer_id=0)는 팀 매핑이 불가능하니
         # 안전하게 기존 동작(킬러 이름 그대로)으로 폴백한다.
-        killer_team_id = kills_with_names[0].get("killer_team_id")
-        has_assists = bool(kills_with_names[0]["assists"])
+        killer_team_id = finish_kill.get("killer_team_id")
+        has_assists = bool(finish_kill["assists"])
         # 🛡️ [EN 비영문 닉네임 미발화 - 닉네임 샤우팅도 동일 원칙] killer_display는
         # kills_with_names 생성 시 이미 계산된 표시용 이름(비ASCII면 역할/대명사로 치환,
         # _en_display_name 참고) - 어시스트가 없어 개인 닉네임을 그대로 외치려던 자리에서도
@@ -5715,7 +5806,7 @@ class KyvoHighlight(KyvoBaseCog):
             shout_name = TEAM_ID_TO_NAME_EN[killer_team_id]
             is_team_shout = True
         elif non_ascii_en_killer:
-            shout_name = kills_with_names[0].get("killer_display", killer_name)
+            shout_name = finish_kill.get("killer_display", killer_name)
             is_team_shout = False
         else:
             shout_name = killer_name
@@ -5725,8 +5816,11 @@ class KyvoHighlight(KyvoBaseCog):
         # 문제 발견돼 제외) + KO(EN은 한글 음절 분리 구조 자체가 의미 없어 대상 아님) +
         # _is_pure_hangul(영문 닉네임 "Nyx" 등을 "N-y-x"처럼 글자 단위로 쪼개는 무의미한
         # 표기가 되는 걸 막음, 실측 중 발견된 버그)일 때만 적용.
+        # 🛡️ [멀티킬 지원] 더블킬 피니시면 "더블킬!!!" 복합 대사 템플릿이 우선이다 - 하이픈
+        # 늘려 부르기가 뒤에서 main/lck_caster_dynamic 텍스트를 덮어쓰면 더블킬 문구가
+        # 사라지므로 여기서 조건에 추가해 막는다.
         use_hyphen_stretch = (
-            lang != "en" and not is_team_shout
+            lang != "en" and not is_team_shout and finish_multi_kill_length != 2
             and NICKNAME_STRETCH_MIN_LEN <= len(killer_name) <= NICKNAME_HYPHEN_STRETCH_MAX_LEN
             and _is_pure_hangul(killer_name)
         )
@@ -5737,7 +5831,16 @@ class KyvoHighlight(KyvoBaseCog):
         # 둘만 늘림+리액션 텍스트를 받고, sub는 일반 템플릿(볼륨 스웰)을 그대로 받도록
         # 보이스별 텍스트 매핑으로 바꿨다 - 팀명 샤우팅(EN 포함)은 전부 use_hyphen_stretch
         # 가 False라 항상 일반 템플릿만 받는다(회귀 없음).
-        plain_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
+        # 🛡️ [멀티킬 지원 - 더블킬 전용 복합 대사] 피니시가 더블킬이면 닉네임 샤우팅
+        # 텍스트에 "더블킬!!!"을 미리 붙인다 - 아래에서 TTS 합성된 wav 중 하나에
+        # "우왁!!" 외침을 _concat_wav_chain으로 추가로 이어붙인다(exclaim -> hype).
+        is_double_kill_finish = finish_multi_kill_length == 2
+        if is_double_kill_finish:
+            double_kill_template = (HYPE_NICKNAME_SHOUT_DOUBLE_KILL_TEMPLATE_EN if lang == "en"
+                                     else HYPE_NICKNAME_SHOUT_DOUBLE_KILL_TEMPLATE_KO)
+            plain_nickname_text = double_kill_template.format(killer=shout_name)
+        else:
+            plain_nickname_text = HYPE_NICKNAME_SHOUT_TEMPLATE.format(killer=shout_name)
         hype_nickname_text_by_voice = {
             vk: plain_nickname_text
             for vk in ("main", "lck_caster_dynamic", "sub", "sterling", "carter", "atlee")
@@ -5888,6 +5991,26 @@ class KyvoHighlight(KyvoBaseCog):
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
+            # 🛡️ [멀티킬 지원 - 더블킬 "외침 -> 신남"] 스웰/타임스트레치 후처리가 끝난
+            # 최종 wav에 이어붙인다(그 전에 붙이면 스웰 시작 비율이 "닉네임만"의 길이
+            # 기준으로 계산돼 있어 엉뚱한 지점이 부풀 위험) - 이 보이스 하나만 총 길이가
+            # 늘어날 뿐, stage1 전환 타이밍(위 seq/hype_nickname_start)은 이미 확정된
+            # 뒤라 다른 보이스나 2/3단계 시작 시점에 영향이 없다.
+            if is_double_kill_finish and hype_nickname_wavs:
+                shout_pool = DOUBLE_KILL_SHOUT_POOL_EN if lang == "en" else DOUBLE_KILL_SHOUT_POOL_KO
+                if shout_pool:
+                    shout_file = random.choice(shout_pool)
+                    combined_path = os.path.join(work_dir, "hype_nickname_1_double_kill.wav")
+                    try:
+                        await self._to_executor(
+                            _concat_wav_chain, [shout_file, hype_nickname_wavs[0]],
+                            DOUBLE_KILL_SHOUT_GAP_SEC, combined_path)
+                        hype_nickname_wavs[0] = combined_path
+                        hype_nickname_durations[0] = await self._to_executor(
+                            self._probe_audio_duration, combined_path)
+                    except Exception as e:
+                        print(f"[HIGHLIGHT][WARN] 더블킬 외침 이어붙이기 실패(guild={guild_id}) - "
+                              f"외침 없이 진행: {type(e).__name__}: {e}", flush=True)
             for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
                 schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
                                                        "start": hype_nickname_start, "duration": dur}
@@ -5915,7 +6038,9 @@ class KyvoHighlight(KyvoBaseCog):
             # 길이로 역산한다 - 사전에 길이를 못박지 않고도 "항상 kill_t 근처에서 끝난다"를
             # 보장하는 이 코드베이스의 기존 철학 그대로.
             leadin_end_times = []
-            en_narration_end = kill_t - EN_LEADIN_END_GAP_SEC
+            # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t(콜아웃 없으면 kill_t와
+            # 동일) 사용 - 위 leadin_end_kill_t 선언부 주석 참고.
+            en_narration_end = leadin_end_kill_t - EN_LEADIN_END_GAP_SEC
             en_narration_available = en_narration_end - EN_LEADIN_START_OFFSET_SEC
             if en_narration_available >= EN_NARRATION_MIN_AVAILABLE_SEC:
                 narration_text = await self._generate_leadin_narration(en_narration_available)
@@ -6006,7 +6131,8 @@ class KyvoHighlight(KyvoBaseCog):
             sub_question_file = random.choice(SUB_QUESTION_POOL)
 
             try:
-                pre_buildup_available = plan_lead_in_forward_eoeo(kill_t)
+                # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t 사용 - 위 선언부 주석 참고.
+                pre_buildup_available = plan_lead_in_forward_eoeo(leadin_end_kill_t)
                 pre_buildup_pool_durations = [
                     await self._to_executor(self._probe_audio_duration, f) for f in PRE_BUILDUP_POOL
                 ]
@@ -6129,6 +6255,27 @@ class KyvoHighlight(KyvoBaseCog):
             hype_nickname_start = kill_t + seq["t1"]
             sub_question_start = kill_t + seq["t2"]
             main_fact_start = kill_t + seq["t3"]
+            # 🛡️ [멀티킬 지원 - 더블킬 "외침 -> 신남"] 스웰/타임스트레치 후처리가 끝난
+            # 최종 wav에 이어붙인다(그 전에 붙이면 스웰 시작 비율이 "닉네임만"의 길이
+            # 기준으로 계산돼 있어 엉뚱한 지점이 부풀 위험) - 이 보이스 하나만 총 길이가
+            # 늘어날 뿐, stage1 전환 타이밍(위 seq/hype_nickname_start)은 이미 확정된
+            # 뒤라 다른 보이스나 2/3단계 시작 시점에 영향이 없다. end_times/total_duration
+            # 계산(아래)보다 먼저 해야 늘어난 길이가 안 잘린다.
+            if is_double_kill_finish and hype_nickname_wavs:
+                shout_pool = DOUBLE_KILL_SHOUT_POOL_EN if lang == "en" else DOUBLE_KILL_SHOUT_POOL_KO
+                if shout_pool:
+                    shout_file = random.choice(shout_pool)
+                    combined_path = os.path.join(work_dir, "hype_nickname_1_double_kill.wav")
+                    try:
+                        await self._to_executor(
+                            _concat_wav_chain, [shout_file, hype_nickname_wavs[0]],
+                            DOUBLE_KILL_SHOUT_GAP_SEC, combined_path)
+                        hype_nickname_wavs[0] = combined_path
+                        hype_nickname_durations[0] = await self._to_executor(
+                            self._probe_audio_duration, combined_path)
+                    except Exception as e:
+                        print(f"[HIGHLIGHT][WARN] 더블킬 외침 이어붙이기 실패(guild={guild_id}) - "
+                              f"외침 없이 진행: {type(e).__name__}: {e}", flush=True)
 
             # 킬 이전 리드인: 클립 시작(t=0) 기준으로 상황 멘트(1~PRE_BUILDUP_MAX_COUNT개,
             # 자리가 허락하는 만큼)를 배치한다. available 계산은 위에서
@@ -6206,7 +6353,8 @@ class KyvoHighlight(KyvoBaseCog):
                         os.path.basename(p): await self._to_executor(self._probe_audio_duration, p)
                         for p in BATTLE_SUB_POOL
                     }
-                    reaction_end_limit = kill_t - EOEO_GAP_SEC
+                    # 🛡️ [멀티킬 지원] kill_t(피니시) 대신 leadin_end_kill_t 사용 - 위 선언부 주석 참고.
+                    reaction_end_limit = leadin_end_kill_t - EOEO_GAP_SEC
 
                     # 🛡️ [끼어드는 쪽은 짧은 추임새로 체인을 시작] preoverlap_voice만 첫
                     # 항목을 짧은 끼어들기 추임새(f~i)로 강제하고, 그 뒤 남는 시간은 기존
@@ -6320,6 +6468,38 @@ class KyvoHighlight(KyvoBaseCog):
         if hud_event is not None:
             schedule["hud"] = {"event_label": hud_event, "start": kill_t,
                                 "end": main_fact_start + main_fact_duration}
+        # 🛡️ [멀티킬 지원 - 콜아웃 스케줄링] 중간 킬(callout_kills, 피니시 제외 multi_kill_
+        # length>=3) + 피니시 자신(해당 단계면)에 "트리플킬!!!" 류 짧은 콜을 각자의
+        # clip_t_sec 시점에 배치한다. 0단계(_stage0_track_starts)와 같은 "정적 풀+작은
+        # 랜덤 오프셋" 패턴을 재사용하되, stage0/1/2/3 전환 타이밍(plan_kill_sequence)에는
+        # 끼워 넣지 않고 독립 트랙으로 추가한다(기존에 정교하게 맞춰둔 전환 공식을 안
+        # 건드리기 위함) - 콜아웃은 전부 kill_t(피니시) 이전에 끝나므로 이미 계산된
+        # total_duration(항상 kill_t 이후 이벤트들로 결정됨)에 영향이 없다.
+        callout_targets = list(callout_kills)
+        if finish_multi_kill_length >= 3:
+            callout_targets.append(finish_kill)
+        for idx, ck in enumerate(callout_targets):
+            tier = ck.get("multi_kill_length", 1)
+            pool = MULTI_KILL_CALL_POOLS.get((lang, tier))
+            if not pool:
+                print(f"[HIGHLIGHT][WARN] 멀티킬 콜아웃 풀 없음(lang={lang}, tier={tier}, "
+                      f"guild={guild_id}) - 이 콜아웃은 생략", flush=True)
+                continue
+            call_file = random.choice(pool)
+            try:
+                call_duration = await self._to_executor(self._probe_audio_duration, call_file)
+            except Exception as e:
+                print(f"[HIGHLIGHT][WARN] 멀티킬 콜아웃 길이 조회 실패(guild={guild_id}) - 스킵: "
+                      f"{type(e).__name__}: {e}", flush=True)
+                continue
+            call_start = ck["clip_t_sec"] + random.uniform(0, STAGE0_OFFSET_MAX_SEC)
+            schedule[f"multi_kill_call_{idx + 1}"] = {
+                "wav": call_file, "text": f"(multi_kill_length={tier})",
+                "start": call_start, "duration": call_duration,
+            }
+            print(f"[HIGHLIGHT][INFO] 멀티킬 콜아웃 배치: tier={tier} kill_clip_t={ck['clip_t_sec']:.3f}s "
+                  f"call_start={call_start:.3f}s call_end={call_start + call_duration:.3f}s "
+                  f"leadin_end_kill_t={leadin_end_kill_t:.3f}s (guild={guild_id})", flush=True)
         # 🛡️ 스코어바/로스터 그리드는 FIRST BLOOD/SOLO KILL 여부와 무관하게 항상 표시 - hud
         # 키와 달리 조건 없이 매번 채운다.
         schedule["scoreboard"] = scoreboard
