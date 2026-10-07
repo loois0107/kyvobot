@@ -773,6 +773,15 @@ DOUBLE_KILL_SHOUT_POOL_EN = sorted(glob.glob(os.path.join(VOICE_DIR, "double_kil
 # 그보다 살짝 짧게 잡아서(0.25초) 리드인이 이미 끝내둔 조용한 구간 "안쪽"에 확실히
 # 들어가게 한다(리드인 꼬리 끝=kill_t-0.3s와 거슬리지 않도록 작은 여유).
 DOUBLE_KILL_SHOUT_LEAD_SEC = 0.25
+# 🛡️ [멀티킬 콜아웃 겹침 방지 - 순서 보장(c안) + 스킵 세이프가드(b안)] 트리플 이상에서
+# 콜아웃끼리(3->4/4->5 전환) 겹칠 위험 조사 결과, 실측 간격(2.9~9.9초)에선 전부 안전했지만
+# 더블킬 1->2 전환에서 0.033초짜리 극단치가 실제로 나온 적이 있어("거의 동시" 멀티킬이
+# 드물지 않음) 콜아웃 쪽도 구조적 안전장치가 필요하다고 판단했다. call_start를
+# max(자기 킬 시각, 이전 콜아웃 종료 시각)으로 계산해(아래 스케줄링 루프) 겹침을 수학적으로
+# 없애되, 짧은 간격이 연속되면 지연이 누적될 수 있어 - 밀린 정도가 이 임계치를 넘으면
+# 그 콜아웃은 아예 스킵한다(완전히 잘리거나 재생 중간에 뭉개지는 것보단 조용히 빠지는
+# 쪽을 선택 - 리드인 필러 시스템의 "자리 없으면 억지로 안 겹치게 한다" 원칙과 동일).
+MULTI_KILL_CALLOUT_MAX_DELAY_SEC = 1.5
 # 🛡️ [발성 강도 재녹음 - "국어책 읽는 느낌" 피드백] 게인만 올렸을 뿐(VOICE_MIX_GAIN_DB_OVERRIDE)
 # 발성 자체의 텐션은 그대로였다는 피드백으로, 텍스트(모음 반복 구조)는 그대로 두고 태그/
 # voice_settings만 바꿔 재녹음했다. 1차로 [SCREAMING][terrified excitement]+stability=0.0+
@@ -6558,7 +6567,11 @@ class KyvoHighlight(KyvoBaseCog):
         callout_targets = list(callout_kills)
         if finish_multi_kill_length >= 3:
             callout_targets.append(finish_kill)
-        for idx, ck in enumerate(callout_targets):
+        prev_call_end = None  # 🛡️ 직전에 실제로 스케줄된(스킵되지 않은) 콜아웃의 종료 시각
+        scheduled_idx = 0  # 🛡️ 스킵된 콜아웃은 번호를 건너뛰지 않고 재사용 - schedule 키가
+        # multi_kill_call_1/2/3처럼 고정 3슬롯(_render_video의 inputs 구성부 참고)이라
+        # idx 그대로 쓰면 중간에 스킵이 생겼을 때 뒤 콜아웃이 빈 슬롯 없이 밀려 들어간다.
+        for ck in callout_targets:
             tier = ck.get("multi_kill_length", 1)
             pool = MULTI_KILL_CALL_POOLS.get((lang, tier))
             if not pool:
@@ -6578,14 +6591,32 @@ class KyvoHighlight(KyvoBaseCog):
             # (_stage0_track_starts)는 그대로 kill_t+[0,150)ms에서 시작하므로 콜아웃이
             # 항상 0단계보다 같거나 먼저 들린다. stage0_dur/plan_kill_sequence 등 이후
             # 캐스케이드 타이밍 공식은 전혀 안 건드린다(콜아웃은 원래부터 거기 안 들어감).
-            call_start = ck["clip_t_sec"]
-            schedule[f"multi_kill_call_{idx + 1}"] = {
+            # 🛡️ [겹침 방지 - 순서 보장(c안)] 자기 킬 시각과 "이전 콜아웃이 끝나는 시각" 중
+            # 늦은 쪽에서 시작한다 - 이전 콜아웃이 아직 재생 중이면 그게 끝난 뒤로 밀려서,
+            # 수학적으로 겹침 자체가 생길 수 없다(원래부터 각자 독립 추첨해 0단계보다 먼저
+            # 들리게만 보장했던 위 (B)안과는 별개 축).
+            natural_start = ck["clip_t_sec"]
+            call_start = max(natural_start, prev_call_end) if prev_call_end is not None else natural_start
+            delay = call_start - natural_start
+            # 🛡️ [스킵 세이프가드(b안 보조)] 짧은 간격이 연속되면 지연이 누적될 수 있다 -
+            # 밀린 정도가 MULTI_KILL_CALLOUT_MAX_DELAY_SEC를 넘으면, 재생 중간에 다음 콜아웃과
+            # 뭉개지거나 킬 시점과 너무 멀어진 어색한 콜아웃을 트는 대신 이 콜아웃 하나를
+            # 통째로 생략한다. 스킵된 콜아웃은 prev_call_end를 갱신하지 않는다(다음 콜아웃은
+            # 마지막으로 "실제로 재생된" 콜아웃 기준으로 순서를 보장해야 하므로).
+            if delay > MULTI_KILL_CALLOUT_MAX_DELAY_SEC:
+                print(f"[HIGHLIGHT][WARN] 멀티킬 콜아웃 스킵(지연 과다): tier={tier} "
+                      f"kill_clip_t={natural_start:.3f}s 누적지연={delay:.3f}s > "
+                      f"{MULTI_KILL_CALLOUT_MAX_DELAY_SEC}s (guild={guild_id})", flush=True)
+                continue
+            scheduled_idx += 1
+            schedule[f"multi_kill_call_{scheduled_idx}"] = {
                 "wav": call_file, "text": f"(multi_kill_length={tier})",
                 "start": call_start, "duration": call_duration,
             }
-            print(f"[HIGHLIGHT][INFO] 멀티킬 콜아웃 배치: tier={tier} kill_clip_t={ck['clip_t_sec']:.3f}s "
+            prev_call_end = call_start + call_duration
+            print(f"[HIGHLIGHT][INFO] 멀티킬 콜아웃 배치: tier={tier} kill_clip_t={natural_start:.3f}s "
                   f"call_start={call_start:.3f}s call_end={call_start + call_duration:.3f}s "
-                  f"(guild={guild_id})", flush=True)
+                  f"지연={delay:.3f}s (guild={guild_id})", flush=True)
         # 🛡️ [멀티킬 지원 - 더블킬 외침 독립 스케줄링] 더 이상 닉네임 샤우팅에 이어붙이지
         # 않고(위 "외침 분리" 주석 참고) 독립 트랙으로 뗀다. "끝점을 kill_t-LEAD_SEC에
         # 고정하고 시작점을 파일 길이만큼 역산"하는 방식도 시도해봤는데, 외침 파일 길이가
