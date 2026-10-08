@@ -778,6 +778,46 @@ MULTI_KILL_CALL_POOLS = {
     ("en", 3): TRIPLE_KILL_CALL_POOL_EN, ("en", 4): QUADRA_KILL_CALL_POOL_EN, ("en", 5): PENTA_KILL_CALL_POOL_EN,
 }
 
+# 🛡️ [멀티킬 지원 - 킬#1 흥분 리액션, 신규] 스트릭의 첫 킬(아직 아무 콜도 안 붙는 구간)에
+# 짧은 흥분 리액션을 하나 더 얹는다. 트리거는 kills_with_names[0]["multi_kill_length"]==1
+# (이 킬 자체가 진짜 스트릭의 첫 킬 - 클립 슬랙 밖에서 이미 한 번 더 킬난 경우가 아님)
+# AND finish_multi_kill_length>=2(뒤에 더 올라갈 게 있음) - 코드 확인 결과 이 조건이면
+# kills_with_names[0]의 clip_t_sec이 배열 내 최솟값이라(_extract_champion_kills가 이미
+# timestamp_ms로 정렬) 중간/피니시 콜아웃과 물리적으로 겹칠 수 없음이 보장된다(별도
+# 충돌 방지 로직 불필요). KO만 지원(EN 텍스트는 아직 없음 - lang=="en"이면 스킵).
+# A/B 두 레시피로 전부 만들어 디스크에 저장해뒀고, 실제 재생은 KILL1_REACTION_POOL이
+# 가리키는 쪽(현재 A)만 쓴다 - B로 바꾸고 싶으면 아래 한 줄만 교체하면 됨.
+KILL1_REACTION_TEXT = {
+    2: "좋아요 하나 더!!",  # 원래 "좋아요, 하나 더!!"였으나 쉼표 직후 숨쉬기 무음이 20/20
+                           # 전부 재현돼 쉼표만 제거(의미 변화 없음, pre_buildup "숨 고르는
+                           # 느낌" 사례와 동일한 전례 재사용)
+    3: "좋아요 두 개도 가봅시다!!",  # 동일한 이유로 쉼표 제거
+    4: "미쳤다, 이거 계속 갈 수도 있어요!!",  # 쉼표 포함 원문 그대로 통과
+    5: "잠깐만요, 진짜 다 잡을 수도 있어요!!",  # 쉼표 포함 원문 그대로 통과
+}
+# A: voice_id=GriSG3WMe4Ve3jcVnYBf(lck_caster_dynamic), eleven_v4, stability=0.55, 태그 없음
+#    (기존 pre_buildup/hype_explode 관례 그대로).
+KILL1_REACTION_POOL_A = {
+    2: os.path.join(VOICE_DIR, "kill1_reaction_double_A.wav"),
+    3: os.path.join(VOICE_DIR, "kill1_reaction_triple_A.wav"),
+    4: os.path.join(VOICE_DIR, "kill1_reaction_quadra_A.wav"),
+    5: os.path.join(VOICE_DIR, "kill1_reaction_penta_A.wav"),
+}
+# B: voice_id=tlUdVt24VftfDokp32eu(main/LCK_Main_caster), eleven_v4, stability=0.35,
+#    tags="[SCREAMING]" - 실제 멀티킬 콜아웃 풀(triple/quadra/penta_kill_call_ko) 생성
+#    때 쓴 레시피("main_explode 수준(stability 0.35 이하 + SCREAMING류 태그)", 위
+#    VOICE_MIX_GAIN_DB_FILE_OVERRIDE 주석 참고) 재사용. double_B/triple_B/quadra_B/
+#    penta_B 전부 1차 생성에서 파일 끝 트레일링 감쇠(v4 특성, 기존에도 반복 확인된
+#    패턴)로 무음 게이트 실패 - _trim_trailing_silence와 동일한 방식(무음 1곳만 있을 때
+#    그 지점+0.05s에서 트림)으로 후처리해 통과시켰다.
+KILL1_REACTION_POOL_B = {
+    2: os.path.join(VOICE_DIR, "kill1_reaction_double_B.wav"),
+    3: os.path.join(VOICE_DIR, "kill1_reaction_triple_B.wav"),
+    4: os.path.join(VOICE_DIR, "kill1_reaction_quadra_B.wav"),
+    5: os.path.join(VOICE_DIR, "kill1_reaction_penta_B.wav"),
+}
+KILL1_REACTION_POOL = KILL1_REACTION_POOL_B  # 🛡️ 실제 재생 로직이 참조하는 활성 버전 - 20261009 B로 교체(A는 디스크에 그대로 보존, 비교용)
+
 # 🛡️ [멀티킬 지원 - 더블킬 전용 "외침" 풀] 더블킬 피니시에서 "우왁!!"(외침, 이 정적 풀) +
 # "더블킬!!! {닉네임}~!!"(신남, 기존 닉네임 샤우팅 실시간 TTS 재사용)을 이어붙인다.
 # 문장 중간에 감정 태그를 섞어 한 줄로 가는 방식은 오늘 test_laughs_tag.py 실측에서
@@ -3401,6 +3441,10 @@ class KyvoHighlight(KyvoBaseCog):
                     # 킬 최대 2개 + 피니시 자신 1개) - 1킬/더블/트리플 클립엔 애초에
                     # schedule에 안 생겨서 None으로 조용히 스킵된다(회귀 없음).
                     "multi_kill_call_1", "multi_kill_call_2", "multi_kill_call_3",
+                    # 🛡️ [멀티킬 지원 - 킬#1 흥분 리액션] 더블 이상의 스트릭에서만 schedule에
+                    # 생기고(단일 킬 클립엔 애초에 안 생김), 다른 보이스들과 동일한
+                    # adelay+volume+amix 패턴을 그대로 탄다.
+                    "kill1_reaction",
                     "double_kill_shout"):
             entry = schedule.get(key)
             if entry is None:
@@ -6637,6 +6681,36 @@ class KyvoHighlight(KyvoBaseCog):
             print(f"[HIGHLIGHT][INFO] 멀티킬 콜아웃 배치: tier={tier} kill_clip_t={natural_start:.3f}s "
                   f"call_start={call_start:.3f}s call_end={call_start + call_duration:.3f}s "
                   f"지연={delay:.3f}s (guild={guild_id})", flush=True)
+
+        # 🛡️ [멀티킬 지원 - 킬#1 흥분 리액션] 스트릭의 첫 킬엔 콜이 없어 밋밋하게 지나가던
+        # 구간에 짧은 리액션을 하나 더 건다. kills_with_names[0]이 진짜 그 스트릭의 첫
+        # 킬이어야(자기 자신의 multi_kill_length==1 - 클립 슬랙 밖에서 이미 한 번 더
+        # 킬난 뒤 잡힌 게 아님) 하고, 피니시가 2킬 이상이어야(뒤에 더 올라갈 게 있음)
+        # 한다. kills_with_names[0]의 clip_t_sec은 배열 내 최솟값이 보장되므로(정렬됨)
+        # 위 중간/피니시 콜아웃과 물리적으로 겹칠 수 없음 - 별도 충돌 방지 불필요
+        # (코드 확인으로 이미 검증됨). EN 텍스트는 아직 없어 KO만 지원.
+        first_kill = kills_with_names[0]
+        if (lang != "en" and first_kill.get("multi_kill_length", 1) == 1
+                and finish_multi_kill_length >= 2):
+            kill1_reaction_file = KILL1_REACTION_POOL.get(finish_multi_kill_length)
+            if kill1_reaction_file is None:
+                print(f"[HIGHLIGHT][WARN] 킬#1 리액션 풀 없음(tier={finish_multi_kill_length}, "
+                      f"guild={guild_id}) - 생략", flush=True)
+            else:
+                try:
+                    kill1_reaction_duration = await self._to_executor(
+                        self._probe_audio_duration, kill1_reaction_file)
+                    schedule["kill1_reaction"] = {
+                        "wav": kill1_reaction_file,
+                        "text": KILL1_REACTION_TEXT[finish_multi_kill_length],
+                        "start": first_kill["clip_t_sec"], "duration": kill1_reaction_duration,
+                    }
+                    print(f"[HIGHLIGHT][INFO] 킬#1 리액션 배치: tier={finish_multi_kill_length} "
+                          f"start={first_kill['clip_t_sec']:.3f}s (guild={guild_id})", flush=True)
+                except Exception as e:
+                    print(f"[HIGHLIGHT][WARN] 킬#1 리액션 길이 조회 실패(guild={guild_id}) - 생략: "
+                          f"{type(e).__name__}: {e}", flush=True)
+
         # 🛡️ [멀티킬 지원 - 더블킬 외침 독립 스케줄링] 더 이상 닉네임 샤우팅에 이어붙이지
         # 않고(위 "외침 분리" 주석 참고) 독립 트랙으로 뗀다. "끝점을 kill_t-LEAD_SEC에
         # 고정하고 시작점을 파일 길이만큼 역산"하는 방식도 시도해봤는데, 외침 파일 길이가
