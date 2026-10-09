@@ -54,6 +54,7 @@ class KyvoBot(commands.Bot):
             'cogs.scrim',
             'cogs.tier_verify',
             'cogs.highlight',  # tier_verify 다음에 로드 - Riot 클라이언트/예외 클래스를 그쪽에서 재사용
+            'cogs.dor',  # highlight 다음에 로드 - _run_pipeline/_riot_get/_extract_champion_kills 재사용
             'cogs.twitch',
             'cogs.cs2_flex',
             'cogs.weekly_report',
