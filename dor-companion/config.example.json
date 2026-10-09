@@ -1,0 +1,5 @@
+{
+    "server_url": "https://your-kyvobot-server.example.com",
+    "token": "/dor_token 명령으로 발급받은 토큰을 여기 붙여넣으세요",
+    "dor_root": "E:\\DOR"
+}

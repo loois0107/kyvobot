@@ -1,0 +1,8 @@
+venv/
+build/
+dist/
+*.spec
+__pycache__/
+config.json
+uploaded_state.json
+dor_companion.log
