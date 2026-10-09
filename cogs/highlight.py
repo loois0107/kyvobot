@@ -1433,6 +1433,15 @@ EN_LEADIN_START_OFFSET_SEC = PRE_BUILDUP_START_OFFSET_SEC  # 재사용: 클립 �
 # 분리 시점의 PRE_BUILDUP_GAP_SEC(0.2)과 동일하게 유지 - 영어는 그대로 0.2.
 EN_LEADIN_GAP_SEC = 0.2
 EN_LEADIN_END_GAP_SEC = EOEO_GAP_SEC                       # 재사용: 마지막 필러 종료~kill_t 최소 여백
+# 🛡️ [Sterling 자기충돌 수정 - 0단계 보이스 간 최소 간격] en_narration(Sterling)과 0단계
+# sterling/carter가 서로 독립적으로 kill_t 역산 계산되다 보니, 내레이션이 길어지면
+# "같은 보이스가 동시에 다른 말을 하는" 충돌이 실측으로 확인됐다(en_narration_end=15.089s,
+# sterling_start=13.909s처럼 역전되는 사례). 멀티킬 콜아웃의 max(자기 킬 시각, 이전
+# 콜아웃 종료 시각) 패턴을 그대로 가져와 "이전 보이스 종료 시각 + 버퍼" 쪽이 더 늦으면
+# 그쪽을 쓰도록 sterling_start/carter_start 둘 다 고친다(아래 _run_pipeline). 버퍼는
+# MULTI_KILL_CALLOUT 쪽처럼 0으로 딱 붙이지 않고 살짝 여유(0.1s)를 둔다 - 두 보이스가
+# 숨 쉴 틈 없이 바로 이어붙으면 오히려 한 문장처럼 들려 어색하다는 기존 교훈 재적용.
+EN_STAGE0_VOICE_GAP_SEC = 0.1
 # 🛡️ [EN 실시간 합성물 속도 압축 - "쉬지 않고 빠르게 몰아친다"는 LCK 톤의 핵심 요소]
 # voice_settings.speed가 이 TTS 엔드포인트(/v1/text-to-speech, eleven_v4)에서 무시된다는
 # 게 조사로 확인됐다 - 대신 KO battle_main/lck/sub 정적 풀 생성 때 검증된 그대로, 합성
@@ -3030,6 +3039,14 @@ EN_ASSIST_FRIENDLY_STYLE_INDICES = (1, 2, 3, 8)
 # 차원의 지시만 추가한다. TTS가 실제로 뒷부분을 더 격앙되게 "읽어주는 것"까지는
 # 보장 못 한다(ElevenLabs가 텍스트 단서엔 어느 정도 반응하지만 KO의 stability 조정급
 # 보장은 아님) - 어디까지나 "확률을 낮추는" 개선이지 "보장"이 아니다.
+# 🛡️ [캡스톤 예시 자체가 조기 단정의 직접 원인이었음 - 실측 확인] 위 "Neutral-truth
+# rule"이 미접전/접전 양방향 단정만 막고 있었는데, 캡스톤 지시의 예시 문구가 하필
+# "...and it's already over!"였다 - 과거 검증 로그(verify_narration_prompt_v2~v4,
+# experiment_en_narration_neutral 등)를 전수 조사한 결과 거의 모든 생성 결과가 이
+# 예시를 거의 그대로 베껴써서 "아직 일어나지 않은 일을 이미 끝났다"고 단정하는
+# 패턴이 재현됐다(프롬프트 리스트 누락이 아니라 프롬프트가 직접 유도한 결과). 캡스톤
+# 예시를 결론을 단정하지 않는 쪽으로 교체하고, Neutral-truth rule에 "already over"/
+# "it's done"/"that's it" 등 결론형 단정 어휘를 명시적으로 추가해 재발을 막는다.
 EN_NARRATION_SYSTEM_PROMPT = (
     "You are a high-energy esports caster calling the lead-up to a kill in a League of Legends "
     "highlight clip. Write ONE continuous paragraph of building-tension commentary - a single "
@@ -3045,14 +3062,20 @@ EN_NARRATION_SYSTEM_PROMPT = (
     "the distance', 'sizing each other up', 'waiting for an opening', 'circling', 'inching "
     "closer', 'converge', 'standoff', 'face-off', 'stare-down', 'stalemate'). Also avoid phrases "
     "that assume it HAS already started (e.g. 'they clash', 'unleashes a flurry of attacks', "
-    "'exchanging blows'). Describe the abstract atmosphere/energy/momentum instead, so the line "
-    "reads true regardless of the actual state.\n"
+    "'exchanging blows'). This same neutrality applies to the OUTCOME, not just the state of the "
+    "fight: never assert that the fight (or the clip, or the moment) has concluded, resolved, or "
+    "reached a result - avoid phrases like 'already over', \"it's done\", \"that's it\", 'all over "
+    "now', 'game over', 'settled', 'decided' (the outcome is exactly what the viewer is about to "
+    "watch - the narration must never claim it has already happened). Describe the abstract "
+    "atmosphere/energy/momentum instead, so the line reads true regardless of the actual state or "
+    "outcome.\n"
     "- Escalate gradually: later sentences (closer to the end of the paragraph) should feel more "
     "urgent and intense than earlier ones - shorter clauses, sharper words, rising energy - "
     "building toward the capstone line below.\n"
-    "- End the paragraph with a vague, abstract sense that the moment has arrived or someone "
-    "couldn't hold on (e.g. '...and there's no way out now!', '...and it's already over!') - "
-    "still no specific names, champions, or details, just a dramatic capstone line.\n"
+    "- End the paragraph with a vague, abstract sense that the moment has arrived and everything "
+    "is on the line - NOT that it has already been decided (e.g. '...and this could decide "
+    "everything!', '...and everything's on the line right now!', '...and there's no turning back "
+    "now!') - still no specific names, champions, or details, just a dramatic capstone line.\n"
     "- High energy, present tense, exclamatory - like a live broadcast build-up.\n"
     "- Target length: approximately {target_words} words (about {target_sec:.1f} seconds at a "
     "caster's speaking pace). A little under is fine; do not go noticeably over - being too long "
@@ -6128,69 +6151,17 @@ class KyvoHighlight(KyvoBaseCog):
                 await progress_msg.edit(content=await get_msg("highlight_err_render_failed"))
                 return
 
-            # 0단계 재설계: Carter가 kill_t에 시작(옛 hype_explode 자리 계승), Atlee는 Carter
-            # 재생 STAGE_OVERLAP_RATIO 지점과 겹치며 시작(옛 sub_explode 자리 계승), Sterling은
-            # kill_t에 끝나도록 역산 배치(옛 main_explode 자리 계승, "진행 멘트"로 역할 변경).
             schedule = {"kill_t": kill_t}
-            stage0_end_times = []
-            if carter_file is not None:
-                carter_start = kill_t
-                schedule["carter"] = {"wav": carter_file, "text": CARTER_TEXT[os.path.basename(carter_file)],
-                                       "start": carter_start, "duration": carter_duration}
-                stage0_end_times.append(carter_start + carter_duration)
-                if atlee_file is not None:
-                    atlee_start = carter_start + carter_duration * STAGE_OVERLAP_RATIO
-                    schedule["atlee"] = {"wav": atlee_file, "text": ATLEE_TEXT[os.path.basename(atlee_file)],
-                                          "start": atlee_start, "duration": atlee_duration}
-                    stage0_end_times.append(atlee_start + atlee_duration)
-            if sterling_file is not None:
-                sterling_start = kill_t - sterling_duration
-                if sterling_start >= 0:
-                    schedule["sterling"] = {"wav": sterling_file, "text": STERLING_TEXT[os.path.basename(sterling_file)],
-                                             "start": sterling_start, "duration": sterling_duration}
-            stage0_dur = max(stage0_end_times) - kill_t if stage0_end_times else 0.0
 
-            # 1/2/3단계: sub_question은 이제 ATLEE_SUB_QUESTION_POOL이 생겨서 채운다(풀이 비어
-            #있으면 atlee_sub_question_duration=0.0이라 plan_kill_sequence가 "즉시 끝난 것"으로
-            # 계산해 예전과 동일하게 우아히 스킵된다 - 하드 실패 없음). 스케줄 키는 한국어와
-            # 동일하게 "sub_question" 그대로 재사용(별도 키 불필요, _render_video는 언어를 모름).
-            # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
-            # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계(2/3단계)가 밀리는 시점은
-            # 가장 늦게 끝나는 목소리에 맞춰야 한다.
-            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), atlee_sub_question_duration)
-            hype_nickname_start = kill_t + seq["t1"]
-            sub_question_start = kill_t + seq["t2"]
-            main_fact_start = kill_t + seq["t3"]
-            # 🛡️ [멀티킬 지원 - 더블킬 "외침" 분리, 0단계 꼬리 마스킹 수정] 예전엔 "우왁!!"을
-            # 닉네임 샤우팅 보이스 1 앞에 이어붙여 같은 시각(hype_nickname_start, 0단계와
-            # 겹치는 자리)에 재생했는데, 실측 결과 0단계 꼬리(main_explode_d 등, 같은
-            # 13.0dB 게인)와 겹쳐 외침이 묻히는 문제가 확인됐다 - 외침은 더 이상 닉네임
-            # 보이스와 합치지 않고 독립 트랙으로 분리해 kill_t 이전(아래 별도 스케줄링
-            # 블록, DOUBLE_KILL_SHOUT_LEAD_SEC)으로 당긴다. "더블킬!!! {이름}~~!!" 부분은
-            # 3보이스 전부 지금처럼 hype_nickname_start에 동시 재생(변경 없음) - 복합
-            # 대사를 합치지 않으므로 스웰 타이밍에도 전혀 영향 없다.
-            for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
-                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
-                                                       "start": hype_nickname_start, "duration": dur}
-            if atlee_sub_question_file is not None:
-                schedule["sub_question"] = {
-                    "wav": atlee_sub_question_file,
-                    "text": ATLEE_SUB_QUESTION_TEXT[os.path.basename(atlee_sub_question_file)],
-                    "start": sub_question_start, "duration": atlee_sub_question_duration,
-                }
-            schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
-                                      "start": main_fact_start, "duration": main_fact_duration}
-
-            # 🛡️ [EN 리드인 재설계 - 단일 긴 내레이션, "여러 보이스 체인"은 폐기]
-            # 지난 라운드의 "여러 보이스가 짧게 겹쳐 떠드는 체인"(KO BATTLE_MAIN_POOL류
-            # 재사용)은 완전히 잘못된 방향이었다는 피드백으로 전면 재설계 - 실제 LCK/LCS는
-            # 해설자 한 명이 빌드업~킬 임박 직전까지 끊김 없이 이어서 말한다. 기존
-            # EN_LEADIN_POOL(정적 풀, 1~4개 유동 배치)과 en_battle_carter/atlee 체인
-            # 스케줄링을 이 블록으로 완전히 대체한다 - 둘 다 Sterling 보이스와 겹쳐 쓰면
-            # (EN_LEADIN_POOL도 Sterling 목소리) 같은 목소리가 서로 다른 말을 동시에 하는
-            # 꼴이 되어 반드시 제거해야 했다. EN_LEADIN_POOL/EN_BATTLE_*_POOL 상수/에셋
-            # 자체는 지우지 않았다(재사용 가능성 남김) - 단지 이 경로에서 더 이상 호출하지
-            # 않는다.
+            # 🛡️ [EN 리드인 내레이션 - 0단계보다 먼저 계산] 지난 라운드 실측으로 en_narration
+            # (Sterling)과 0단계 sterling이 독립적으로 kill_t 역산 계산되다 보니 "같은
+            # 보이스가 동시에 다른 말을 하는" 충돌이 확인됐다(en_narration_end=15.089s인데
+            # sterling_start=13.909s로 역전되는 사례). 내레이션의 실제 종료 시각을 먼저
+            # 확정해야 0단계 sterling_start가 그걸 보고 피해갈 수 있으므로, 이 블록을
+            # 0단계보다 앞으로 옮겼다 - EN_LEADIN_POOL(정적 풀, 1~4개 유동 배치)과
+            # en_battle_carter/atlee 체인 스케줄링을 대체한다는 설계 의도 자체는 그대로다.
+            # EN_LEADIN_POOL/EN_BATTLE_*_POOL 상수/에셋은 지우지 않았다(재사용 가능성
+            # 남김) - 단지 이 경로에서 더 이상 호출하지 않는다.
             # 🛡️ [Sterling의 기존 "끝점=kill_t 고정" 공식을 그대로 확장] 끝점은
             # kill_t - EN_LEADIN_END_GAP_SEC(기존 상수 재사용)로 고정하고, 시작점은 실측
             # 길이로 역산한다 - 사전에 길이를 못박지 않고도 "항상 kill_t 근처에서 끝난다"를
@@ -6198,6 +6169,8 @@ class KyvoHighlight(KyvoBaseCog):
             leadin_end_times = []
             en_narration_end = kill_t - EN_LEADIN_END_GAP_SEC
             en_narration_available = en_narration_end - EN_LEADIN_START_OFFSET_SEC
+            narration_start = None
+            narration_duration = 0.0
             if en_narration_available >= EN_NARRATION_MIN_AVAILABLE_SEC:
                 narration_text = await self._generate_leadin_narration(en_narration_available)
                 narration_wav = await self._synthesize_voice_line(
@@ -6232,14 +6205,92 @@ class KyvoHighlight(KyvoBaseCog):
                 }
                 leadin_end_times.append(narration_start + narration_duration)
 
-                # 🛡️ [제3자 짧은 리액션 - main_fact 재생 도중으로 앵커 이전] 기존엔 "내레이션
-                # 종료 직전"(킬 이전)에 걸려 있었으나, "Sterling이 결과(main_fact)를 말하는
-                # 동안 옆에서 웃는다"는 그림에 맞춰 main_fact 시작 직후로 옮겼다 - main_fact_
-                # start/duration은 이 블록보다 먼저(위쪽에서) 이미 계산되어 있으므로 그대로
-                # 참조만 하면 된다. "Oh!?"/"Whoa!"/"Come on!"/"Yes!!"(f~i) + "Whoa-ho-ho!!"/
-                # "Wooo-hoo!!"/"Oho-ho-ho!!"/"Ho-ho, unbelievable!!"(j~m, 호탕한 웃음) 총 8개
-                # 중 보이스 하나를 무작위로 골라 한 번만 넣는다 - "제3의 해설자가 짧게
-                # 리액션만 얹는다"는 설계는 그대로, 겹치는 대상만 내레이션 -> main_fact로 교체.
+            # 0단계 재설계: Sterling을 먼저 배치(내레이션과 안 겹치게), Carter는 Sterling
+            # 끝난 뒤(안 겹치게) 또는 kill_t 중 늦은 쪽에서 시작(옛 hype_explode 자리
+            # 계승), Atlee는 Carter 재생 STAGE_OVERLAP_RATIO 지점과 겹치며 시작(옛
+            # sub_explode 자리 계승).
+            # 🛡️ [Sterling 자기충돌 수정] sterling_start = max(kill_t - sterling_duration,
+            # 내레이션 실제 종료 시각 + EN_STAGE0_VOICE_GAP_SEC) - 멀티킬 콜아웃의
+            # max(자기 킬 시각, 이전 콜아웃 종료 시각) 패턴과 동일한 발상.
+            sterling_start = None
+            sterling_end = None
+            if sterling_file is not None:
+                natural_sterling_start = kill_t - sterling_duration
+                if narration_start is not None:
+                    sterling_start = max(natural_sterling_start,
+                                          narration_start + narration_duration + EN_STAGE0_VOICE_GAP_SEC)
+                else:
+                    sterling_start = natural_sterling_start
+                if sterling_start >= 0:
+                    schedule["sterling"] = {"wav": sterling_file, "text": STERLING_TEXT[os.path.basename(sterling_file)],
+                                             "start": sterling_start, "duration": sterling_duration}
+                    sterling_end = sterling_start + sterling_duration
+                else:
+                    sterling_start = None
+            # 🛡️ [Sterling↔Carter 충돌 수정] 위 수정으로 sterling_start가 내레이션을 피해
+            # 뒤로 밀리면 sterling_end가 kill_t를 넘길 수 있다(sterling_duration이
+            # EN_LEADIN_END_GAP_SEC보다 길면 항상 그렇게 된다 - 실측 1.48s vs 0.3s) - 그러면
+            # 기존처럼 carter_start=kill_t로 고정하면 Carter가 Sterling 꼬리와 겹친다.
+            # 그래서 carter_start도 같은 max() 패턴으로 "kill_t 또는 Sterling 종료+버퍼 중
+            # 늦은 쪽"을 쓴다. Atlee는 원래부터 carter_start 기준 상대 계산이라 자동으로
+            # 따라 밀린다(별도 수정 불필요). stage0_end_times/stage0_dur을 거쳐가는
+            # hype_nickname_start 등 뒤따르는 전체 스케줄에는 영향 없음 - sterling은
+            # stage0_end_times에 원래부터 안 들어간다(0단계 "꼬리 길이" 계산은 carter/
+            # atlee 기준이었고 이번에도 그대로).
+            stage0_end_times = []
+            if carter_file is not None:
+                carter_start = kill_t
+                if sterling_end is not None:
+                    carter_start = max(carter_start, sterling_end + EN_STAGE0_VOICE_GAP_SEC)
+                schedule["carter"] = {"wav": carter_file, "text": CARTER_TEXT[os.path.basename(carter_file)],
+                                       "start": carter_start, "duration": carter_duration}
+                stage0_end_times.append(carter_start + carter_duration)
+                if atlee_file is not None:
+                    atlee_start = carter_start + carter_duration * STAGE_OVERLAP_RATIO
+                    schedule["atlee"] = {"wav": atlee_file, "text": ATLEE_TEXT[os.path.basename(atlee_file)],
+                                          "start": atlee_start, "duration": atlee_duration}
+                    stage0_end_times.append(atlee_start + atlee_duration)
+            stage0_dur = max(stage0_end_times) - kill_t if stage0_end_times else 0.0
+
+            # 1/2/3단계: sub_question은 이제 ATLEE_SUB_QUESTION_POOL이 생겨서 채운다(풀이 비어
+            #있으면 atlee_sub_question_duration=0.0이라 plan_kill_sequence가 "즉시 끝난 것"으로
+            # 계산해 예전과 동일하게 우아히 스킵된다 - 하드 실패 없음). 스케줄 키는 한국어와
+            # 동일하게 "sub_question" 그대로 재사용(별도 키 불필요, _render_video는 언어를 모름).
+            # 🛡️ [3보이스 동시 콜] stage1 길이는 세 닉네임 목소리 중 가장 긴 것 기준(max) -
+            # 셋 다 hype_nickname_start에 동시 시작하므로, 다음 단계(2/3단계)가 밀리는 시점은
+            # 가장 늦게 끝나는 목소리에 맞춰야 한다.
+            seq = plan_kill_sequence(stage0_dur, max(hype_nickname_durations), atlee_sub_question_duration)
+            hype_nickname_start = kill_t + seq["t1"]
+            sub_question_start = kill_t + seq["t2"]
+            main_fact_start = kill_t + seq["t3"]
+            # 🛡️ [멀티킬 지원 - 더블킬 "외침" 분리, 0단계 꼬리 마스킹 수정] 예전엔 "우왁!!"을
+            # 닉네임 샤우팅 보이스 1 앞에 이어붙여 같은 시각(hype_nickname_start, 0단계와
+            # 겹치는 자리)에 재생했는데, 실측 결과 0단계 꼬리(main_explode_d 등, 같은
+            # 13.0dB 게인)와 겹쳐 외침이 묻히는 문제가 확인됐다 - 외침은 더 이상 닉네임
+            # 보이스와 합치지 않고 독립 트랙으로 분리해 kill_t 이전(아래 별도 스케줄링
+            # 블록, DOUBLE_KILL_SHOUT_LEAD_SEC)으로 당긴다. "더블킬!!! {이름}~~!!" 부분은
+            # 3보이스 전부 지금처럼 hype_nickname_start에 동시 재생(변경 없음) - 복합
+            # 대사를 합치지 않으므로 스웰 타이밍에도 전혀 영향 없다.
+            for i, (wav, dur) in enumerate(zip(hype_nickname_wavs, hype_nickname_durations)):
+                schedule[f"hype_nickname_{i + 1}"] = {"wav": wav, "text": hype_nickname_text_by_voice[nickname_voice_keys[i]],
+                                                       "start": hype_nickname_start, "duration": dur}
+            if atlee_sub_question_file is not None:
+                schedule["sub_question"] = {
+                    "wav": atlee_sub_question_file,
+                    "text": ATLEE_SUB_QUESTION_TEXT[os.path.basename(atlee_sub_question_file)],
+                    "start": sub_question_start, "duration": atlee_sub_question_duration,
+                }
+            schedule["main_fact"] = {"wav": main_fact_wav, "text": main_fact_text,
+                                      "start": main_fact_start, "duration": main_fact_duration}
+
+            # 🛡️ [제3자 짧은 리액션 - main_fact 재생 도중으로 앵커] 내레이션이 실제로
+            # 스케줄됐을 때만(narration_start is not None) 붙인다 - "Sterling이 결과
+            # (main_fact)를 말하는 동안 옆에서 웃는다"는 그림. main_fact_start/duration은
+            # 이 블록보다 먼저(위쪽에서) 이미 계산되어 있으므로 그대로 참조만 하면 된다.
+            # "Oh!?"/"Whoa!"/"Come on!"/"Yes!!"(f~i) + "Whoa-ho-ho!!"/"Wooo-hoo!!"/
+            # "Oho-ho-ho!!"/"Ho-ho, unbelievable!!"(j~m, 호탕한 웃음) 총 8개 중 보이스
+            # 하나를 무작위로 골라 한 번만 넣는다.
+            if narration_start is not None:
                 reaction_voice = random.choice(("carter", "atlee"))
                 reaction_pool = EN_BATTLE_CARTER_POOL if reaction_voice == "carter" else EN_BATTLE_ATLEE_POOL
                 reaction_text_map = EN_BATTLE_CARTER_TEXT if reaction_voice == "carter" else EN_BATTLE_ATLEE_TEXT
