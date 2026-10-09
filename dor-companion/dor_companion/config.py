@@ -24,6 +24,12 @@ LOG_PATH = os.path.join(_base_dir(), "dor_companion.log")
 
 REQUIRED_KEYS = ("server_url", "token", "dor_root")
 
+# server_url 기본값 - kyvobot 봇 자체의 aiohttp 웹서버 공개 주소(dashboard .env의
+# TWITCH_EVENTSUB_CALLBACK_URL=https://kyvobot.onrender.com/webhooks/twitch로 실측 확인된
+# 것과 같은 호스트 - /internal/dor/upload도 같은 프로세스의 같은 웹서버가 서빙함). 이 값이
+# 바뀌지 않는 한 유저가 직접 입력할 필요가 없어서, 설정 입력창에는 이 필드를 안 보여준다.
+DEFAULT_SERVER_URL = "https://kyvobot.onrender.com"
+
 
 @dataclass
 class Config:
