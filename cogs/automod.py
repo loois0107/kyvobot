@@ -34,12 +34,22 @@ return {count, 0}
 
 # 🛡️ 대시보드에서 설정 가능한 범위 - lib/automodSettings.ts와 반드시 값이 일치해야 한다
 # (party_settings 상수들과 동일한 관례). 여기서 벗어난 값은 조용히 기본값으로 되돌린다.
-# 🛡️ [긴급 추가] automod_settings에 "enabled" 개념 자체가 없어서 관리자가 automod를 끌 방법이
-# 전혀 없었다(디스코드 명령어도 없음, 대시보드도 파라미터 조정만 가능) - 기본값은 반드시 True다.
-# automod_settings를 한 번도 저장한 적 없는 길드(신규/기존 미설정 전부 포함)가 이 기본값을 타는데,
-# 여기에 False를 쓰면 지금 이미 automod로 보호받고 있는 기존 서버들이 배포 순간 전부 조용히
-# 무방비 상태가 되는 회귀가 생긴다.
-AUTOMOD_ENABLED_DEFAULT = True
+# 🛡️ [2026-10-10 마이그레이션 이후 기본값 False로 전환] 예전엔 이 주석이 "기본값은 반드시
+# True여야 한다"고 적혀 있었다 - automod_settings.enabled 키가 아예 없는 길드(신규/기존
+# 미설정 전부 포함)가 전부 이 기본값을 타는 구조였는데, 그 상태에서 False를 쓰면 이미
+# automod로 보호받고 있던 기존 서버들이 배포 순간 전부 조용히 무방비가 되는 회귀였기 때문.
+#
+# 그 전제가 지금은 바뀌었다 - migrate_automod_enabled.py(1회성 마이그레이션, 레포 루트)가
+# 그 시점 기준 enabled 키가 없던 기존 길드 37곳 전부에 enabled: true를 명시적으로 백필해뒀다
+# (대시보드에서 이미 저장해본 1곳은 원래부터 명시값이 있어 건드리지 않음). automod.py:116의
+# `automod_settings.get("enabled", AUTOMOD_ENABLED_DEFAULT)`는 DB에 저장된 값을 항상
+# 우선하므로, 이 백필 이후로는 "기존에 보호받던 서버가 이 상수 때문에 회귀한다"는 문제가
+# 더는 성립하지 않는다 - 이제 이 기본값을 타는 건 마이그레이션 *이후에* 새로 초대되는
+# 길드뿐이고, 그런 길드는 처음부터 automod 보호를 받은 적이 없으므로 False가 회귀가 아니다.
+# (주의: 이 마이그레이션은 1회성이라 재실행되지 않는다 - 앞으로 더 늘어날 "enabled 키 없는
+# 기존 길드"는 없다. 신규 길드는 on_guild_join이 automod_settings를 전혀 안 써서 계속 이
+# 기본값을 타게 된다 - cogs/onboarding.py의 _seed_guild_language 참고.)
+AUTOMOD_ENABLED_DEFAULT = False
 AUTOMOD_SPAM_LIMIT_MIN = 3
 AUTOMOD_SPAM_LIMIT_MAX = 20
 AUTOMOD_SPAM_LIMIT_DEFAULT = 5

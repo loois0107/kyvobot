@@ -455,7 +455,7 @@
   "onboarding_field_leveling_title": "📊 Leveling & Economy",
   "onboarding_field_leveling_desc": "Configure XP rates, role rewards, and the server shop from the dashboard.",
   "onboarding_field_automod_title": "🛡️ Auto-Moderation",
-  "onboarding_field_automod_desc": "Spam/word filtering and anonymous reports can be toggled from the dashboard.",
+  "onboarding_field_automod_desc": "Spam/word filtering is off by default — turn it on from the dashboard, where you can also set up anonymous reports and more.",
   "automod_log_title": "🚨 AutoMod Action Taken",
   "automod_log_field_offender": "Offender",
   "automod_log_field_channel": "Channel",
