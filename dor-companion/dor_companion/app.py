@@ -35,7 +35,7 @@ class CompanionApp:
         """새로 발견한 업로드 대상을 큐에 넣는다. 몇 건을 새로 넣었는지 반환."""
         enqueued = 0
         for candidate in scanner.scan_all(self.dor_root):
-            if not candidate.is_uploadable:
+            if not candidate.is_uploadable(self.logger):
                 continue
             video_path = candidate.video_path
             if self.state.is_uploaded(video_path):

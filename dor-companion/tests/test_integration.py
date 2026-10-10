@@ -63,8 +63,11 @@ class UploadFlowTests(unittest.TestCase):
         )
 
     def test_1_detect_and_upload_new_clip(self):
+        # 🛡️ [DoubleKill 사용 - Kill 타입은 더 이상 업로드 대상 아님] scanner.py의
+        # 화이트리스트 필터링(DoubleKill 이상만 업로드) 추가 후, 업로드 흐름 자체를
+        # 검증하는 이 테스트는 실제로 업로드 대상인 DoubleKill 샘플을 써야 한다.
         session_dir = fixtures.make_session_dir(self.dor_root, "2026-10-09 16_15")
-        fixtures.add_kill_clip(session_dir, "DOR 2026-10-09 16-20-24.mp4", event_time=257.5, rec_offset=224.99)
+        fixtures.add_double_kill_clip(session_dir, "DOR 2026-10-09 16-31-53.mp4", event_time=941.71, rec_offset=914.99)
 
         app = self._make_app()
         try:
@@ -82,7 +85,7 @@ class UploadFlowTests(unittest.TestCase):
 
     def test_2_restart_does_not_reupload(self):
         session_dir = fixtures.make_session_dir(self.dor_root, "2026-10-09 16_15")
-        fixtures.add_kill_clip(session_dir, "DOR 2026-10-09 16-20-24.mp4", event_time=257.5, rec_offset=224.99)
+        fixtures.add_double_kill_clip(session_dir, "DOR 2026-10-09 16-31-53.mp4", event_time=941.71, rec_offset=914.99)
 
         app1 = self._make_app()
         try:
@@ -122,7 +125,7 @@ class UploadFlowTests(unittest.TestCase):
 
     def test_4_server_down_does_not_crash_and_retries_later(self):
         session_dir = fixtures.make_session_dir(self.dor_root, "2026-10-09 16_15")
-        fixtures.add_kill_clip(session_dir, "DOR 2026-10-09 16-20-24.mp4", event_time=257.5, rec_offset=224.99)
+        fixtures.add_double_kill_clip(session_dir, "DOR 2026-10-09 16-31-53.mp4", event_time=941.71, rec_offset=914.99)
 
         self.server.force_down = True
         app = self._make_app()
@@ -134,7 +137,7 @@ class UploadFlowTests(unittest.TestCase):
             pass
 
         self.assertEqual(len(self.server.uploaded_calls), 0)
-        self.assertEqual(app.state.is_uploaded(os.path.join(session_dir, "DOR 2026-10-09 16-20-24.mp4")), False)
+        self.assertEqual(app.state.is_uploaded(os.path.join(session_dir, "DOR 2026-10-09 16-31-53.mp4")), False)
         self.assertTrue(app._worker_thread.is_alive(), "서버가 죽어있어도 워커 스레드가 죽으면 안 됨")
 
         with open(self.log_path, "r", encoding="utf-8") as f:

@@ -51,6 +51,68 @@ def add_kill_clip(session_dir: str, video_filename: str, event_time: float, rec_
     })
 
 
+def add_double_kill_clip(session_dir: str, video_filename: str, event_time: float, rec_offset: float,
+                          killer="Lucian", victim1="Lulu", victim2="Yunara") -> None:
+    """실제 DoubleKill 샘플(E:\\DOR의 TotalEvents.json으로 교차검증한 실제 구조)을 흉내낸다 -
+    ChampionKill 2건이 멀티킬 유지시간(~10초) 안에 들어있다."""
+    _write_video(session_dir, video_filename)
+    _merge_clip_events(session_dir, {
+        video_filename: {
+            "clipData": {
+                "clipEndTime": event_time + 10,
+                "eventType": "DoubleKill",
+                "recOffsetSec": rec_offset,
+            },
+            "eventData": [
+                {
+                    "Assisters": [],
+                    "EventID": 44,
+                    "EventName": "ChampionKill",
+                    "EventTime": event_time,
+                    "KillerName": killer,
+                    "VictimName": victim1,
+                },
+                {
+                    "Assisters": [],
+                    "EventID": 46,
+                    "EventName": "ChampionKill",
+                    "EventTime": event_time + 3.27,
+                    "KillerName": killer,
+                    "VictimName": victim2,
+                },
+            ],
+        }
+    })
+
+
+def add_clip_with_event_type(session_dir: str, video_filename: str, event_type: str,
+                              event_data: list | None = None, rec_offset: float = 80.0) -> None:
+    """eventType만 바꿔가며 테스트하기 위한 범용 헬퍼(Death/Assist/Tower/Object/처음 보는
+    값 등). event_data를 안 주면 롤에서 흔한 ChampionKill 1건으로 기본값을 채운다."""
+    _write_video(session_dir, video_filename)
+    if event_data is None:
+        event_data = [
+            {
+                "Assisters": [],
+                "EventID": 1,
+                "EventName": "ChampionKill",
+                "EventTime": rec_offset + 20,
+                "KillerName": "Viego",
+                "VictimName": "Lucian",
+            }
+        ]
+    _merge_clip_events(session_dir, {
+        video_filename: {
+            "clipData": {
+                "clipEndTime": rec_offset + 30,
+                "eventType": event_type,
+                "recOffsetSec": rec_offset,
+            },
+            "eventData": event_data,
+        }
+    })
+
+
 def add_full_recording_clip(session_dir: str, video_filename: str) -> None:
     _write_video(session_dir, video_filename)
     _merge_clip_events(session_dir, {
