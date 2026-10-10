@@ -78,15 +78,20 @@ class KyvoOnboarding(KyvoBaseCog):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        for title_key, desc_key in (
-            ("onboarding_field_party_title", "onboarding_field_party_desc"),
-            ("onboarding_field_ticket_title", "onboarding_field_ticket_desc"),
-            ("onboarding_field_leveling_title", "onboarding_field_leveling_desc"),
-            ("onboarding_field_automod_title", "onboarding_field_automod_desc"),
-        ):
-            field_title = await self.get_msg(guild.id, title_key)
-            field_desc = await self.get_msg(guild.id, desc_key)
-            embed.add_field(name=field_title, value=field_desc, inline=False)
+        # 🛡️ [DASHBOARD_BASE_URL 재사용] 대시보드(app/whats-new)랑 이 임베드가 가리키는
+        # 대시보드 홈(embed.url, 바로 위)이 같은 Next.js 앱의 같은 도메인에서 서빙되므로
+        # (kyvobot-dashboard 레포 하나, basePath 분리 없음), 별도의 "홈페이지 URL" 상수가
+        # 따로 있는 게 아니라 이 DASHBOARD_BASE_URL이 바로 그 base다.
+        whats_new_url = f"{DASHBOARD_BASE_URL}/whats-new" if DASHBOARD_BASE_URL else ""
+        highlight_title = await self.get_msg(guild.id, "onboarding_field_highlight_title")
+        highlight_desc = await self.get_msg(
+            guild.id, "onboarding_field_highlight_desc", whats_new_url=whats_new_url
+        )
+        embed.add_field(name=highlight_title, value=highlight_desc, inline=False)
+
+        other_title = await self.get_msg(guild.id, "onboarding_field_other_features_title")
+        other_desc = await self.get_msg(guild.id, "onboarding_field_other_features_desc")
+        embed.add_field(name=other_title, value=other_desc, inline=False)
 
         # 언어 필드는 위 루프와 달리 get_msg(시딩된 언어)를 거치지 않고 항상 고정 이중언어로 표시
         embed.add_field(name=ONBOARDING_LANGUAGE_FIELD_TITLE, value=ONBOARDING_LANGUAGE_FIELD_DESC, inline=False)
