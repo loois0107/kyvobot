@@ -27,7 +27,7 @@ def main() -> None:
             logger=logger,
         )
         app.start()
-        run_tray(on_quit=app.stop)
+        run_tray(app, on_quit=app.stop)
     except Exception as e:
         logger.error(f"예상 못한 오류로 종료: {type(e).__name__}: {e}")
 
