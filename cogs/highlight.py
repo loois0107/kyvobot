@@ -1906,11 +1906,59 @@ DDRAGON_SUMMONER_SPELL_MAP_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/c
 DDRAGON_SPELL_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/img/spell/{filename}"
 DDRAGON_RUNES_REFORGED_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/runesReforged.json"
 DDRAGON_RUNE_ICON_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/img/{icon_path}"
+# 🛡️ [챔피언 한국어 이름 - /dor_list 라벨용] 실제 호출로 확인함: 이 champion.json은
+# en_US와 완전히 같은 id/key 구조이고 "data.<championId>.name"만 로케일별로 바뀐다
+# (예: ko_KR에서 "Xerath".name == "제라스"). 173개 챔피언 전체가 한 응답에 다 들어있어서
+# 매 요청마다 부를 필요 없이 프로세스당 한 번만 받아 메모리에 캐싱한다 - TTL이나 버전
+# 변경 감지는 일부러 안 넣었다(재배포마다 자연스럽게 새로고침되는 걸로 충분하다는 판단).
+DDRAGON_KO_CHAMPION_DATA_URL_TEMPLATE = "https://ddragon.leagueoflegends.com/cdn/{version}/data/ko_KR/champion.json"
 CHAMPION_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "champion_icons_cache")
 ITEM_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "item_icons_cache")
 SPELL_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "spell_icons_cache")
 RUNE_ICON_CACHE_DIR = os.path.join(OVERLAY_DIR, "rune_icons_cache")
 DDRAGON_HTTP_TIMEOUT_SECONDS = 5.0
+
+# 🛡️ [챔피언 한국어 이름 캐시 - 프로세스 전역, 한 번만 로드] 모듈 레벨 전역이라 이 파일을
+# import하는 모든 코그(cogs/dor.py 등)가 재사용한다. None=아직 안 받아옴, dict=성공적으로
+# 받아온 캐시(빈 dict일 수도 있음 - 그런데 그건 실패가 아니라 네트워크 실패 시 캐시를
+# 아예 안 채워서 다음 호출이 재시도하게 하는 쪽을 택함, 아래 함수 참고).
+_champion_name_ko_cache: dict[str, str] | None = None
+_champion_name_ko_lock = asyncio.Lock()
+
+
+async def get_champion_name_ko_map() -> dict[str, str]:
+    """{championId(영문 key, 예: "Xerath"): 한국어 이름(예: "제라스")} 전체 맵을 돌려준다.
+    프로세스 시작 후 첫 호출에서만 실제로 Data Dragon을 때리고(버전 조회 1번 + ko_KR
+    champion.json 1번), 그 뒤로는 메모리 캐시를 그대로 반환한다. 네트워크 실패 시 캐시를
+    확정짓지 않고 빈 dict만 돌려줘서 - 호출부가 그 결과로 영문 폴백하는 동안 - 다음 호출이
+    다시 시도할 수 있게 한다."""
+    global _champion_name_ko_cache
+    if _champion_name_ko_cache is not None:
+        return _champion_name_ko_cache
+
+    async with _champion_name_ko_lock:
+        if _champion_name_ko_cache is not None:  # 락 대기 중 다른 코루틴이 이미 채웠을 수 있음
+            return _champion_name_ko_cache
+        try:
+            timeout = aiohttp.ClientTimeout(total=DDRAGON_HTTP_TIMEOUT_SECONDS)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(DDRAGON_VERSIONS_URL, timeout=timeout) as resp:
+                    resp.raise_for_status()
+                    versions = await resp.json(content_type=None)
+                version = versions[0]
+                url = DDRAGON_KO_CHAMPION_DATA_URL_TEMPLATE.format(version=version)
+                async with session.get(url, timeout=timeout) as resp:
+                    resp.raise_for_status()
+                    payload = await resp.json(content_type=None)
+            mapping = {key: info["name"] for key, info in payload.get("data", {}).items()}
+            _champion_name_ko_cache = mapping
+            print(f"[HIGHLIGHT] Cached {len(mapping)} Korean champion names from Data Dragon "
+                  f"(version={version}).", flush=True)
+        except Exception as e:
+            print(f"[HIGHLIGHT][WARN] Failed to load Korean champion names: {type(e).__name__}: {e} - "
+                  f"callers will fall back to English names until a later call succeeds.", flush=True)
+            return {}
+    return _champion_name_ko_cache
 
 # 🛡️ [원형 포트레이트 시도 -> 사각형으로 최종 복귀] 한때 alphamerge+그레이스케일
 # 마스크로 10개 전체를 원형 마스킹했었는데, Worlds 참고 사진을 다시 확인한 결과
@@ -2479,16 +2527,23 @@ def _compute_laning_gold_gaps(timeline: dict, roster_pairs: list[tuple[dict | No
 
 
 def _format_match_context_block(roster_pairs: list[tuple[dict | None, dict | None]],
-                                 laning_gold_gaps: list[int | None], scoreboard: dict, lang: str) -> str:
+                                 laning_gold_gaps: list[int | None], scoreboard: dict, lang: str,
+                                 champion_name_ko_map: dict[str, str] | None = None) -> str:
     """🛡️ [코멘터리 데이터 확장 - 킬 사실 외 참고 컨텍스트] _generate_commentary가 GPT에
     넘기는 facts_block에 이미 계산된 roster(KDA/CS/아이템)/scoreboard(팀 골드/오브젝트)/
-    laning_gold_gaps를 그대로 문자열로 직렬화한다(순수 함수, 새 API 호출 없음 - 전부
-    _run_pipeline에서 HUD 오버레이용으로 이미 만들어둔 값 재사용). 아이템은 Data Dragon
-    이름 매핑이 없어 원본 참가자 응답의 숫자 ID뿐이라, ID를 그대로 넘기면 GPT가 아이템
-    이름을 추측해서 지어낼 위험이 있다(이번 세션 내내 확인한 "닫힌 목록 밖 이름 지어내기"
-    실패 패턴과 동일한 종류) - 그래서 ID 대신 "완성 아이템 개수"(0이 아닌 슬롯 수)만
-    넘긴다. 킬러/피해자 조사 처리(_i_or_ga/_eul_or_reul)와 달리 이 블록은 표/목록 형태라
-    한국어여도 조사가 거의 안 붙으므로, 언어별로 라벨 문자열만 바꾼다."""
+    laning_gold_gaps를 그대로 문자열로 직렬화한다(이 함수 자체는 여전히 순수 함수 - 새
+    API 호출이 없다. champion_name_ko_map은 호출부가 미리 비동기로 받아와 넘겨주는
+    값이다). 아이템은 Data Dragon 이름 매핑이 없어 원본 참가자 응답의 숫자 ID뿐이라,
+    ID를 그대로 넘기면 GPT가 아이템 이름을 추측해서 지어낼 위험이 있다(이번 세션
+    내내 확인한 "닫힌 목록 밖 이름 지어내기" 실패 패턴과 동일한 종류) - 그래서 ID
+    대신 "완성 아이템 개수"(0이 아닌 슬롯 수)만 넘긴다. 킬러/피해자 조사 처리
+    (_i_or_ga/_eul_or_reul)와 달리 이 블록은 표/목록 형태라 한국어여도 조사가 거의
+    안 붙으므로, 언어별로 라벨 문자열만 바꾼다.
+
+    🛡️ [챔피언 이름 한국어화 - 한국어 모드만] champion_name_ko_map이 주어지고
+    lang != "en"일 때만 p['champion'](Riot 영문 championName)을 한국어 이름으로
+    바꾼다 - 영어 모드는 이 매핑을 아예 안 받으므로(호출부가 안 넘김) 100% 기존
+    그대로다. 맵에 없는 챔피언(신규 패치 직후 등)은 조용히 영문 원본으로 폴백한다."""
     is_en = lang == "en"
 
     def team_line(prefix: str) -> str:
@@ -2526,7 +2581,10 @@ def _format_match_context_block(roster_pairs: list[tuple[dict | None, dict | Non
                 return "N/A"
             k, d, a = p["kda"]
             item_count = sum(1 for it in p["items"] if it)
-            return f"{p['champion']}({p['name']}) {k}/{d}/{a}, CS {p['cs']}, {'items' if is_en else '아이템'} {item_count}/6"
+            champ = p["champion"]
+            if not is_en and champion_name_ko_map:
+                champ = champion_name_ko_map.get(champ, champ)
+            return f"{champ}({p['name']}) {k}/{d}/{a}, CS {p['cs']}, {'items' if is_en else '아이템'} {item_count}/6"
 
         gap_str = "N/A" if gap is None else f"{'+' if gap >= 0 else ''}{gap}"
         lines.append(f"  [{pos}] {side(left)}  vs  {side(right)}  ({'lane gold gap' if is_en else '라인 골드 격차'} {gap_str})")
@@ -4943,7 +5001,13 @@ class KyvoHighlight(KyvoBaseCog):
 
         context_block = ""
         if roster_pairs is not None and laning_gold_gaps is not None and scoreboard is not None:
-            context_block = _format_match_context_block(roster_pairs, laning_gold_gaps, scoreboard, lang) + "\n\n"
+            # 🛡️ [한국어 모드만 챔피언명 한국어화] 영어 모드는 이 맵 자체를 안 받아오므로
+            # (불필요한 네트워크 호출도 없음) _format_match_context_block이 100% 기존
+            # 그대로 영문 champion을 쓴다 - 회귀 없음.
+            champion_name_ko_map = None if is_en else await get_champion_name_ko_map()
+            context_block = _format_match_context_block(
+                roster_pairs, laning_gold_gaps, scoreboard, lang, champion_name_ko_map
+            ) + "\n\n"
 
         if is_en:
             user_content = (

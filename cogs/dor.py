@@ -123,21 +123,31 @@ def _hash_dor_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _build_candidate_option_label(candidate: dict) -> str:
-    """Select 옵션 라벨 - 실제 killer_name/victim_name(둘 다 챔피언명, 한국어 챔피언명
-    번역 테이블은 레포에 없어서 저장된 그대로 영문으로 표시)과 그 클립 고유의
-    event_type(매치 전체 기록인 tag가 아님)으로 "누가 누굴 죽였는지"를 구체적으로
-    보여준다. Discord Select label 100자 제한 - 챔피언명이 가장 긴 경우(예:
-    "Renata Glasc"+"Twisted Fate"+"Penta Kill"+타임스탬프)도 100자를 넘지 않지만,
-    혹시 모를 이상 데이터에 대한 방어로 끝에서 자른다."""
+def _build_candidate_option_label(candidate: dict, champion_name_ko_map: dict[str, str] | None = None) -> str:
+    """Select 옵션 라벨 - killer_name/victim_name(둘 다 챔피언명)을 champion_name_ko_map으로
+    한국어 이름으로 바꿔서 "누가 누굴 죽였는지"를 구체적으로 보여준다. 맵에 없는 챔피언이
+    있으면(신규 챔피언 패치 직후, Data Dragon 호출 실패 등) 조용히 영문 그대로 폴백한다 -
+    라벨 자체가 안 뜨는 것보다 영문이라도 뜨는 쪽이 낫다. 조사(이/가, 을/를) 처리는
+    cogs/highlight.py가 내레이션 생성에 이미 쓰고 있는 _i_or_ga/_eul_or_reul을 그대로
+    재사용한다(같은 종류의 문제라 중복 구현할 이유가 없음).
+
+    event_type은 그 클립 고유의 값(매치 전체 기록인 tag가 아님)이고, Discord Select
+    label은 100자 제한 - 한국어 챔피언명 중 가장 긴 조합(예: "트위스티드 페이트"+
+    "레나타 글라스크"+"Penta Kill"+타임스탬프)도 100자를 넘지 않지만, 혹시 모를 이상
+    데이터에 대한 방어로 끝에서 자른다."""
+    champion_name_ko_map = champion_name_ko_map or {}
     killer = candidate.get("killer_name") or "?"
     victim = candidate.get("victim_name") or "?"
+    killer_ko = champion_name_ko_map.get(killer, killer)
+    victim_ko = champion_name_ko_map.get(victim, victim)
     streak_label = DOR_STREAK_DISPLAY_LABELS.get(candidate.get("event_type"))
     created = (candidate.get("created_at") or "")[:16].replace("T", " ")
+    killer_phrase = f"{killer_ko}{highlight_mod._i_or_ga(killer_ko)}"
+    victim_phrase = f"{victim_ko}{highlight_mod._eul_or_reul(victim_ko)}"
     if streak_label:
-        label = f"{killer} killed {victim} ({streak_label}) · {created}"
+        label = f"{killer_phrase} {victim_phrase} 처치 ({streak_label}) · {created}"
     else:
-        label = f"{killer} killed {victim} · {created}"
+        label = f"{killer_phrase} {victim_phrase} 처치 · {created}"
     return label[:100]
 
 
@@ -168,10 +178,12 @@ class DorCandidateSelectView(discord.ui.View):
     `self.children[0]`을 하드코딩하면 2개짜리 View에서 항상 첫 번째 Select만 보게
     되므로, 콜백이 자기 자신의 select 객체를 클로저로 받아쓰게 고쳤다."""
 
-    def __init__(self, cog: "KyvoDor", author_id: int, multi_candidates: list[dict], solo_candidates: list[dict]):
+    def __init__(self, cog: "KyvoDor", author_id: int, multi_candidates: list[dict], solo_candidates: list[dict],
+                 champion_name_ko_map: dict[str, str] | None = None):
         super().__init__(timeout=120)
         self.cog = cog
         self.author_id = author_id
+        self.champion_name_ko_map = champion_name_ko_map or {}
 
         if multi_candidates:
             self._add_select(multi_candidates, "🔥 Multi-kills (Double+) - choose one...")
@@ -180,7 +192,9 @@ class DorCandidateSelectView(discord.ui.View):
 
     def _add_select(self, candidates: list[dict], placeholder: str) -> None:
         options = [
-            discord.SelectOption(label=_build_candidate_option_label(c), value=c["id"])
+            discord.SelectOption(
+                label=_build_candidate_option_label(c, self.champion_name_ko_map), value=c["id"]
+            )
             for c in candidates
         ]
         select = discord.ui.Select(placeholder=placeholder, options=options)
@@ -493,7 +507,8 @@ class KyvoDor(KyvoBaseCog):
             await interaction.followup.send("You have no pending DOR clips right now.", ephemeral=True)
             return
 
-        view = DorCandidateSelectView(self, interaction.user.id, multi_candidates, solo_candidates)
+        champion_name_ko_map = await highlight_mod.get_champion_name_ko_map()
+        view = DorCandidateSelectView(self, interaction.user.id, multi_candidates, solo_candidates, champion_name_ko_map)
         await interaction.followup.send("Select a clip to turn into a highlight:", view=view, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
