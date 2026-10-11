@@ -22,14 +22,17 @@ BASIC_GAME_DATA_KEY = "basicGameData"
 # 유지시간(~10초)을 넘기면 eventType은 그냥 "Kill"로 남는다(16-24-16.mp4 실측 사례,
 # 11.33초 간격) - 즉 eventData 개수나 시간 간격을 직접 재계산하지 않고 eventType
 # 문자열 자체를 그대로 믿어도 된다.
+# 🛡️ ["Kill"(솔로킬) 업로드 대상에 포함] 처음엔 멀티킬(DoubleKill 이상)만 받았는데,
+# /dor_list가 솔로킬 섹션도 보여주게 되면서 솔로킬 클립도 업로드 대상으로 바뀜 -
+# Death/Assist/Tower/Object/Full/End는 여전히 제외.
 # "TripleKill"/"QuadraKill"/"PentaKill"은 이번에 실제로 관측된 매치에 한 번도
 # 나오지 않아서(최고 기록이 DoubleKill) 실측은 못했고, "Kill"->"DoubleKill" 네이밍
 # 패턴상 추정만 한 값이다 - UNKNOWN_EVENT_TYPE_WARNING 쪽에서 혹시 이름이 다르게
 # 찍히면 잡아내도록 해둔다.
-UPLOADABLE_EVENT_TYPES = frozenset({"DoubleKill", "TripleKill", "QuadraKill", "PentaKill"})
+UPLOADABLE_EVENT_TYPES = frozenset({"Kill", "DoubleKill", "TripleKill", "QuadraKill", "PentaKill"})
 # 실제로 관측됐고 업로드 대상이 아님이 확실한 값들 - 여기 없는 값은 "처음 보는" 값으로
 # 취급해 로그에 남긴다(조용히 버리지 않음).
-KNOWN_SKIP_EVENT_TYPES = frozenset({"Kill", "Death", "Assist", "Tower", "Object", "Full", "End"})
+KNOWN_SKIP_EVENT_TYPES = frozenset({"Death", "Assist", "Tower", "Object", "Full", "End"})
 
 
 @dataclass

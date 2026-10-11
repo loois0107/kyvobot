@@ -5,18 +5,35 @@ DOR(서드파티 로컬 녹화 프로그램) 연동 - "유저 PC의 DOR이 서�
 짝을 이룬다 - OCR/Riot 매치탐색만 건너뛰고 그 이후(킬 추출~렌더링)는 완전히 동일한 코드를
 그대로 탄다.
 
+🛡️ [event_type 컬럼 추가 마이그레이션 - 콘솔에서 직접 실행, 여기 코드는 이 컬럼이
+이미 있다고 가정함]
+    ALTER TABLE dor_candidates ADD COLUMN event_type TEXT;
+
 🛡️ [가정한 테이블 스키마 - 실제 Supabase 콘솔 스키마와 다르면 이 파일의 컬럼명만 고치면 됨]
 dor_tokens: id(uuid pk) / guild_id(text) / user_id(text) / token_hash(text) /
             created_at(timestamptz) / expires_at(timestamptz) / revoked_at(timestamptz, null 허용)
 dor_candidates: id(uuid pk) / guild_id(text) / user_id(text) / platform_region(text) /
             raw_match_id(bigint) / riot_uuid(text, 참고용만-아래 설명) / champion(text) /
-            tag(text) / queue_id(int) / queue_type(text) / win(bool) /
+            tag(text) / event_type(text) / queue_id(int) / queue_type(text) / win(bool) /
             kills/deaths/assists(int, 매치 최종 KDA - 표시용만) /
             killer_name/victim_name(text) / assisters(jsonb) /
             event_time_sec/rec_offset_sec/clip_duration_sec(double precision) /
             storage_path(text) / original_filename(text) /
             status(text: 'pending'|'processing'|'consumed'|'unprocessable') /
             created_at(timestamptz)
+
+🛡️ [tag와 event_type을 혼동하지 말 것 - 완전히 다른 레벨의 값]
+- tag = basicGameData.tag. 그 "매치 전체"에서 가장 잘한 기록(예: 그 경기 최고가
+  더블킬이었다) - 세션 공용 값이라 같은 매치에서 나온 클립이면 전부 똑같은 값을
+  가진다. 이 클립 하나가 뭐였는지와는 무관할 수 있다.
+- event_type = 그 클립의 clipData.eventType 그 자체("Kill"/"DoubleKill"/
+  "TripleKill"/"QuadraKill"/"PentaKill" - dor-companion/scanner.py의
+  UPLOADABLE_EVENT_TYPES와 반드시 일치해야 할 값들만 여기 들어온다). /dor_list가
+  "멀티킬(더블+) 섹션"과 "솔로킬 섹션"을 실제로 나누는 데 쓰는 건 이 컬럼이다 -
+  tag로 나누면 매치 단위라 클립 단위 분류가 안 맞는다(16-24-16.mp4 실측 사례:
+  eventData에 ChampionKill이 2건 있어도 간격이 멀티킬 유지시간을 넘기면
+  event_type은 "Kill"로 남는 것과 동일한 이유로, 클립별 진짜 분류는 event_type만
+  믿을 수 있다).
 
 🛡️ [DOR의 riotUuid를 신원 식별에 안 쓰는 이유] 샘플 값("8404e8e4-889a-5105-a717-
 6bde79dde2ec")이 표준 UUID 형식인데, 이번 세션 내내 실측된 진짜 Riot PUUID는 78자
@@ -84,7 +101,18 @@ DOR_STORAGE_BUCKET = "dor-clips"
 DOR_TOKEN_EXPIRY_DAYS = 90
 DOR_CANDIDATE_EXPIRY_DAYS = 3
 DOR_CLEANUP_INTERVAL_SECONDS = 3600  # 1시간마다
-DOR_LIST_MAX_OPTIONS = 25  # Discord Select 옵션 상한(API 레벨 제약)
+DOR_LIST_MAX_OPTIONS = 25  # Discord Select 옵션 상한(API 레벨 제약) - 섹션(Select)당 적용
+
+# 🛡️ [멀티킬/솔로킬 섹션 분리 기준 - event_type 컬럼, tag 컬럼 아님] 위 모듈 docstring의
+# "tag와 event_type을 혼동하지 말 것" 참고.
+DOR_LIST_MULTI_KILL_EVENT_TYPES = ("DoubleKill", "TripleKill", "QuadraKill", "PentaKill")
+DOR_LIST_SOLO_KILL_EVENT_TYPE = "Kill"
+DOR_STREAK_DISPLAY_LABELS = {
+    "DoubleKill": "Double Kill",
+    "TripleKill": "Triple Kill",
+    "QuadraKill": "Quadra Kill",
+    "PentaKill": "Penta Kill",
+}
 
 
 def _generate_dor_token() -> str:
@@ -93,6 +121,24 @@ def _generate_dor_token() -> str:
 
 def _hash_dor_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _build_candidate_option_label(candidate: dict) -> str:
+    """Select 옵션 라벨 - 실제 killer_name/victim_name(둘 다 챔피언명, 한국어 챔피언명
+    번역 테이블은 레포에 없어서 저장된 그대로 영문으로 표시)과 그 클립 고유의
+    event_type(매치 전체 기록인 tag가 아님)으로 "누가 누굴 죽였는지"를 구체적으로
+    보여준다. Discord Select label 100자 제한 - 챔피언명이 가장 긴 경우(예:
+    "Renata Glasc"+"Twisted Fate"+"Penta Kill"+타임스탬프)도 100자를 넘지 않지만,
+    혹시 모를 이상 데이터에 대한 방어로 끝에서 자른다."""
+    killer = candidate.get("killer_name") or "?"
+    victim = candidate.get("victim_name") or "?"
+    streak_label = DOR_STREAK_DISPLAY_LABELS.get(candidate.get("event_type"))
+    created = (candidate.get("created_at") or "")[:16].replace("T", " ")
+    if streak_label:
+        label = f"{killer} killed {victim} ({streak_label}) · {created}"
+    else:
+        label = f"{killer} killed {victim} · {created}"
+    return label[:100]
 
 
 class _DorVideoAdapter:
@@ -112,24 +158,37 @@ class _DorVideoAdapter:
 
 class DorCandidateSelectView(discord.ui.View):
     """cogs/party.py의 PositionSelectView와 완전히 동일한 패턴 - 그 순간의 pending 후보
-    목록만 담아 매번 새로 만드는 일회성 Select다. 절대 재사용하면 안 된다(재사용하면
-    먼저 만든 인스턴스의 후보 목록이 나중 호출에도 남는다)."""
+    목록만 담아 매번 새로 만드는 일회성 View다. 절대 재사용하면 안 된다(재사용하면
+    먼저 만든 인스턴스의 후보 목록이 나중 호출에도 남는다).
 
-    def __init__(self, cog: "KyvoDor", author_id: int, candidates: list[dict]):
+    🛡️ [Select 2개 - 멀티킬/솔로킬 섹션 분리] 각 Select는 독립적으로 Discord의 25개
+    옵션 상한(DOR_LIST_MAX_OPTIONS)을 가지므로, 합쳐서 최대 50개까지 한 메시지에서
+    보여줄 수 있다(섹션 하나짜리였던 예전보다 오히려 더 넉넉함). 두 Select의 최종
+    처리(_process_selected_candidate)는 완전히 동일해서 콜백을 공유하되, 과거처럼
+    `self.children[0]`을 하드코딩하면 2개짜리 View에서 항상 첫 번째 Select만 보게
+    되므로, 콜백이 자기 자신의 select 객체를 클로저로 받아쓰게 고쳤다."""
+
+    def __init__(self, cog: "KyvoDor", author_id: int, multi_candidates: list[dict], solo_candidates: list[dict]):
         super().__init__(timeout=120)
         self.cog = cog
         self.author_id = author_id
 
-        options = []
-        for c in candidates:
-            created = (c.get("created_at") or "")[:16].replace("T", " ")
-            tag = c.get("tag") or "Kill"
-            champ = c.get("champion") or "?"
-            label = f"{champ} · {tag} · {created}"[:100]
-            options.append(discord.SelectOption(label=label, value=c["id"]))
+        if multi_candidates:
+            self._add_select(multi_candidates, "🔥 Multi-kills (Double+) - choose one...")
+        if solo_candidates:
+            self._add_select(solo_candidates, "⚔️ Solo kills - choose one...")
 
-        select = discord.ui.Select(placeholder="Choose a clip to turn into a highlight...", options=options)
-        select.callback = self._on_select
+    def _add_select(self, candidates: list[dict], placeholder: str) -> None:
+        options = [
+            discord.SelectOption(label=_build_candidate_option_label(c), value=c["id"])
+            for c in candidates
+        ]
+        select = discord.ui.Select(placeholder=placeholder, options=options)
+
+        async def on_select(interaction: discord.Interaction, _select: discord.ui.Select = select):
+            await self._handle_select(interaction, _select)
+
+        select.callback = on_select
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -138,8 +197,7 @@ class DorCandidateSelectView(discord.ui.View):
             return False
         return True
 
-    async def _on_select(self, interaction: discord.Interaction):
-        select: discord.ui.Select = self.children[0]
+    async def _handle_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         candidate_id = select.values[0]
         for item in self.children:
             item.disabled = True
@@ -362,7 +420,8 @@ class KyvoDor(KyvoBaseCog):
             "raw_match_id": basic.get("matchId"),
             "riot_uuid": basic.get("riotUuid"),
             "champion": basic.get("champion"),
-            "tag": basic.get("tag"),
+            "tag": basic.get("tag"),  # 매치 전체 기록 (basicGameData.tag) - 클립별 분류용 아님
+            "event_type": clip_data.get("eventType"),  # 이 클립 자체의 값 - /dor_list 섹션 분류용
             "queue_id": basic.get("queueId"),
             "queue_type": basic.get("queueType"),
             "win": basic.get("win"),
@@ -405,24 +464,36 @@ class KyvoDor(KyvoBaseCog):
         user_id = interaction.user.id
 
         try:
-            res = await self._db_call(
+            # 🛡️ [섹션별 독립 쿼리 - event_type 기준, tag 아님] 각자 최신 DOR_LIST_MAX_OPTIONS
+            # (25)개까지만 가져온다 - 그보다 오래된 건 강제로 만료시키지 않고 그냥 이번 목록에
+            # 안 보여줄 뿐이다(3일 만료는 cleanup_expired_candidates가 event_type과 무관하게
+            # 별도로 처리하므로 데이터 유실 없음 - 사용자가 처리하면서 최신 것들이 'consumed'로
+            # 빠지면 다음 /dor_list 호출 때 자연히 다시 올라온다).
+            multi_res = await self._db_call(
                 lambda: self.bot.supabase.table("dor_candidates").select("*")
                         .eq("guild_id", str(guild_id)).eq("user_id", str(user_id))
-                        .eq("status", "pending").order("created_at", desc=True)
-                        .limit(DOR_LIST_MAX_OPTIONS).execute()
+                        .eq("status", "pending").in_("event_type", list(DOR_LIST_MULTI_KILL_EVENT_TYPES))
+                        .order("created_at", desc=True).limit(DOR_LIST_MAX_OPTIONS).execute()
             )
-            candidates = res.data or []
+            solo_res = await self._db_call(
+                lambda: self.bot.supabase.table("dor_candidates").select("*")
+                        .eq("guild_id", str(guild_id)).eq("user_id", str(user_id))
+                        .eq("status", "pending").eq("event_type", DOR_LIST_SOLO_KILL_EVENT_TYPE)
+                        .order("created_at", desc=True).limit(DOR_LIST_MAX_OPTIONS).execute()
+            )
+            multi_candidates = multi_res.data or []
+            solo_candidates = solo_res.data or []
         except Exception as e:
             print(f"[DOR][ERROR] Failed to list candidates (guild={guild_id}, user={user_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
             await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
             return
 
-        if not candidates:
+        if not multi_candidates and not solo_candidates:
             await interaction.followup.send("You have no pending DOR clips right now.", ephemeral=True)
             return
 
-        view = DorCandidateSelectView(self, interaction.user.id, candidates)
+        view = DorCandidateSelectView(self, interaction.user.id, multi_candidates, solo_candidates)
         await interaction.followup.send("Select a clip to turn into a highlight:", view=view, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
