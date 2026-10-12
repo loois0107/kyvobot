@@ -9,6 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client, Client
 from aiohttp import web
 
+# 🛡️ [client_max_size - DOR 업로드 413 수정] cogs.highlight의 MAX_ATTACHMENT_BYTES(100MB)를
+# 그대로 재사용한다 - 숫자를 또 하드코딩하면 한쪽만 바뀌는 괴리가 생길 수 있어서다. 이 시점에
+# cogs.highlight를 import해도 안전한 이유: 이 모듈이 임포트 시점에 하는 RIOT_API_KEY/
+# OPENAI_API_KEY 등 환경변수 체크는, 어차피 잠시 뒤 extensions 로딩 때 똑같이 import되면서
+# 하게 될 체크를 몇 줄 앞당기는 것뿐이고(env var는 python 프로세스 시작 전에 이미 OS/배포
+# 플랫폼이 주입해두므로 로딩 타이밍과 무관), cogs/dor.py도 이미 똑같은 패턴으로 cogs.highlight를
+# 가져다 쓴다.
+from cogs.highlight import MAX_ATTACHMENT_BYTES
+
 print(">>> KYVO MAIN.PY VERSION 2026-07-17-CUSTOMCOMMANDS-FIX <<<", flush=True)
 
 class KyvoBot(commands.Bot):
@@ -148,7 +157,11 @@ class KyvoBot(commands.Bot):
                 pass
 
     def init_web_app(self):
-        self.web_app = web.Application()
+        # 🛡️ [client_max_size 명시 - 기본값 1MB 때문에 DOR 영상 업로드가 413으로 막혔었음]
+        # 모든 /internal/* 라우트(dor.py 포함)가 이 Application 인스턴스 하나를 공유하므로,
+        # 여기 한 곳만 고치면 전부 적용된다. MAX_ATTACHMENT_BYTES(100MB, cogs/highlight.py)와
+        # 동일하게 맞춰서 /highlight가 받는 최대 영상 크기와 일관되게 유지한다.
+        self.web_app = web.Application(client_max_size=MAX_ATTACHMENT_BYTES)
         self.web_app.router.add_get('/', lambda request: web.Response(text="KyvoBot AI Engine is Online and Running!"))
 
     async def start_web_server(self):
