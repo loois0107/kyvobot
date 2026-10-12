@@ -395,7 +395,12 @@ class KyvoDor(KyvoBaseCog):
         async for part in reader:
             if part.name == "video":
                 video_filename = part.filename or f"{uuid.uuid4()}.mp4"
-                video_bytes = await part.read(decode=False)
+                # 🛡️ [bytearray -> bytes 명시적 변환] aiohttp의 BodyPartReader.read(decode=False)는
+                # 타입힌트가 -> bytes라고 주장하지만 실제로는 bytearray를 반환한다(라이브러리 소스
+                # 직접 확인함) - storage3.upload()의 타입 분기가 isinstance(file, bytes)만 체크해서
+                # bytearray는 "파일 경로 문자열"로 오인해 open(file, "rb")을 호출하다가
+                # "TypeError: expected str, bytes or os.PathLike object, not bytearray"로 터졌다.
+                video_bytes = bytes(await part.read(decode=False))
             elif part.name == "clip_events":
                 raw = await part.read(decode=False)
                 try:
