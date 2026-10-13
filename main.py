@@ -95,10 +95,52 @@ class KyvoBot(commands.Bot):
         except Exception as e:
             print(f"[SYSTEM ERROR] Failed to register Korean command translator: {e}", flush=True)
 
+        # 🛡️ [Entry Point 커맨드 통합 동기화] Discord Activity의 Launch 버튼이 뜨려면
+        # PRIMARY_ENTRY_POINT(type=4) 커맨드가 전역 커맨드 목록에 있어야 하는데, discord.py
+        # 2.7.1(최신 릴리스)은 AppCommandType에 entry point 자체가 없어 CommandTree로는
+        # 등록할 방법이 없다(공식 지원 없음 - 조사 완료). 그렇다고 tree.sync()와 별도로
+        # entry point를 POST 업서트하면, Discord가 "entry point가 이미 존재하면 bulk overwrite
+        # payload 안에 반드시 같이 포함돼야 한다"고 요구하기 때문에(안 넣으면 400 Bad Request,
+        # error code 50240 - 실제로 겪은 에러) tree.sync()가 매번 실패한다. 그래서 tree.sync()가
+        # 내부적으로 하는 일(로컬 커맨드 payload 생성 + bulk overwrite PUT)을 그대로 재현하면서
+        # entry point dict 하나를 같은 payload에 끼워 넣어 단일 PUT으로 합쳐 보낸다.
         try:
-            print("[SYSTEM LOG] Syncing application commands globally...", flush=True)
-            synced = await self.tree.sync()
-            print(f"[SYSTEM LOG] Successfully synced {len(synced)} commands globally to Discord.", flush=True)
+            print("[SYSTEM LOG] Syncing application commands globally (entry point 포함)...", flush=True)
+
+            # 🛡️ discord.py 내부 구현에 의존 - 버전 올릴 때 확인 필요
+            # tree.sync()(app_commands/tree.py)가 쓰는 것과 동일한 절차: _get_all_commands()로
+            # 로컬 커맨드를 얻고, translator가 등록돼 있으면(바로 위에서 KoreanCommandTranslator
+            # 등록함) get_translated_payload()로, 없으면 to_dict()로 payload를 만든다. 이 네
+            # 개(_get_all_commands/to_dict/get_translated_payload/tree.translator)는 전부
+            # 언더스코어가 붙었거나 공식 문서화되지 않은 내부 API라, discord.py를 업그레이드할
+            # 때 시그니처가 바뀌면 조용히 깨질 수 있다 - 그래서 아래 except AttributeError에서
+            # 따로 크게 로그를 남긴다.
+            local_commands = self.tree._get_all_commands(guild=None)
+            translator = self.tree.translator
+            if translator:
+                payload = [await command.get_translated_payload(self.tree, translator) for command in local_commands]
+            else:
+                payload = [command.to_dict(self.tree) for command in local_commands]
+
+            payload.append({
+                "name": "launch",
+                "description": "카이보와 함께 미니게임 실행하기",
+                "type": 4,     # PRIMARY_ENTRY_POINT
+                "handler": 2,  # DISCORD_LAUNCH_ACTIVITY
+            })
+
+            synced = await self.http.bulk_upsert_global_commands(self.application_id, payload=payload)
+            print(
+                f"[SYSTEM LOG] Successfully synced {len(synced)} commands globally to Discord "
+                f"(entry point 'launch' 포함).",
+                flush=True,
+            )
+        except AttributeError as e:
+            print(
+                f"[SYSTEM ERROR] discord.py 내부 API 변경으로 추정됨 (버전 확인 필요) - "
+                f"커맨드 동기화 실패: {e}",
+                flush=True,
+            )
         except Exception as e:
             print(f"[SYSTEM ERROR] Failed global sync during startup: {e}", flush=True)
 
