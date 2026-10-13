@@ -13,7 +13,7 @@ DOR(서드파티 로컬 녹화 프로그램) 연동 - "유저 PC의 DOR이 서�
 dor_tokens: id(uuid pk) / guild_id(text) / user_id(text) / token_hash(text) /
             created_at(timestamptz) / expires_at(timestamptz) / revoked_at(timestamptz, null 허용)
 dor_candidates: id(uuid pk) / guild_id(text) / user_id(text) / platform_region(text) /
-            raw_match_id(bigint) / riot_uuid(text, 참고용만-아래 설명) / champion(text) /
+            match_id(bigint) / riot_uuid(text, 참고용만-아래 설명) / champion(text) /
             tag(text) / event_type(text) / queue_id(int) / queue_type(text) / win(bool) /
             kills/deaths/assists(int, 매치 최종 KDA - 표시용만) /
             killer_name/victim_name(text) / assisters(jsonb) /
@@ -436,7 +436,7 @@ class KyvoDor(KyvoBaseCog):
         row = {
             "guild_id": guild_id, "user_id": user_id,
             "platform_region": platform_region,
-            "raw_match_id": basic.get("matchId"),
+            "match_id": basic.get("matchId"),
             "riot_uuid": basic.get("riotUuid"),
             "champion": basic.get("champion"),
             "tag": basic.get("tag"),  # 매치 전체 기록 (basicGameData.tag) - 클립별 분류용 아님
@@ -603,7 +603,7 @@ class KyvoDor(KyvoBaseCog):
             return
 
         # 5) Riot API 직접 조회 - OCR 없이 matchId를 바로 조합
-        match_id = f"{platform_region.upper()}_{candidate['raw_match_id']}"
+        match_id = f"{platform_region.upper()}_{candidate['match_id']}"
         try:
             async with aiohttp.ClientSession() as session:
                 chosen = await highlight_cog._riot_get(
