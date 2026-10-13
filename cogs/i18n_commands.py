@@ -83,10 +83,6 @@ COMMAND_KO: dict[str, dict[str, str]] = {
     # 클라이언트에서도 영어로 떴던 문제 - 뒤늦게 추가.
     "highlight": {"name": "하이라이트", "description": "게임 클립을 실제 매치 기록 기반 AI 해설 하이라이트 영상으로 만듭니다(먼저 /tier_verify 필요)."},
 
-    # ── dor.py ──
-    "dor_token": {"name": "dor토큰발급", "description": "DOR 데스크톱 컴패니언 앱에서 쓸 개인 업로드 토큰을 발급합니다."},
-    "dor_list": {"name": "dor클립목록", "description": "대기 중인 DOR 클립 목록을 보고 하나를 골라 하이라이트로 만듭니다."},
-
     # ── giveaway.py ──
     "giveaway points": {"name": "포인트", "description": "당첨자에게 포인트를 지급하는 추첨을 생성합니다."},
     "giveaway role": {"name": "역할", "description": "당첨자에게 역할을 부여하는 추첨을 생성합니다."},
