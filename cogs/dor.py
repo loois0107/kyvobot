@@ -107,11 +107,13 @@ DOR_LIST_MAX_OPTIONS = 25  # Discord Select 옵션 상한(API 레벨 제약) - �
 # "tag와 event_type을 혼동하지 말 것" 참고.
 DOR_LIST_MULTI_KILL_EVENT_TYPES = ("DoubleKill", "TripleKill", "QuadraKill", "PentaKill")
 DOR_LIST_SOLO_KILL_EVENT_TYPE = "Kill"
+# 🛡️ [언어별 스트릭 라벨 - locales/*.json이 아니라 여기 그대로 둠] 원래부터 "문장"이
+# 아니라 짧은 열거형 라벨 데이터였던 걸 언어별로만 나눴다 - Select 라벨 포맷 문자열
+# 자체(DOR_OPTION_LABEL_*)는 get_msg()/locales로 옮기되, 거기 끼워 넣는 이 라벨 값은
+# 그대로 Python dict로 둔다.
 DOR_STREAK_DISPLAY_LABELS = {
-    "DoubleKill": "Double Kill",
-    "TripleKill": "Triple Kill",
-    "QuadraKill": "Quadra Kill",
-    "PentaKill": "Penta Kill",
+    "en": {"DoubleKill": "Double Kill", "TripleKill": "Triple Kill", "QuadraKill": "Quadra Kill", "PentaKill": "Penta Kill"},
+    "ko": {"DoubleKill": "더블킬", "TripleKill": "트리플킬", "QuadraKill": "쿼드라킬", "PentaKill": "펜타킬"},
 }
 
 
@@ -123,31 +125,45 @@ def _hash_dor_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _build_candidate_option_label(candidate: dict, champion_name_ko_map: dict[str, str] | None = None) -> str:
+def _build_candidate_option_label(
+    candidate: dict, lang: str, label_template_streak: str, label_template_no_streak: str,
+    champion_name_ko_map: dict[str, str] | None = None,
+) -> str:
     """Select 옵션 라벨 - killer_name/victim_name(둘 다 챔피언명)을 champion_name_ko_map으로
     한국어 이름으로 바꿔서 "누가 누굴 죽였는지"를 구체적으로 보여준다. 맵에 없는 챔피언이
     있으면(신규 챔피언 패치 직후, Data Dragon 호출 실패 등) 조용히 영문 그대로 폴백한다 -
-    라벨 자체가 안 뜨는 것보다 영문이라도 뜨는 쪽이 낫다. 조사(이/가, 을/를) 처리는
-    cogs/highlight.py가 내레이션 생성에 이미 쓰고 있는 _i_or_ga/_eul_or_reul을 그대로
-    재사용한다(같은 종류의 문제라 중복 구현할 이유가 없음).
+    라벨 자체가 안 뜨는 것보다 영문이라도 뜨는 쪽이 낫다.
+
+    🛡️ [언어별 어순이 달라서 조사는 여기서 미리 붙여서 넘김] 영어는 "{killer} killed
+    {victim}" 순이고 한국어는 "{killer}가 {victim}를 처치" 순이라, get_msg()의
+    .format(**kwargs)만으로는 어순 자체를 못 바꾼다(locales/*.json 쪽에 언어별로
+    다른 포맷 문자열(dor_option_label_streak/no_streak)을 이미 따로 두었다) - 대신
+    "killer"/"victim" kwargs 값 자체에 한국어일 때만 조사(이/가, 을/를)를 미리 붙여서
+    넘기면, 포맷 문자열은 그 값을 그대로 꽂기만 하면 된다. 조사 계산은 cogs/highlight.py가
+    내레이션 생성에 이미 쓰고 있는 _i_or_ga/_eul_or_reul을 재사용(중복 구현 안 함).
 
     event_type은 그 클립 고유의 값(매치 전체 기록인 tag가 아님)이고, Discord Select
-    label은 100자 제한 - 한국어 챔피언명 중 가장 긴 조합(예: "트위스티드 페이트"+
-    "레나타 글라스크"+"Penta Kill"+타임스탬프)도 100자를 넘지 않지만, 혹시 모를 이상
-    데이터에 대한 방어로 끝에서 자른다."""
+    label은 100자 제한 - 한국어 챔피언명 중 가장 긴 조합도 100자를 넘지 않지만, 혹시
+    모를 이상 데이터에 대한 방어로 끝에서 자른다."""
     champion_name_ko_map = champion_name_ko_map or {}
     killer = candidate.get("killer_name") or "?"
     victim = candidate.get("victim_name") or "?"
-    killer_ko = champion_name_ko_map.get(killer, killer)
-    victim_ko = champion_name_ko_map.get(victim, victim)
-    streak_label = DOR_STREAK_DISPLAY_LABELS.get(candidate.get("event_type"))
+    streak_label = DOR_STREAK_DISPLAY_LABELS.get(lang, DOR_STREAK_DISPLAY_LABELS["en"]).get(candidate.get("event_type"))
     created = (candidate.get("created_at") or "")[:16].replace("T", " ")
-    killer_phrase = f"{killer_ko}{highlight_mod._i_or_ga(killer_ko)}"
-    victim_phrase = f"{victim_ko}{highlight_mod._eul_or_reul(victim_ko)}"
-    if streak_label:
-        label = f"{killer_phrase} {victim_phrase} 처치 ({streak_label}) · {created}"
+
+    # 🛡️ [챔피언명 한국어 치환은 lang=="ko"일 때만] 영어 길드인데 champion_name_ko_map을
+    # 그대로 적용하면 "Lucian killed 비에고"처럼 언어가 섞인 문구가 나온다 - 영어 템플릿은
+    # 원본 영문 챔피언명(killer_name/victim_name 그대로)을 써야 한다.
+    if lang == "ko":
+        killer_ko = champion_name_ko_map.get(killer, killer)
+        victim_ko = champion_name_ko_map.get(victim, victim)
+        killer_phrase = f"{killer_ko}{highlight_mod._i_or_ga(killer_ko)}"
+        victim_phrase = f"{victim_ko}{highlight_mod._eul_or_reul(victim_ko)}"
     else:
-        label = f"{killer_phrase} {victim_phrase} 처치 · {created}"
+        killer_phrase, victim_phrase = killer, victim
+
+    template = label_template_streak if streak_label else label_template_no_streak
+    label = template.format(killer=killer_phrase, victim=victim_phrase, streak=streak_label, created=created)
     return label[:100]
 
 
@@ -179,21 +195,27 @@ class DorCandidateSelectView(discord.ui.View):
     되므로, 콜백이 자기 자신의 select 객체를 클로저로 받아쓰게 고쳤다."""
 
     def __init__(self, cog: "KyvoDor", author_id: int, multi_candidates: list[dict], solo_candidates: list[dict],
-                 champion_name_ko_map: dict[str, str] | None = None):
+                 lang: str, messages: dict[str, str], champion_name_ko_map: dict[str, str] | None = None):
         super().__init__(timeout=120)
         self.cog = cog
         self.author_id = author_id
+        self.lang = lang
+        self.messages = messages
         self.champion_name_ko_map = champion_name_ko_map or {}
 
         if multi_candidates:
-            self._add_select(multi_candidates, "🔥 Multi-kills (Double+) - choose one...")
+            self._add_select(multi_candidates, self.messages["placeholder_multi"])
         if solo_candidates:
-            self._add_select(solo_candidates, "⚔️ Solo kills - choose one...")
+            self._add_select(solo_candidates, self.messages["placeholder_solo"])
 
     def _add_select(self, candidates: list[dict], placeholder: str) -> None:
         options = [
             discord.SelectOption(
-                label=_build_candidate_option_label(c, self.champion_name_ko_map), value=c["id"]
+                label=_build_candidate_option_label(
+                    c, self.lang, self.messages["option_streak"], self.messages["option_no_streak"],
+                    self.champion_name_ko_map,
+                ),
+                value=c["id"],
             )
             for c in candidates
         ]
@@ -207,7 +229,7 @@ class DorCandidateSelectView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ This selection is not for you.", ephemeral=True)
+            await interaction.response.send_message(self.messages["select_not_yours"], ephemeral=True)
             return False
         return True
 
@@ -215,7 +237,7 @@ class DorCandidateSelectView(discord.ui.View):
         candidate_id = select.values[0]
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="⏳ Processing your selection...", view=self)
+        await interaction.response.edit_message(content=self.messages["processing_selection"], view=self)
         self.stop()
         await self.cog._process_selected_candidate(interaction, candidate_id)
 
@@ -282,12 +304,10 @@ class KyvoDor(KyvoBaseCog):
         except Exception as e:
             print(f"[DOR][ERROR] Failed to check verification (guild={guild_id}, user={user_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
         if not verified:
-            await interaction.followup.send(
-                "❌ You need to verify your League account first - run `/tier_verify`.", ephemeral=True
-            )
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_not_verified"), ephemeral=True)
             return
 
         now = datetime.now(timezone.utc)
@@ -304,7 +324,7 @@ class KyvoDor(KyvoBaseCog):
         except Exception as e:
             print(f"[DOR][ERROR] Failed to revoke old token (guild={guild_id}, user={user_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
 
         raw_token = _generate_dor_token()
@@ -321,18 +341,14 @@ class KyvoDor(KyvoBaseCog):
         except Exception as e:
             print(f"[DOR][ERROR] Failed to store new token (guild={guild_id}, user={user_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
 
         # 🛡️ [원문은 여기서 딱 한 번만] 해시만 DB에 남고, 평문 토큰은 이 응답 이후로는
         # 서버 어디에도 안 남는다 - ephemeral이라 유저 본인한테만 보이고, 재발급하면
         # 이 메시지를 다시 봐도 이미 지난 토큰이라 의미 없다.
         await interaction.followup.send(
-            "🔑 **Your DOR upload token (shown only once - copy it now):**\n"
-            f"```\n{raw_token}\n```\n"
-            "Paste this into the DOR companion app's settings. Running `/dor_token` again will "
-            "immediately invalidate this token and issue a new one.",
-            ephemeral=True,
+            await self.get_msg(guild_id, "dor_token_issued", token=raw_token), ephemeral=True
         )
 
     # ══════════════════════════════════════════════════════════
@@ -505,16 +521,34 @@ class KyvoDor(KyvoBaseCog):
         except Exception as e:
             print(f"[DOR][ERROR] Failed to list candidates (guild={guild_id}, user={user_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
 
         if not multi_candidates and not solo_candidates:
-            await interaction.followup.send("You have no pending DOR clips right now.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_list_empty"), ephemeral=True)
             return
 
-        champion_name_ko_map = await highlight_mod.get_champion_name_ko_map()
-        view = DorCandidateSelectView(self, interaction.user.id, multi_candidates, solo_candidates, champion_name_ko_map)
-        await interaction.followup.send("Select a clip to turn into a highlight:", view=view, ephemeral=True)
+        # 🛡️ [View에 넘길 메시지 뭉치를 여기서 한 번에 resolve] View 생성자는 동기 함수라
+        # 그 안에서 await get_msg()를 못 부른다 - champion_name_ko_map과 동일한 방식으로,
+        # 여기서 전부 미리 받아와 messages dict로 통째로 넘긴다. lang은 _build_candidate_
+        # option_label이 조사(이/가, 을/를)를 붙일지 결정하는 데도 같이 쓰인다.
+        settings = await self.get_guild_settings(guild_id)
+        lang = settings.get("language") or "en"
+        messages = {
+            "placeholder_multi": await self.get_msg(guild_id, "dor_placeholder_multi"),
+            "placeholder_solo": await self.get_msg(guild_id, "dor_placeholder_solo"),
+            "option_streak": await self.get_msg(guild_id, "dor_option_label_streak"),
+            "option_no_streak": await self.get_msg(guild_id, "dor_option_label_no_streak"),
+            "select_not_yours": await self.get_msg(guild_id, "dor_select_not_yours"),
+            "processing_selection": await self.get_msg(guild_id, "dor_processing_selection"),
+        }
+        # 🛡️ [영어 길드는 이 맵을 안 받아옴] highlight.py의 _generate_commentary와 동일한
+        # 원칙 - 영어 모드는 어차피 챔피언명을 번역 안 쓰므로 불필요한 네트워크 호출도 없음.
+        champion_name_ko_map = await highlight_mod.get_champion_name_ko_map() if lang == "ko" else {}
+        view = DorCandidateSelectView(
+            self, interaction.user.id, multi_candidates, solo_candidates, lang, messages, champion_name_ko_map
+        )
+        await interaction.followup.send(await self.get_msg(guild_id, "dor_list_prompt"), view=view, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════
     #  선택 콜백 - 일일 한도 체크부터 _run_pipeline 합류까지
@@ -525,22 +559,23 @@ class KyvoDor(KyvoBaseCog):
         highlight_cog = self._highlight_cog()
         tv_cog = self._tier_verify_cog_instance()
         if highlight_cog is None or tv_cog is None:
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
 
         # 1) 일일 한도 - /highlight와 동일한 지점(처리 시작 직전), 동일한 Redis 키 네임스페이스
-        #    공유(같은 하루 한도를 같이 쓴다 - DOR로 만들었다고 별도 한도가 생기지 않음).
+        #    공유(같은 하루 한도를 같이 쓴다 - DOR로 만들었다고 별도 한도가 생기지 않음). 메시지
+        #    키도 highlight.py가 이미 쓰는 걸 그대로 재사용한다(DOR이라고 따로 만들 이유 없음).
         guild_daily_key = f"highlight_daily:guild:{guild_id}"
         user_daily_key = f"highlight_daily:user:{guild_id}:{user_id}"
         if not await highlight_cog._check_daily_limit(guild_daily_key, highlight_mod.HIGHLIGHT_DAILY_LIMIT_GUILD):
             await interaction.followup.send(
-                f"❌ This server's daily highlight limit ({highlight_mod.HIGHLIGHT_DAILY_LIMIT_GUILD}) has been reached.",
+                await self.get_msg(guild_id, "highlight_err_daily_limit_guild", limit=highlight_mod.HIGHLIGHT_DAILY_LIMIT_GUILD),
                 ephemeral=True,
             )
             return
         if not await highlight_cog._check_daily_limit(user_daily_key, highlight_mod.HIGHLIGHT_DAILY_LIMIT_USER):
             await interaction.followup.send(
-                f"❌ Your daily highlight limit ({highlight_mod.HIGHLIGHT_DAILY_LIMIT_USER}) has been reached.",
+                await self.get_msg(guild_id, "highlight_err_daily_limit_user", limit=highlight_mod.HIGHLIGHT_DAILY_LIMIT_USER),
                 ephemeral=True,
             )
             return
@@ -555,26 +590,23 @@ class KyvoDor(KyvoBaseCog):
             )
         except Exception as e:
             print(f"[DOR][ERROR] Failed to claim candidate {candidate_id}: {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
         if not claim_res.data:
-            await interaction.followup.send(
-                "❌ This clip was already processed (or picked by someone else) - run `/dor_list` again.",
-                ephemeral=True,
-            )
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_already_processed"), ephemeral=True)
             return
         candidate = claim_res.data[0]
 
-        async def fail(reason_msg: str):
+        async def fail(msg_key: str):
             await self._mark_unprocessable(candidate_id)
-            await interaction.followup.send(reason_msg, ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, msg_key), ephemeral=True)
 
         guild_id_str = candidate["guild_id"]
         user_id_str = candidate["user_id"]
         platform_region = candidate["platform_region"]
         regional_route = tier_verify_mod.PLATFORM_TO_REGIONAL.get(platform_region)
         if not regional_route:
-            await fail("❌ Could not resolve this clip's region.")
+            await fail("dor_err_region_not_resolved")
             return
 
         # 3) puuid는 DOR의 riotUuid가 아니라 (guild_id,user_id) 신원으로 riot_verifications를
@@ -587,10 +619,10 @@ class KyvoDor(KyvoBaseCog):
             puuid_rows = puuid_res.data or []
         except Exception as e:
             print(f"[DOR][ERROR] puuid lookup failed (candidate={candidate_id}): {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_generic"), ephemeral=True)
             return
         if not puuid_rows:
-            await fail("❌ Your Riot verification could not be found - run `/tier_verify` again.")
+            await fail("dor_err_verification_not_found")
             return
         puuid = puuid_rows[0]["puuid"]
 
@@ -599,7 +631,7 @@ class KyvoDor(KyvoBaseCog):
             video_bytes = await self._to_executor(self._storage_download, candidate["storage_path"])
         except Exception as e:
             print(f"[DOR][ERROR] Storage download failed (candidate={candidate_id}): {type(e).__name__}: {e}", flush=True)
-            await interaction.followup.send("❌ Could not retrieve this clip's video file.", ephemeral=True)
+            await interaction.followup.send(await self.get_msg(guild_id, "dor_err_video_download_failed"), ephemeral=True)
             return
 
         # 5) Riot API 직접 조회 - OCR 없이 matchId를 바로 조합
@@ -614,7 +646,7 @@ class KyvoDor(KyvoBaseCog):
         except Exception as e:
             print(f"[DOR][WARN] Riot API fetch failed for {match_id} (candidate={candidate_id}): "
                   f"{type(e).__name__}: {e}", flush=True)
-            await fail("❌ Could not fetch this match from Riot's servers.")
+            await fail("dor_err_riot_fetch_failed")
             return
 
         # 6) 킬 이벤트 매칭 - KillerName/VictimName(챔피언 이름)으로 후보를 좁히고, 같은
@@ -634,12 +666,12 @@ class KyvoDor(KyvoBaseCog):
         killer_pid = champ_to_pid.get(candidate["killer_name"])
         victim_pid = champ_to_pid.get(candidate["victim_name"])
         if killer_pid is None or victim_pid is None:
-            await fail("❌ Could not match this clip's champions to the match data.")
+            await fail("dor_err_champion_match_failed")
             return
 
         matching_kills = [k for k in kills if k["killer_id"] == killer_pid and k["victim_id"] == victim_pid]
         if not matching_kills:
-            await fail("❌ Could not find a matching kill in this match's timeline.")
+            await fail("dor_err_kill_not_found")
             return
 
         event_time_sec = candidate["event_time_sec"]
@@ -662,7 +694,9 @@ class KyvoDor(KyvoBaseCog):
         work_dir = tempfile.mkdtemp(prefix="kyvo_dor_")
         try:
             adapter = _DorVideoAdapter(video_bytes)
-            progress_msg = await interaction.followup.send("⏳ Building your highlight...", ephemeral=True, wait=True)
+            progress_msg = await interaction.followup.send(
+                await self.get_msg(guild_id, "dor_progress_building"), ephemeral=True, wait=True
+            )
             async with highlight_cog.render_semaphore:
                 await highlight_cog._run_pipeline(
                     interaction, guild_id, adapter, work_dir, progress_msg, tv_cog, regional_route, puuid,
