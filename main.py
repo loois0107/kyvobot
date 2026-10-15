@@ -59,6 +59,7 @@ class KyvoBot(commands.Bot):
             'cogs.giveaway',
             'cogs.reaction_roles',
             'cogs.party',
+            'cogs.brawl_activity_test',  # 🛡️ [스파이크 전용 - 임시] LAUNCH_ACTIVITY 검증용, 확인 끝나면 제거/교체 예정
             'cogs.gg_rsvp',
             'cogs.scrim',
             'cogs.tier_verify',
