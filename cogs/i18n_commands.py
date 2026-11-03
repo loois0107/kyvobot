@@ -108,6 +108,9 @@ COMMAND_KO: dict[str, dict[str, str]] = {
 
     # ── inquiry.py ──
     "inquiry": {"name": "문의", "description": "KyvoBot 개발자에게 직접 문의를 보냅니다."},
+
+    # ── brawl_activity_test.py ──
+    "moa": {"name": "모아", "description": "친구들과 4인 대난투 미니게임을 시작합니다."},
 }
 
 # (qualified_name, 파라미터의 파이썬 식별자) -> {"name": ..., "description": ...}
