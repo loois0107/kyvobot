@@ -105,6 +105,8 @@ class BrawlActivityTestCog(commands.Cog):
         await interaction.response.send_message(
             "아래 버튼을 누르면 격투 Activity(brawl-spike)가 이 텍스트 채널에서 바로 실행됩니다.\n"
             f"같은 음성 채널({voice_channel.name})에 있는 사람만 아래 버튼을 눌러 참가할 수 있어요.\n"
+            "처음 실행하거나 오랜만에 실행하면, 검은 화면에 'WAKING UP' 같은 글자가 20초~1분 정도 보일 수 있어요. "
+            "고장 난 게 아니라 서버가 깨어나는 중이니 그대로 기다려주세요. 그래도 멈춰 있으면 Activity를 닫고 다시 열어보세요.\n"
             "(LAUNCH_ACTIVITY 스파이크 테스트용 - 실제 파티 매칭 기능은 아직 없음)",
             view=LaunchBrawlSpikeView(voice_channel.id),
         )
