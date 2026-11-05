@@ -2,17 +2,20 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.base import KyvoBaseCog
+from locales import get_locale_message
 
 # 🛡️ [스파이크 전용 - 임시 검증 코드] brawl-spike Activity를 일반 텍스트 채널의 버튼에서
 # discord.py의 InteractionResponse.launch_activity()(interaction response type 12,
 # LAUNCH_ACTIVITY, 2.6+에 추가됨)로 실행할 수 있는지만 확인하는 최소 스파이크다. 파티 카드
 # UI나 실제 매칭 로직은 전혀 없다 - 검증 끝나면 이 파일은 지우거나 실제 기능으로 바꿔치기할
-# 예정이다. 커맨드 name/description은 다른 코그들과 동일하게 KoreanCommandTranslator +
-# COMMAND_KO(cogs/i18n_commands.py)로 로케일별 번역된다(유저 개인의 Discord 클라이언트
-# 언어 기준). 버튼 클릭 전 /moa 응답의 본문 메시지는 KyvoBaseCog.get_msg()로 서버 설정
-# 언어(guild_settings.language) 기준으로 번역한다 - 이 둘은 서로 다른 축이라 유저 개인
-# 언어와 서버 설정 언어가 다르면 커맨드 이름/설명과 본문이 각각 다른 언어로 보일 수 있다.
+# 예정이다. 커맨드 name/description과 본문 메시지 둘 다 유저 개인의 Discord 클라이언트
+# 언어(interaction.locale) 기준으로 통일했다 - 커맨드 name/description은 기존대로
+# KoreanCommandTranslator + COMMAND_KO(cogs/i18n_commands.py)가 담당하고, 본문 메시지는
+# get_moa_msg()가 locales/ko.json·en.json의 moa_* 키를 같은 locale 판별 기준
+# (interaction.locale == discord.Locale.korean)으로 직접 조회한다. /language 서버 설정
+# (guild_settings.language, KyvoBaseCog.get_msg가 쓰는 축)은 일반 유저가 못 바꾸는
+# 관리자 전용 설정이라 이 커맨드와는 무관하게 뒀다 - 그래서 이 파일은 KyvoBaseCog를
+# 상속하지 않는다(Redis/Supabase 의존성이 전혀 필요 없다).
 #
 # 🛡️ [사전 확인] brawl-spike의 DISCORD_CLIENT_ID(.env)는 kyvobot-dashboard의 AUTH_DISCORD_ID를
 # 재사용한 값인데, 이 봇 토큰을 디코딩해서 나온 application_id와 정확히 일치한다 - 즉 이 봇과
@@ -23,6 +26,23 @@ from cogs.base import KyvoBaseCog
 # 한다(party.py의 PARTY_JOIN_CUSTOM_ID 등과 같은 이유) - 여기서는 추가로, 이 custom_id가
 # Activity 쪽(discordSdk.customId)에 실제로 전달되는지도 같이 확인하는 게 스파이크의 핵심이다.
 LAUNCH_BUTTON_CUSTOM_ID = "kyvo_brawl_spike_test:launch"
+
+
+# 🛡️ [locale 기반 본문 메시지 헬퍼] KyvoBaseCog.get_msg()와 달리 guild_settings 조회가
+# 전혀 없다 - interaction.locale(유저 개인 Discord 언어)만으로 ko/en을 가른다.
+# KoreanCommandTranslator(cogs/i18n_commands.py)와 완전히 같은 기준(discord.Locale.korean
+# 인지 아닌지 이분법)을 써서, 커맨드 이름/설명과 이 본문이 항상 같은 유저에게 같은 언어로
+# 보이도록 맞췄다. get_msg()의 .format(**kwargs) KeyError 방어를 그대로 복제했다.
+def get_moa_msg(interaction: discord.Interaction, key: str, **kwargs) -> str:
+    lang = "ko" if interaction.locale == discord.Locale.korean else "en"
+    template = get_locale_message(lang, key)
+    if kwargs:
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError) as e:
+            print(f"[BRAWL_SPIKE_TEST][WARN] '{key}' format failed: {type(e).__name__}", flush=True)
+            return template
+    return template
 
 
 class LaunchBrawlSpikeView(discord.ui.View):
@@ -60,9 +80,15 @@ class LaunchBrawlSpikeView(discord.ui.View):
                 if interaction.guild and self.voice_channel_id
                 else None
             )
-            party_channel_name = party_channel.name if party_channel else "해당"
+            # 🛡️ get_moa_msg()는 모듈 레벨 함수라 Cog 인스턴스가 필요 없다 - View가 Cog를
+            # 따로 찾아 들고 있을 필요가 없어졌다(get_msg()를 쓰던 이전 버전과의 차이점).
+            if party_channel:
+                channel_name = party_channel.name
+            else:
+                channel_name = get_moa_msg(interaction, "moa_voice_mismatch_fallback_channel")
+            msg = get_moa_msg(interaction, "moa_voice_mismatch", voice_channel=channel_name)
             await interaction.response.send_message(
-                f"이 파티는 {party_channel_name} 음성 채널에 있는 사람만 참가할 수 있어요.",
+                msg,
                 ephemeral=True,
             )
             return
@@ -83,7 +109,10 @@ class LaunchBrawlSpikeView(discord.ui.View):
                 )
 
 
-class BrawlActivityTestCog(KyvoBaseCog):
+class BrawlActivityTestCog(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
     @app_commands.command(
         name="moa",
         description="Start a 4-player free-for-all mini-game with friends.",
@@ -97,14 +126,15 @@ class BrawlActivityTestCog(KyvoBaseCog):
             member.voice.channel if isinstance(member, discord.Member) and member.voice else None
         )
         if voice_channel is None:
+            msg = get_moa_msg(interaction, "moa_no_voice_channel")
             await interaction.response.send_message(
-                "먼저 음성 채널에 들어간 뒤 다시 시도해주세요.",
+                msg,
                 ephemeral=True,
             )
             return
 
-        message = await self.get_msg(
-            interaction.guild_id,
+        message = get_moa_msg(
+            interaction,
             "moa_launch_message",
             voice_channel=voice_channel.name,
         )

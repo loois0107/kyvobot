@@ -595,5 +595,8 @@
   "inquiry_send_failed": "❌ 문의를 전달하는 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.",
   "inquiry_reply_dm_title": "💌 문의하신 내용에 답변이 도착했어요",
   "inquiry_reply_dm_footer": "KyvoBot 문의 답변",
-  "moa_launch_message": "아래 버튼을 누르면 MOA가 이 텍스트 채널에서 바로 실행됩니다.\n같은 음성 채널({voice_channel})에 있는 사람만 아래 버튼을 눌러 참가할 수 있어요.\n처음 실행하거나 오랜만에 실행하면, 검은 화면에 'WAKING UP' 같은 글자가 20초~1분 정도 보일 수 있어요. 고장 난 게 아니라 서버가 깨어나는 중이니 그대로 기다려주세요. 그래도 멈춰 있으면 Activity를 닫고 다시 열어보세요.\n궁금한 점이나 개선하면 좋을 점 있으면 /문의로 편하게 알려주세요!"
+  "moa_launch_message": "아래 버튼을 누르면 MOA가 이 텍스트 채널에서 바로 실행됩니다.\n같은 음성 채널({voice_channel})에 있는 사람만 아래 버튼을 눌러 참가할 수 있어요.\n처음 실행하거나 오랜만에 실행하면, 검은 화면에 'WAKING UP' 같은 글자가 20초~1분 정도 보일 수 있어요. 고장 난 게 아니라 서버가 깨어나는 중이니 그대로 기다려주세요. 그래도 멈춰 있으면 Activity를 닫고 다시 열어보세요.\n궁금한 점이나 개선하면 좋을 점 있으면 /문의로 편하게 알려주세요!",
+  "moa_no_voice_channel": "먼저 음성 채널에 들어간 뒤 다시 시도해주세요.",
+  "moa_voice_mismatch": "이 파티는 {voice_channel} 음성 채널에 있는 사람만 참가할 수 있어요.",
+  "moa_voice_mismatch_fallback_channel": "해당"
 }
