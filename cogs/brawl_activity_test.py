@@ -2,13 +2,17 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from cogs.base import KyvoBaseCog
+
 # 🛡️ [스파이크 전용 - 임시 검증 코드] brawl-spike Activity를 일반 텍스트 채널의 버튼에서
 # discord.py의 InteractionResponse.launch_activity()(interaction response type 12,
 # LAUNCH_ACTIVITY, 2.6+에 추가됨)로 실행할 수 있는지만 확인하는 최소 스파이크다. 파티 카드
 # UI나 실제 매칭 로직은 전혀 없다 - 검증 끝나면 이 파일은 지우거나 실제 기능으로 바꿔치기할
 # 예정이다. 커맨드 name/description은 다른 코그들과 동일하게 KoreanCommandTranslator +
-# COMMAND_KO(cogs/i18n_commands.py)로 로케일별 번역되지만, 인터랙션 응답 메시지 본문은
-# i18n(KyvoBaseCog.get_msg)을 쓰지 않고 그냥 하드코딩했다.
+# COMMAND_KO(cogs/i18n_commands.py)로 로케일별 번역된다(유저 개인의 Discord 클라이언트
+# 언어 기준). 버튼 클릭 전 /moa 응답의 본문 메시지는 KyvoBaseCog.get_msg()로 서버 설정
+# 언어(guild_settings.language) 기준으로 번역한다 - 이 둘은 서로 다른 축이라 유저 개인
+# 언어와 서버 설정 언어가 다르면 커맨드 이름/설명과 본문이 각각 다른 언어로 보일 수 있다.
 #
 # 🛡️ [사전 확인] brawl-spike의 DISCORD_CLIENT_ID(.env)는 kyvobot-dashboard의 AUTH_DISCORD_ID를
 # 재사용한 값인데, 이 봇 토큰을 디코딩해서 나온 application_id와 정확히 일치한다 - 즉 이 봇과
@@ -79,13 +83,10 @@ class LaunchBrawlSpikeView(discord.ui.View):
                 )
 
 
-class BrawlActivityTestCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
+class BrawlActivityTestCog(KyvoBaseCog):
     @app_commands.command(
         name="moa",
-        description="친구들과 4인 대난투 미니게임을 시작합니다.",
+        description="Start a 4-player free-for-all mini-game with friends.",
     )
     async def brawl_test(self, interaction: discord.Interaction):
         # 🛡️ [음성 채널 참가 제약] 커맨드를 실행한 사람이 음성 채널에 없으면 버튼 자체를
@@ -102,12 +103,13 @@ class BrawlActivityTestCog(commands.Cog):
             )
             return
 
+        message = await self.get_msg(
+            interaction.guild_id,
+            "moa_launch_message",
+            voice_channel=voice_channel.name,
+        )
         await interaction.response.send_message(
-            "아래 버튼을 누르면 MOA가 이 텍스트 채널에서 바로 실행됩니다.\n"
-            f"같은 음성 채널({voice_channel.name})에 있는 사람만 아래 버튼을 눌러 참가할 수 있어요.\n"
-            "처음 실행하거나 오랜만에 실행하면, 검은 화면에 'WAKING UP' 같은 글자가 20초~1분 정도 보일 수 있어요. "
-            "고장 난 게 아니라 서버가 깨어나는 중이니 그대로 기다려주세요. 그래도 멈춰 있으면 Activity를 닫고 다시 열어보세요.\n"
-            "궁금한 점이나 개선하면 좋을 점 있으면 /문의로 편하게 알려주세요!",
+            message,
             view=LaunchBrawlSpikeView(voice_channel.id),
         )
 

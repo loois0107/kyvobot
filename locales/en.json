@@ -594,5 +594,6 @@
   "inquiry_err_cooldown": "⏳ You're sending inquiries too quickly. Please wait **{minutes}m {seconds}s** before trying again.",
   "inquiry_send_failed": "❌ Something went wrong while delivering your inquiry. Please try again in a moment.",
   "inquiry_reply_dm_title": "💌 A reply to your inquiry has arrived",
-  "inquiry_reply_dm_footer": "KyvoBot Inquiry Reply"
+  "inquiry_reply_dm_footer": "KyvoBot Inquiry Reply",
+  "moa_launch_message": "Clicking the button below will launch MOA right here in this text channel.\nOnly people in the same voice channel ({voice_channel}) can join by pressing the button below.\nIf this is the first run in a while, you might see a black screen with 'WAKING UP' for 20 seconds to a minute - that's not a bug, the server is just waking up, so please wait it out. If it's still stuck, try closing the Activity and reopening it.\nGot feedback or ideas to improve it? Feel free to let us know with /inquiry!"
 }
