@@ -1,8 +1,20 @@
+import os
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from locales import get_locale_message
+
+# 🛡️ [웹으로 참가하기 - 긴급 우회 경로] Discord Activity 미검증 제한으로 Activity 실행
+# 버튼이 막힌 유저를 위해, brawl-spike를 일반 브라우저로 직접 열 수 있는 URL 버튼을 추가한다
+# - DASHBOARD_BASE_URL(cogs/leveling.py, cogs/party.py 등) 패턴과 동일하게, 미설정 시엔
+# 버튼 자체를 숨기고(조용히 생략 - 에러 아님) 설정돼 있으면만 보여준다. brawl-spike 쪽은
+# 웹 접속 시 Discord OAuth2 웹 로그인(identify) 흐름을 타므로, 이 URL은 그냥 배포된
+# 루트 주소(예: https://brawl-spike.onrender.com)면 충분하다 - 로그인 리다이렉트는
+# brawl-spike 서버(/auth/discord)가 알아서 처리한다.
+BRAWL_SPIKE_WEB_URL = (os.getenv("BRAWL_SPIKE_WEB_URL") or "").rstrip("/")
+BRAWL_SPIKE_WEB_URL_VALID = BRAWL_SPIKE_WEB_URL.startswith(("http://", "https://"))
 
 # 🛡️ [스파이크 전용 - 임시 검증 코드] brawl-spike Activity를 일반 텍스트 채널의 버튼에서
 # discord.py의 InteractionResponse.launch_activity()(interaction response type 12,
@@ -57,6 +69,19 @@ class LaunchBrawlSpikeView(discord.ui.View):
     def __init__(self, voice_channel_id: int | None = None):
         super().__init__(timeout=None)
         self.voice_channel_id = voice_channel_id
+        # 🛡️ [웹으로 참가하기] URL 버튼은 콜백이 없어서(discord.ui.Button(url=...)) custom_id도
+        # 없고, 그래서 음성 채널 체크(launch() 콜백)와는 완전히 독립적이다 - 누구나 눌러서 바로
+        # 브라우저로 이동 가능(의도된 동작: Activity 실행 버튼이 막힌 상황의 우회 경로이므로
+        # 여기엔 같은 제약을 걸지 않는다). BRAWL_SPIKE_WEB_URL 미설정 시엔 버튼을 아예 안 붙여서
+        # 눌러도 아무 반응 없는 죽은 버튼이 뜨는 걸 방지한다(DASHBOARD_BASE_URL과 동일한 패턴).
+        if BRAWL_SPIKE_WEB_URL and BRAWL_SPIKE_WEB_URL_VALID:
+            self.add_item(
+                discord.ui.Button(
+                    label="웹으로 참가하기",
+                    style=discord.ButtonStyle.link,
+                    url=BRAWL_SPIKE_WEB_URL,
+                )
+            )
 
     @discord.ui.button(
         label="격투 Activity 실행",
