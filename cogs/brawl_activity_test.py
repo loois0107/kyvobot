@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 import os
+import time
 
 import discord
 from discord import app_commands
@@ -15,6 +18,24 @@ from locales import get_locale_message
 # brawl-spike 서버(/auth/discord)가 알아서 처리한다.
 BRAWL_SPIKE_WEB_URL = (os.getenv("BRAWL_SPIKE_WEB_URL") or "").rstrip("/")
 BRAWL_SPIKE_WEB_URL_VALID = BRAWL_SPIKE_WEB_URL.startswith(("http://", "https://"))
+
+# 🛡️ [웹 참가 - 봇 경유 강제] "/moa를 거치지 않고 URL을 직접 따서 들어오는 것"을 막기 위해,
+# 버튼을 만들 때마다 타임스탬프+HMAC-SHA256 서명 토큰을 쿼리파라미터로 붙인다. brawl-spike
+# 서버(/auth/discord)가 같은 BOT_LINK_SECRET으로 서명/만료(10분)를 검증한다 - INTERNAL_API_SECRET
+# (cogs/party.py 등)과 같은 "두 Render 서비스가 같은 비밀값을 공유" 패턴이지만, 그쪽은
+# kyvobot-dashboard -> kyvobot 인바운드 검증이고 이건 kyvobot -> brawl-spike 아웃바운드
+# 서명이라 별도 비밀값(BOT_LINK_SECRET)을 쓴다. 미설정 시엔 서명 없이 URL만 내려준다 -
+# brawl-spike 서버도 BOT_LINK_SECRET 미설정이면 검증을 건너뛰므로(배포 설정 중 과도기에도
+# 버튼 자체가 죽지 않도록) 둘 다 설정 전까지는 기존 동작(토큰 없는 URL)과 동일하다.
+BOT_LINK_SECRET = os.getenv("BOT_LINK_SECRET")
+
+
+def _build_web_join_url() -> str:
+    if not BOT_LINK_SECRET:
+        return BRAWL_SPIKE_WEB_URL
+    ts = str(int(time.time()))
+    sig = hmac.new(BOT_LINK_SECRET.encode(), ts.encode(), hashlib.sha256).hexdigest()
+    return f"{BRAWL_SPIKE_WEB_URL}/?token={ts}.{sig}"
 
 # 🛡️ [스파이크 전용 - 임시 검증 코드] brawl-spike Activity를 일반 텍스트 채널의 버튼에서
 # discord.py의 InteractionResponse.launch_activity()(interaction response type 12,
@@ -79,7 +100,7 @@ class LaunchBrawlSpikeView(discord.ui.View):
                 discord.ui.Button(
                     label="웹으로 참가하기",
                     style=discord.ButtonStyle.link,
-                    url=BRAWL_SPIKE_WEB_URL,
+                    url=_build_web_join_url(),
                 )
             )
 
