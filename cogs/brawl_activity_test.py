@@ -87,9 +87,16 @@ class LaunchBrawlSpikeView(discord.ui.View):
     # 봇이 재시작된 뒤 그 이전 메시지의 버튼을 누르면(discord.py가 이 템플릿 인스턴스로 라우팅)
     # voice_channel_id=None이라 항상 "참가 불가" 쪽으로 떨어진다 - 조용히 아무나 통과시키는
     # 것보다 안전한 방향이라 의도적으로 이렇게 둔다(재시작 케이스는 요청 범위 밖).
-    def __init__(self, voice_channel_id: int | None = None):
+    def __init__(self, voice_channel_id: int | None = None, interaction: discord.Interaction | None = None):
         super().__init__(timeout=None)
         self.voice_channel_id = voice_channel_id
+        # 🛡️ [버튼 라벨 i18n] interaction은 setup()의 영구 뷰 재등록 호출(bot.add_view(
+        # LaunchBrawlSpikeView()))에서는 없다 - 그 호출은 이미 전송된 메시지의 custom_id를
+        # 다시 연결하는 용도일 뿐, 라벨이 실제로 보일 일이 없어서 이 경우엔 decorator의
+        # 기본 라벨(한국어)을 그대로 둔다. 실제 /moa 응답(아래 call site)에서는 항상
+        # interaction을 넘겨 본문 메시지와 같은 locale 기준으로 라벨을 맞춘다.
+        if interaction is not None:
+            self.launch.label = get_moa_msg(interaction, "moa_launch_button")
         # 🛡️ [웹으로 참가하기] URL 버튼은 콜백이 없어서(discord.ui.Button(url=...)) custom_id도
         # 없고, 그래서 음성 채널 체크(launch() 콜백)와는 완전히 독립적이다 - 누구나 눌러서 바로
         # 브라우저로 이동 가능(의도된 동작: Activity 실행 버튼이 막힌 상황의 우회 경로이므로
@@ -98,14 +105,14 @@ class LaunchBrawlSpikeView(discord.ui.View):
         if BRAWL_SPIKE_WEB_URL and BRAWL_SPIKE_WEB_URL_VALID:
             self.add_item(
                 discord.ui.Button(
-                    label="웹으로 참가하기",
+                    label=get_moa_msg(interaction, "moa_web_join_button") if interaction is not None else "웹으로 참가하기",
                     style=discord.ButtonStyle.link,
                     url=_build_web_join_url(),
                 )
             )
 
     @discord.ui.button(
-        label="격투 Activity 실행",
+        label="게임 시작하기",
         style=discord.ButtonStyle.primary,
         custom_id=LAUNCH_BUTTON_CUSTOM_ID,
     )
@@ -186,7 +193,7 @@ class BrawlActivityTestCog(commands.Cog):
         )
         await interaction.response.send_message(
             message,
-            view=LaunchBrawlSpikeView(voice_channel.id),
+            view=LaunchBrawlSpikeView(voice_channel.id, interaction),
         )
 
 

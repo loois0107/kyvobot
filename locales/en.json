@@ -598,5 +598,7 @@
   "moa_launch_message": "Clicking the button below will launch MOA right here in this text channel.\nOnly people in the same voice channel ({voice_channel}) can join by pressing the button below.\nIf this is the first run in a while, you might see a black screen with 'WAKING UP' for 20 seconds to a minute - that's not a bug, the server is just waking up, so please wait it out. If it's still stuck, try closing the Activity and reopening it.\nGot feedback or ideas to improve it? Feel free to let us know with /inquiry!",
   "moa_no_voice_channel": "Please join a voice channel first, then try again.",
   "moa_voice_mismatch": "Only people in the {voice_channel} voice channel can join this party.",
-  "moa_voice_mismatch_fallback_channel": "original"
+  "moa_voice_mismatch_fallback_channel": "original",
+  "moa_launch_button": "Start Game",
+  "moa_web_join_button": "Join via Web"
 }
