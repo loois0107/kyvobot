@@ -162,40 +162,9 @@ class LaunchBrawlSpikeView(discord.ui.View):
                 )
 
 
-# 🧪 [TEMP-PARTYCODE-TEST] discordSdk.customId/instanceId가 버튼마다 다르게 - 그리고
-# 일관되게 - 들어오는지 확인하기 위한 임시 테스트용 뷰. custom_id가 서로 다른 버튼 2개
-# ("테스트A"/"테스트B") 모두 launch_activity()만 호출한다. 음성채널 체크 등 실제 /moa의
-# 제약은 전혀 없다 - 순수하게 SDK 필드 확인용. 테스트 끝나면 이 클래스 + BrawlActivityTestCog
-# 안의 temp_partycode_test 커맨드를 통째로 지우면 된다(다른 코드와 분리돼 있어서 main.py의
-# extensions 리스트는 안 건드려도 됨).
-class TempPartyCodeTestView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="테스트A", style=discord.ButtonStyle.primary, custom_id="temp_partycode_test:a")
-    async def test_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.launch_activity()
-
-    @discord.ui.button(label="테스트B", style=discord.ButtonStyle.secondary, custom_id="temp_partycode_test:b")
-    async def test_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.launch_activity()
-
-
 class BrawlActivityTestCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-    # 🧪 [TEMP-PARTYCODE-TEST]
-    @app_commands.command(
-        name="temp_partycode_test",
-        description="[TEMP] discordSdk.customId/instanceId 테스트용 버튼 2개",
-    )
-    async def temp_partycode_test(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            "🧪 [TEMP-PARTYCODE-TEST] 아래 두 버튼은 custom_id만 다르고 둘 다 launch_activity()를 호출합니다. "
-            "Activity 화면 우측 상단에 뜨는 customId/instanceId 값을 비교해주세요.",
-            view=TempPartyCodeTestView(),
-        )
 
     @app_commands.command(
         name="moa",
@@ -233,5 +202,4 @@ async def setup(bot: commands.Bot):
     # 눌리도록, 미리 한 번 등록해둬야 한다(custom_id 기준으로 콜백이 다시 연결됨) - party.py 등
     # 기존 코그들과 동일한 패턴.
     bot.add_view(LaunchBrawlSpikeView())
-    bot.add_view(TempPartyCodeTestView())  # 🧪 [TEMP-PARTYCODE-TEST]
     await bot.add_cog(BrawlActivityTestCog(bot))
